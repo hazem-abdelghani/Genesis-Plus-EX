@@ -21,20 +21,21 @@ Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx).
 ## Contents
 
 1. [Highlights](#highlights)
-2. [Quick start](#quick-start)
-3. [Where things are kept](#where-things-are-kept)
-4. [Controls](#controls)
-5. [The game list](#the-game-list)
-6. [Saving your game](#saving-your-game)
-7. [Picture](#picture)
-8. [Sound](#sound)
-9. [Cheats](#cheats)
-10. [Recording and screenshots](#recording-and-screenshots)
-11. [Netplay](#netplay)
-12. [Starting it from a launcher](#starting-it-from-a-launcher)
-13. [Building from source](#building-from-source)
-14. [Source layout](#source-layout)
-15. [License](#license)
+2. [Screenshots](#screenshots)
+3. [Quick start](#quick-start)
+4. [Where things are kept](#where-things-are-kept)
+5. [Controls](#controls)
+6. [The game list](#the-game-list)
+7. [Saving your game](#saving-your-game)
+8. [Picture](#picture)
+9. [Sound](#sound)
+10. [Cheats](#cheats)
+11. [Recording and screenshots](#recording-and-screenshots)
+12. [Netplay](#netplay)
+13. [Starting it from a launcher](#starting-it-from-a-launcher)
+14. [Building from source](#building-from-source)
+15. [Source layout](#source-layout)
+16. [License](#license)
 
 ---
 
@@ -52,6 +53,21 @@ Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx).
 | **Extras** | Cheats and a cheat finder, input recording, video / audio / GIF / VGM recording, screenshots, LAN netplay |
 | **Looks** | Light and dark themes, accent colors, a Classic or Modern style, Larger UI |
 | **Portable** | No installation; copy the folder to a USB stick and it keeps working |
+
+---
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Grid view with cover art, dark theme](images/screenshots/grid-dark.png) | ![Game list, light theme](images/screenshots/gamelist-light.png) |
+| Grid view with cover art (dark theme, Modern style) | Game list (light theme) |
+| ![CRT shader](images/screenshots/crt-shader.png) | ![Mega Bezel shader with a bezel](images/screenshots/mega-bezel-shader%2Bbezel.png) |
+| CRT look | Mega Bezel shader with a bezel |
+| ![xBRZ filter](images/screenshots/xbrz-filter.png) | ![Settings, Modern style](images/screenshots/modern-general-settings.png) |
+| xBRZ filter | Settings (Modern style, dark theme) |
+| ![Controls window](images/screenshots/controls.png) | ![Video settings, light theme](images/screenshots/video-settings-light.png) |
+| Controls window | Video settings (light theme) |
 
 ---
 
