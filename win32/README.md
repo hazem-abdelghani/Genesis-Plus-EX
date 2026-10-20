@@ -64,8 +64,8 @@ Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx).
 | Grid view with cover art (dark theme, Modern style) | Game list (light theme) |
 | ![CRT shader](images/screenshots/crt-shader.png) | ![Mega Bezel shader with a bezel](images/screenshots/mega-bezel-shader%2Bbezel.png) |
 | CRT look | Mega Bezel shader with a bezel |
-| ![xBRZ filter](images/screenshots/xbrz-filter.png) | ![Settings, Modern style](images/screenshots/modern-general-settings.png) |
-| xBRZ filter | Settings (Modern style, dark theme) |
+| ![xBRZ filter with Smooth Scaling](images/screenshots/xbrz-filter-smooth-scaling.png) | ![Settings, Modern style](images/screenshots/modern-general-settings.png) |
+| xBRZ filter + Smooth Scaling | Settings (Modern style, dark theme) |
 | ![Controls window](images/screenshots/controls.png) | ![Video settings, light theme](images/screenshots/video-settings-light.png) |
 | Controls window | Video settings (light theme) |
 
