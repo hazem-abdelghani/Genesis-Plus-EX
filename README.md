@@ -1,110 +1,477 @@
-![Genesis Plus](win32/images/Genesis-Plus-Logo.png)
-# Genesis Plus
+![Genesis Plus EX](win32/images/Genesis-Plus-EX-Logo.png)
 
-A Windows emulator based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx),
-built directly against the emulator core. It sits alongside the existing `sdl/`
-and `gx/` ports as a new `win32/` port.
+# Genesis Plus EX
 
-No SDL. Video goes through GDI or, optionally, Direct3D 9 or Direct3D 11
-(**Video → Renderer**); sound through waveOut, gamepads through XInput.
-The finished executable depends only on DLLs that ship with Windows.
+**A fast, portable Windows front end for the Genesis Plus GX emulator core.**
 
-Supports everything the core does: Mega Drive / Genesis, Master System,
-Game Gear, SG-1000, Mega CD / Sega CD, and Pico.
+Genesis Plus EX plays Sega Mega Drive / Genesis, Master System, Game Gear,
+SG-1000, Mega CD / Sega CD and Pico games. It is a native Windows program that
+talks straight to the emulator core, with no SDL and no installer: one `.exe`
+that uses only DLLs that ship with Windows, and keeps everything it saves in
+plain folders next to itself.
 
-Genesis Plus by [Hazem Abdelghani](https://github.com/hazem-abdelghani/Genesis-Plus) (2026).
+It lives in the `win32/` folder of this repository, next to the original `sdl/`
+and `gx/` ports, and does not change the core.
+
+By [Hazem Abdelghani](https://github.com/hazem-abdelghani/genesis-plus-ex).
+Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx).
 
 ---
 
-## Features
+## Contents
 
-- **Systems** – Mega Drive / Genesis, Master System, Game Gear, SG-1000,
-  Mega CD / Sega CD, and Pico, all through the one unmodified core.
-- **Renderers** – GDI, Direct3D 9 or Direct3D 11, chosen live; each falls
-  back to GDI automatically if it isn't available.
-- **Render filters** – Scale2x, Scale3x, Eagle 2x, two edge-smoothing
-  filters, the real xBRZ at 2x–6x, Scanlines 2x, a CRT phosphor-mask
-  filter, and Sharp 4x, all built into the executable.
-- **Shaders** – A [librashader](https://github.com/SnowflakePowered/librashader)
-  filter chain (`.slangp` presets, the same format RetroArch uses) on the
-  Direct3D 11 renderer, ships with the 64-bit exe (the 32-bit exe has no
-  Shaders menu).
-- **Picture options** – The Blargg NTSC filter (composite / S-Video / RGB),
-  LCD ghosting, brightening, smooth scaling, scanlines, three aspect-ratio
-  modes, overscan border control, single/double-field interlaced mode, and
-  1x–6x window scaling plus fullscreen.
-- **Audio** – waveOut output with a choice of five FM cores (MAME or Nuked,
-  as a YM2612 or a YM3438), an adjustable-strength low-pass filter or a
-  3-band EQ, high-quality PSG resampling, mono output, 44100/48000 Hz, and
-  separate Sega CD PCM and CD-audio volumes.
-- **Input** – Keyboard and XInput gamepads out of the box, fully
-  remappable per player by listening for a press rather than picking from
-  a list, plus emulated Control Pad, Mouse, Light Phaser, Menacer,
-  Justifier, XE-1AP, Activator, Paddle Control, Sports Pad, Graphic Board
-  (Pico's tablet) and a 4-player Team Player adapter.
-- **Save states** – Ten slots with thumbnails, a visual state manager, and
-  a one-level undo for a load pressed by mistake.
-- **Rewind** – Hold a key to run recent play backwards.
-- **Cheats** – Game Genie, Action Replay and raw-patch codes, saved and
-  reloaded per ROM automatically.
-- **ROM Browser** – List or grid view of a folder (and its subfolders),
-  with cover art, recent files, and one-click launch with a save state.
-- **Archives** – `.zip` and `.gz` (handled by the core itself) and `.7z`
-  (handled by this frontend) all open directly, for browsing or loading.
-- **Multi-disc Mega CD** – Swaps discs when a game asks for one, the way
-  it would on real hardware, with no reset and no lost progress.
-- **Netplay** – Two players over a LAN, lockstep, no rollback.
-- **Recording** – Video + audio to `.mp4`, or audio alone to `.wav`.
-- **Everything portable** – Settings and all per-game data live in plain
-  folders next to the exe; the whole thing runs from a USB stick.
+1. [Highlights](#highlights)
+2. [Quick start](#quick-start)
+3. [Where things are kept](#where-things-are-kept)
+4. [Controls](#controls)
+5. [The game list](#the-game-list)
+6. [Saving your game](#saving-your-game)
+7. [Picture](#picture)
+8. [Sound](#sound)
+9. [Cheats](#cheats)
+10. [Recording and screenshots](#recording-and-screenshots)
+11. [Netplay](#netplay)
+12. [Starting it from a launcher](#starting-it-from-a-launcher)
+13. [Building from source](#building-from-source)
+14. [Source layout](#source-layout)
+15. [License](#license)
 
-## Building
+---
 
-You need MinGW-w64 (with its C++ compiler, `g++`) and zlib. Nothing else.
+## Highlights
 
-**It builds as either 32-bit or 64-bit**, depending on which compiler you point
-it at. The render filters are built into the executable, so nothing depends on
-the pointer size. (An earlier version loaded Kega Fusion `.rpi` plugin DLLs,
-which are 32-bit and cannot be loaded into a 64-bit process; that was the only
-reason it used to be 32-bit only.)
+| | |
+|---|---|
+| **Systems** | Mega Drive / Genesis, Master System, Game Gear, SG-1000, Mega CD / Sega CD (multi-disc too), Pico |
+| **Files** | `.zip`, `.gz` and `.7z` open directly; Mega CD from `.cue`, `.chd` or `.bin` |
+| **Picture** | GDI, Direct3D 9 or Direct3D 11; built-in pixel filters including real xBRZ; RetroArch `.slangp` shader presets (Direct3D 11, 64-bit); NTSC filter, scanlines, LCD ghosting, integer scaling, bezels |
+| **Sound** | Five FM chip emulations, low-pass filter or 3-band EQ, stereo width, bass boost, WASAPI / XAudio2 / waveOut output |
+| **Input** | Keyboard and XInput gamepads, remappable per player; every Sega peripheral (mouse, light guns, Team Player, EA 4-Way Play and more); turbo, combos, profiles |
+| **Saving** | 10 save-state slots with thumbnails, rewind, auto resume, rolling backup states, undo for a state load |
+| **Library** | List or grid game browser with cover art, search, filters, favorites, recently played, several folders |
+| **Extras** | Cheats and a cheat finder, input recording, video / audio / GIF / VGM recording, screenshots, LAN netplay |
+| **Looks** | Light and dark themes, accent colors, a Classic or Modern style, Larger UI |
+| **Portable** | No installation; copy the folder to a USB stick and it keeps working |
 
-**On Windows, from an MSYS2 shell** — the shell you open decides the
-architecture:
+---
 
-1. Install [MSYS2](https://www.msys2.org/) (the installer is a normal `.exe`;
-   accept the defaults). It installs to `C:\msys64` and adds a few Start Menu
-   shortcuts.
-2. Open **"MSYS2 MINGW64"** for a 64-bit build, or **"MSYS2 MINGW32"** for a
-   32-bit one, from the Start Menu — not the plain "MSYS2" shortcut, which is
-   a different environment and will not build this.
-3. The first time only, update the package database (it may ask you to close
-   and reopen the window partway through — that's normal, just reopen the
-   same shortcut and run it again):
+## Quick start
+
+1. Put `Genesis Plus EX.exe` in a folder of its own and run it. It creates its
+   data folders next to itself on first start.
+2. Open a game in any of these ways:
+   - **File → Open ROM** (Ctrl+O),
+   - drag a game onto the window,
+   - **File → ROMs Directory** (Ctrl+R) to browse a folder of games,
+   - pass the game on the command line.
+3. Play. The keyboard works at once (see [Controls](#controls)); a connected
+   gamepad needs no setup either.
+
+Both a 64-bit (`Genesis Plus EX.exe`) and a 32-bit (`Genesis Plus EX-32bit.exe`)
+build exist. The 32-bit one has no GPU shaders, because the shader library has
+no 32-bit version.
+
+Most settings are in **Options → Settings...** (tabs: General, Video, Audio,
+Picture, Input, Options, OSD). Hover over any option for a short description.
+**Help → Menu Guide** inside the program explains every menu item.
+
+Windows 10 version 1903 or later is recommended: it lets game and folder names
+use any language. Older Windows still works with its own code page.
+
+---
+
+## Where things are kept
+
+Everything is relative to the program, so the folder can be moved or copied.
+
+```
+Genesis Plus EX.exe
+genesis-plus-ex.ini     all settings
+bios/                   optional BIOS and add-on ROMs
+saves/                  battery saves (.srm) and Mega CD backup RAM (.brm)
+states/                 save states
+screenshots/            PNG screenshots
+cheats/                 cheat lists (.cht), one folder per console
+covers/                 cover art, matched to games by file name
+recordings/             Video, Audio, GIF and VGM recordings (a folder each)
+profiles/               controller profiles
+shaders/                shader presets you pick (created on first use)
+bezels/                 bezel images
+```
+
+Saves, states and covers are grouped per console and per game:
+
+```
+saves/MegaDrive/Sonic The Hedgehog/Sonic The Hedgehog.srm
+states/MasterSystem/Alex Kidd/Alex Kidd.gp0
+covers/MegaDrive/Sonic The Hedgehog.png
+```
+
+The console folders are `MegaDrive`, `MasterSystem`, `GameGear`, `SG1000` and
+`MegaCD`. **File → Open Genesis Plus EX Folder** opens the program folder.
+
+### BIOS and add-on ROMs (optional)
+
+Put these in `bios/`. Cartridge games run without any of them. Mega CD games
+need the BIOS for their region.
+
+| File | Used for |
+|---|---|
+| `bios_CD_U.bin`, `bios_CD_E.bin`, `bios_CD_J.bin` | Mega CD, by region (**required** for Mega CD) |
+| `bios_MD.bin` | Mega Drive start-up (TMSS) ROM |
+| `bios_U.sms`, `bios_E.sms`, `bios_J.sms`, `bios.gg` | Master System / Game Gear start-up ROMs |
+| `ggenie.bin`, `areplay.bin` | Game Genie, Action Replay |
+| `sk.bin`, `sk2chip.bin` | Sonic & Knuckles lock-on |
+
+Turn the start-up ROMs on with **Settings → Options → Boot from BIOS When
+Available**.
+
+---
+
+## Controls
+
+### Keyboard defaults (Player 1)
+
+| Key | Mega Drive pad |
+|---|---|
+| Arrow keys | D-pad |
+| Z, X, C | A, B, C |
+| A, S, D | X, Y, Z |
+| Enter | Start |
+| Right Shift | Mode |
+
+### Gamepad defaults (XInput)
+
+The left stick and D-pad move. X, A and B give A, B and C; Y gives X; RB gives
+Y; RT gives Z; Start is Start and Back is Mode. LB fast-forwards and LT rewinds.
+The right stick is a set of four extra buttons that can be assigned like any
+other, and by default it does the save-state shortcuts.
+
+### Changing the controls
+
+**Input → Controls...** has a tab for Player 1, Player 2 and an Advanced tab.
+
+- Click a button, then press the key or gamepad button you want. The same
+  press works for keyboard and pad; there is no separate mode. **Esc** or a
+  right click cancels. **Auto Assign** goes through all the buttons in turn.
+- A key or button can only be on one pad button; assigning it takes it from
+  the old one and a line under the pad says so.
+- **Turbo** is a box beside A, B, C, X, Y and Z; **Turbo Rate** sets how fast.
+- **Deadzone** sets how far a stick must move before it counts.
+- **Controller Model** and the **Advanced** tab choose what is plugged into
+  each port: Control Pad, Mouse, Light Phaser, Menacer, Justifier, XE-1AP,
+  Activator, Paddle Control, Sports Pad, Graphic Board (Pico), Team Player,
+  EA 4-Way Play, Master Tap or Smash Controller.
+- **Profiles** (Load / New / Save / Delete) keep whole control setups, both
+  players, pad types and combos, in the `profiles` folder.
+- **Gamepad Hotkeys...** puts shortcuts on pad buttons: fast forward, rewind,
+  turbo, states and slots, pause, reset, screenshot, fullscreen, mute,
+  recording, game speed and an in-game pause menu. An optional hold button
+  keeps the pad free for the game until it is held.
+- **Input → Enable Background Input** keeps pad input working while another
+  window has focus.
+
+### Combo buttons
+
+On the Advanced tab, one key or pad button can press several game buttons.
+Pick a row, choose the **Trigger**, then click the game buttons to add. **Hold**
+keeps a button down for a time (0.25 to 10 seconds) or until you press it
+yourself, and **Pause** waits before the next one, so `Gamepad Y → Down (Hold
+1.0 s) + A` is a Sonic spin dash on one button. Up to 12 combos; **How It
+Works** in the window has an example.
+
+### Keyboard shortcuts
+
+Every shortcut can be changed in **Input → Hotkeys...**. The defaults:
+
+| Shortcut | Action |
+|---|---|
+| Ctrl+O / Ctrl+R | Open a ROM / ROMs Directory |
+| F2 / F3 | Pause / Stop |
+| F4 / Ctrl+F4 | Reset / hard reset |
+| F5 / F8 | Save / load the selected state slot |
+| 0 – 9 / Shift+0 – 9 | Load / save that slot directly |
+| F6 / F7 | Previous / next slot |
+| Ctrl+F5 / Ctrl+F8 | Undo the last save / load |
+| Tab (hold) | Fast forward |
+| Backspace (hold) | Rewind |
+| Ctrl++ / Ctrl+- / Ctrl+0 | Game speed faster / slower / normal (25 – 400 %) |
+| `\` | Advance one frame while paused |
+| Alt+Enter, Esc | Fullscreen |
+| Ctrl+M / Ctrl+N / Ctrl+B | Mute all / FM / PSG |
+| Ctrl+C | Cheats |
+| Ctrl+F | Search the game list |
+| F12 | Screenshot |
+| Shift+F11 / Ctrl+F11 / Ctrl+F12 / Alt+F11 | Record video / audio / GIF / stop |
+| F1 | List of shortcuts |
+
+---
+
+## The game list
+
+**File → ROMs Directory** (Ctrl+R) shows your games. Double-click one to play,
+or right-click for more: play with a saved state, edit its cheats, cover image,
+favorite, remove from recently played, create a desktop shortcut.
+
+- **List or grid.** **View → View Mode**. The grid shows cover art; its size
+  runs from Tiny to Extra Large (Ctrl + mouse wheel sets any size) and the
+  shape, rounded corners, captions and a card frame are in Settings → General.
+  Covers are cached so they appear at once the next time.
+- **Search and filters.** Type in the search bar (Ctrl+F). Search words narrow
+  by one field: `region:usa`, `console:mega cd`, `genre:action`, `type:chd`,
+  `fav:yes`. The filter bar narrows by console, genre and region.
+- **Several folders.** **Settings → General → ROM Directories...** adds more
+  folders, removes any of them, and excludes folders from the scan. Subfolders
+  are scanned too.
+- **Tidy names.** *Clean Game Names* hides tags like `(USA, Europe) [!]`, in the
+  list and in File → Recent Files.
+- **Recently played, favorites, groups.** A *Recently Played* group at the top,
+  stars for favorites (and *Show Favorites Only*), *Group by Console*, an A–Z
+  strip, and sortable columns (Genre, Region, File Size, File Type and more).
+- **Typing** a letter jumps to the game that starts with it.
+- **Dropping files.** A game opens, a `.cht` file is imported and a `.gpstate`
+  file loads into the running game.
+
+**Multi-disc Mega CD games** (such as *Lunar: Eternal Blue*) ask for the next
+disc themselves, as on a real console; pick the file and the game carries on
+with no reset. **File → Insert Disc...** does it by hand.
+
+---
+
+## Saving your game
+
+- **Save states.** Ten slots, each with a thumbnail and the time it was saved.
+  **Manage States...** shows them all; right-click a slot to save to it, copy it
+  to a file (*Save This Slot As...*) or delete it. States can also be saved to
+  and loaded from any `.gpstate` file to share them.
+- **Undo.** *Undo Load State* and *Undo Save State* go back one step.
+- **Rewind.** Hold Backspace to run recent play backwards. A bar shows how much
+  history is left. History size is 128 to 768 MB (256 MB by default).
+- **Auto Resume** (on by default). The game is saved when you close it and you
+  are asked whether to carry on next time. The exit question has a
+  *Resume this game next time* box.
+- **Backup State.** Optionally saves quietly every 1 to 10 minutes into three
+  rolling backups (**Load State → Load Backup State**).
+- **Skip intro.** Optionally runs the first few seconds of a game at full speed.
+- **Battery saves** are written automatically as `.srm` / `.brm` files.
+
+---
+
+## Picture
+
+### Renderer, size and shape
+
+- **Video → Renderer:** GDI (CPU), Direct3D 9 or Direct3D 11. Each falls back
+  to GDI by itself when it is not available.
+- **Window Size** 1× to 6× (3× by default), fullscreen as a borderless window or
+  exclusive with its own resolution, always on top, hide the mouse pointer after
+  a few seconds.
+- **Aspect Ratio:** *Original Console Pixels* (the default, the Mega Drive's own
+  pixel shape), 1:1, 4:3 or 16:9. **Integer Scaling** keeps every pixel the same
+  size. **Smooth Scaling**, border color, overscan borders and interlaced mode
+  (single or double field) are all options.
+- **Picture adjustments:** Contrast, Saturation, Gamma, Hue and Brighten;
+  **Flicker Blending** (makes games that flash an object every other frame to
+  fake transparency look solid); **Dither Smoothing**; a **Bezel Image**
+  drawn around the picture in fullscreen.
+- **Effects:** the Blargg **NTSC filter** (composite, S-Video or RGB),
+  **Scanlines** (25 – 100 %), **LCD Ghosting**.
+
+### Render filters
+
+**Video → Render Filter** applies a pixel filter before the picture is scaled
+to the window. They are built into the program.
+
+| Filter | Result |
+|---|---|
+| Scale2x, Scale3x | Smooths diagonals of pixel art and keeps the rest |
+| Eagle 2x | Classic Eagle rules; can thin single-pixel lines |
+| Smooth 2x / 4x | Edge-directed corner smoothing; crisp and cheap |
+| **xBRZ 2× to 6×** | The real xBRZ: smooth curves and clean thin lines; slightly softer |
+| Scanlines 2x | Every second row dimmed |
+| CRT 3x | Red / green / blue phosphor stripes plus scanlines |
+| Sharp 4x | Pixel replication; with *Smooth Scaling* on it gives the "sharp bilinear" look |
+
+A render filter and the NTSC filter cannot be on together. xBRZ keeps a 64 MB
+table while it is selected (about 80 – 100 MB extra) and frees it when you
+switch away.
+
+### GPU shaders
+
+**Video → Render Filter → Shaders → Preset...** loads a RetroArch-style
+`.slangp` preset (CRT looks, phosphor masks, upscalers) through
+[librashader](https://github.com/SnowflakePowered/librashader). It needs the
+**Direct3D 11** renderer and the **64-bit** program, and `librashader.dll` must
+sit next to the `.exe` (it is included). **Shader Parameters...** adjusts the
+preset's own settings while it runs.
+
+### Looks of the program
+
+- **Theme:** System, Light or Dark.
+- **Style:** *Classic*, or *Modern* with flat rounded buttons, check boxes,
+  drop-downs and tabs, softer toolbar buttons, messages on a rounded plate,
+  rounded window corners and a themed title bar (Windows 11), and Segoe UI text.
+- **Accent Color:** Default, Teal, Green, Purple, Pink, Red, Orange or Gray, for
+  selections, tabs and list headings.
+- **Interface Size:** Normal or Large (the program restarts to change it).
+- **On-screen messages (Settings → OSD):** position, size, color, time (1 – 7
+  seconds), how many show at once (1 – 7), and a frame-rate counter.
+
+---
+
+## Sound
+
+- **Output:** Windows Classic (waveOut), XAudio2, WASAPI shared (the default) or
+  WASAPI exclusive, at 44100 or 48000 Hz, with a choice of sound device.
+- **FM chip:** YM2612 or YM3438, either the cycle-accurate Nuked versions (YM2612
+  Nuked is the default) or MAME (Discrete, ASIC or Enhanced). **High-Quality FM**
+  is on by default. The Master System FM unit can be Auto, Off or On, with its
+  own chip choice.
+- **Tone:** a **low-pass filter** (adjustable strength) or a **3-band EQ**; only
+  one at a time. **Console Model** presets set up a Model 1 or Model 2 sound.
+  Also **Stereo Width**, **Bass Boost**, **Overdrive**, **Even Out Loudness**,
+  mono output and high-quality PSG resampling.
+- **Levels and Latency...:** master, FM, PSG, CD audio and Sega CD PCM volume,
+  buffer size, and a live level meter.
+- **Mute** all sound, FM only (Ctrl+N) or PSG only (Ctrl+B); *Mute When
+  Inactive* silences the game when another window has focus.
+- Changing the FM chip or unit during a game can leave some instruments quiet
+  until the game sets them again or you reset. These choices are locked during
+  netplay.
+
+---
+
+## Cheats
+
+**Tools → Cheats...** (Ctrl+C) keeps a list of codes for the game, saved in
+`cheats/<Console>/<game>.cht` and loaded again the next time. Tick a code to
+turn it on or off at once, no reset needed. The same list opens from a game's
+right-click menu without starting it.
+
+| Console | Code types |
+|---|---|
+| Mega Drive / Genesis | Game Genie (`ABCD-EFGH`), raw patch (`aaaaaa:dddd`) |
+| Master System / Game Gear / SG-1000 | Game Genie (`ABC-DEF`, or with a reference byte), Action Replay (`00XX-YYYY`), raw RAM (`aaaa:dd`) |
+
+- **Enable Cheats** is off until you turn it on.
+- **Convert...** shows a code as Game Genie, Action Replay or raw.
+- **Shared codes:** a `.cht` file named after a game's CRC32 (for example
+  `A1B2C3D4.cht`) in `cheats/library` is used by any game with no list of its own.
+- **Cheat Search...** finds where a value (lives, health, ammo, a score) is kept
+  in memory, so you can make a cheat without a code.
+
+---
+
+## Recording and screenshots
+
+| Action | Where | Shortcut |
+|---|---|---|
+| Video + audio | `recordings/Video` (`.mp4`, H.264 + AAC) | Shift+F11 |
+| Audio only | `recordings/Audio` (`.wav`) | Ctrl+F11 |
+| Animated GIF (up to 6 s, picture only) | `recordings/GIF` | Ctrl+F12 |
+| VGM sound log | `recordings/VGM` (`.vgm`) | Tools → Record |
+| Stop any of them | | Alt+F11 |
+| Screenshot | `screenshots/` (`.png`) | F12 |
+
+Files are named after the game and the time. **Settings → General → Screenshot
+Output** chooses what a screenshot contains: *Raw* (exactly what the emulator
+drew, the default), *Corrected* (stretched to a 4:3 640×480) or *Final* (after
+the render filter). Scanlines and Brighten are never included.
+
+**Tools → Record Input...** saves a state and every button you press afterwards
+to a `.gpm` file; *Play Input Recording...* replays it exactly. Use the same
+game. Handy for speedruns and bug reports.
+
+---
+
+## Netplay
+
+Two people on the same network can play together (**Tools → Netplay...**).
+It is lockstep without rollback, so it suits a LAN best.
+
+1. Both load the **same ROM**, use the **same `.exe`** and the same settings.
+2. The host picks a port (default 55455), an input delay (1 – 4 frames) and
+   optionally a session code, then presses **Host**.
+3. The guest presses **Find hosts**, chooses the host (or types its address),
+   enters the code and presses **Join**.
+
+The host is Player 1 and the guest Player 2; each uses their own Player 1
+controls. Both games reset and start together. The status bar shows the ping.
+
+- Only cartridge games work (not Mega CD), and both ports need a Control Pad.
+- Pause, reset, states, cheats, rewind, fast forward and emulation settings are
+  locked during a session. Cheats must be off before connecting.
+- A setting that differs between the PCs refuses the connection and names it.
+  The games are compared every second; if they drift apart the session ends.
+- If the link drops, both sides wait up to a minute and carry on from the same
+  frame.
+- *Open the port on my router automatically* (UPnP, off by default) lets friends
+  outside your network join with your public address. Otherwise forward the
+  port yourself. Windows Firewall may ask to allow TCP 55455 and UDP 55456.
+- The session code only prevents joining the wrong machine; nothing is encrypted.
+
+---
+
+## Starting it from a launcher
+
+The game is the last argument. Options go in front (a leading `-` or `--`).
+
+| Option | Effect |
+|---|---|
+| `-f`, `--fullscreen` | Start in fullscreen (for this launch only) |
+| `-w`, `--windowed` | Start in a window |
+| `-x`, `--exit-on-close` | Quit when the game stops, so the launcher gets control back |
+| `-s N`, `--state N` | Load save-state slot N (0 – 9) once the game has started |
+| `--state-file FILE` | Load a state file |
+| `-m`, `--mute` | Start muted |
+| `-p`, `--paused` | Start paused |
+| `--scale N` | Window size, 1 to 6 times the picture |
+| `-h`, `--help` | List the options |
+
+```
+"Genesis Plus EX.exe" --fullscreen --exit-on-close "C:\Roms\Sonic The Hedgehog (USA, Europe).zip"
+```
+
+For a multi-disc Mega CD game give the first disc's `.cue` or `.chd`.
+
+| Launcher | Setup |
+|---|---|
+| LaunchBox | Add the program as an emulator, put `--fullscreen --exit-on-close` in the default command-line parameters |
+| Pegasus | `launch: "C:\Emulators\Genesis Plus EX.exe" --fullscreen --exit-on-close "{file.path}"` |
+| Playnite | Arguments `--fullscreen --exit-on-close "{ImagePath}"` |
+| ES-DE, EmulationStation, RetroBat | `"C:\Emulators\Genesis Plus EX.exe" --fullscreen --exit-on-close %ROM%` |
+| Steam ROM Manager and others | Anything that runs `"Genesis Plus EX.exe" [options] "<rom>"` |
+
+**Settings → General → Keep Only One Instance** makes a second start (or a
+double-clicked game file) open the game in the copy that is already running.
+
+---
+
+## Building from source
+
+You need MinGW-w64 (with `g++`), zlib and `make`. Nothing else. The same source
+builds a 32-bit or a 64-bit program, depending on the compiler.
+
+### On Windows (MSYS2)
+
+1. Install [MSYS2](https://www.msys2.org/) with the defaults.
+2. Open **MSYS2 MINGW64** (64-bit) or **MSYS2 MINGW32** (32-bit) from the Start
+   Menu, not the plain "MSYS2" shortcut.
+3. First time only: `pacman -Syu` (reopen the window if it asks you to).
+4. Install the tools:
    ```sh
-   pacman -Syu
+   pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib make     # MINGW64
+   pacman -S mingw-w64-i686-gcc   mingw-w64-i686-zlib   make     # MINGW32
    ```
-4. Install the compiler and dependencies for the architecture you opened:
+5. Go to the `win32` folder (drives appear as `/c`, `/d`, ...) and build:
    ```sh
-   # in "MSYS2 MINGW64":
-   pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib make
-   # in "MSYS2 MINGW32":
-   pacman -S mingw-w64-i686-gcc mingw-w64-i686-zlib make
-   ```
-5. `cd` to the `win32` folder. MSYS2 shows Windows drives under `/c`, `/d`
-   and so on, so `C:\Users\You\Downloads\genesis-plus-gx\win32` is
-   `cd /c/Users/You/Downloads/genesis-plus-gx/win32`.
-6. Build:
-   ```sh
+   cd /c/path/to/genesis-plus-gx/win32
    make -f Makefile.win32
    ```
 
-`Genesis Plus.exe` appears in the same `win32` folder — a native Windows executable,
-runnable directly outside MSYS2 (double-click it, or copy it wherever you
-like). The Direct3D 9 and Direct3D 11 renderers link against import libraries
-that ship with the standard `mingw-w64-*-gcc` package above, so no extra
-package is needed for them.
+`Genesis Plus EX.exe` appears in the `win32` folder and runs on its own.
 
-**Cross-compiling from Linux:**
+### Cross-compiling on Linux
 
 ```sh
 sudo apt install mingw-w64 libz-mingw-w64-dev make
@@ -113,625 +480,56 @@ make -f Makefile.win32 CROSS=x86_64-w64-mingw32-      # 64-bit
 make -f Makefile.win32 CROSS=i686-w64-mingw32-        # 32-bit
 ```
 
-Either way you get `Genesis Plus.exe`. To keep both builds side by side, give
-each its own object directory and name (the 32-bit release is called
-`Genesis Plus-32bit.exe`):
+To keep both builds side by side, give each its own folder and name:
 
 ```sh
-make -f Makefile.win32 CROSS=x86_64-w64-mingw32- OBJDIR=./build_w64 NAME="Genesis Plus.exe"
-make -f Makefile.win32 CROSS=i686-w64-mingw32-   OBJDIR=./build_w32 NAME="Genesis Plus-32bit.exe"
+make -f Makefile.win32 CROSS=x86_64-w64-mingw32- OBJDIR=./build_w64 NAME="Genesis Plus EX.exe"
+make -f Makefile.win32 CROSS=i686-w64-mingw32-   OBJDIR=./build_w32 NAME="Genesis Plus EX-32bit.exe"
 ```
 
-### Build options
+### Options
 
 | Option | Effect |
 |---|---|
-| `DEBUG=1` | Keep symbols, disable optimization |
-| `CHD=0` | Drop `.chd` and `.7z` support (skips libchdr and its lzma/zstd deps, which `.7z` reuses -- see `lzmasdk/README-lzmasdk.txt`) |
-| `OGG=0` | Drop OGG CD audio (skips the bundled Tremor decoder) |
+| `DEBUG=1` | Keep symbols, no optimization |
+| `CHD=0` | No `.chd` and `.7z` support (skips libchdr and its lzma / zstd code) |
+| `OGG=0` | No OGG CD audio (skips the bundled Tremor decoder) |
 
-`CHD` and `OGG` are on by default and build from sources already in the
-repository, so none of them adds an external dependency. Turning them off roughly
-halves the build time if you only care about cartridge games.
+`CHD` and `OGG` are on by default and build from sources in the repository.
+Turning them off roughly halves the build time if you only play cartridges.
 
-**About headers like `<windows.h>` you won't find in this repository:** these
-are system headers that ship with the compiler itself, not project files —
-the same way `<stdio.h>` isn't something any C project includes a copy of.
-MinGW-w64 (from the `pacman` packages above, or `apt install mingw-w64` on
-Linux) installs its own complete set of Windows API headers, including
-`windows.h`, `d3d9.h`, `d3d11.h` and everything else this project includes
-in angle brackets (`<...>`) rather than quotes (`"..."`). Only headers
-included in quotes, like `"d3d9_video.h"`, are project files you'll find
-in this `win32` folder.
+Headers in angle brackets, such as `<windows.h>` or `<d3d11.h>`, come with the
+MinGW-w64 compiler; only headers in quotes are files of this project.
 
 ---
 
-## Installing
-
-Put `Genesis Plus.exe` wherever you like. On first run it creates its own folders next
-to itself:
-
-```
-Genesis Plus.exe
-genesis-plus.ini    settings
-bios/               optional BIOS and add-on ROMs
-saves/              battery saves (.srm) and Mega CD backup RAM (.brm)
-states/             save states
-screenshots/        PNG captures, named <game>_YYYYMMDD_HHMMSS.png
-cheats/             per-ROM cheat lists (.cht)
-covers/             cover art images, matched to each game by file name
-recordings/         video (.mp4) and audio (.wav) captures
-shaders/            librashader .slangp presets (created the first time you
-                    open Video > Render Filter > Shaders > Preset...)
-```
-
-Per-game files -- battery saves (`saves/`), save states (`states/`) and cheat
-lists (`cheats/`) -- are grouped by console and named after the game plus an
-8-digit id made from the game's own data:
-
-```
-saves/MegaDrive/Sonic The Hedgehog [A1B2C3D4].srm
-states/MasterSystem/Alex Kidd [0F3E9C21].gp0
-```
-
-Console folders are `MegaDrive`, `MasterSystem`, `GameGear`, `SG1000` and
-`MegaCD`. The id means two different games (or a ROM hack) that happen to share
-a file name never share saves, while the same game as a `.zip` and as a plain
-file does. Files from earlier versions (`saves/<name>.srm`) are moved into the
-new layout the first time a game with that name is played. Mega CD games are
-identified by their disc header, and the shared RAM-cartridge file
-`saves/cart.brm` is unchanged. Cover images use the same console folders (`covers/MegaDrive/<game name>.png` and so on) and are still matched by file name, since the browser does not read every ROM; a cover left in the flat `covers/` folder by an earlier version is still shown when there is none in the console's folder.
-
-Everything is relative to the executable, so the whole folder can be copied to
-a USB stick and it will keep working.
-
-On Windows 10 (version 1903) and later the program runs with the UTF-8 code page,
-so game and folder names with non-English characters work; on older Windows the
-system's ANSI code page applies, as before.
-
-### Optional ROMs
-
-Drop these in `bios/` if you have them. All are optional except the Mega CD
-BIOS files, which Mega CD games need (the one matching the game's region); games
-that do not need the others run without.
-
-| File | Used for |
-|---|---|
-| `bios_MD.bin` | Mega Drive TMSS boot ROM |
-| `bios_CD_U.bin`, `bios_CD_E.bin`, `bios_CD_J.bin` | Mega CD, by region |
-| `bios_U.sms`, `bios_E.sms`, `bios_J.sms`, `bios.gg` | Master System / Game Gear |
-| `ggenie.bin`, `areplay.bin` | Game Genie, Action Replay |
-| `sk.bin`, `sk2chip.bin` | Sonic & Knuckles lock-on |
-
-Turn the BIOS on under **Options → Boot from BIOS When Available**.
-
----
-
-## Launching from a frontend
-
-Genesis Plus can be started by a frontend such as LaunchBox, Pegasus, Playnite,
-ES-DE or Steam ROM Manager. It takes the ROM as its argument, with a few
-options in front of it (a leading `-` or `--`; anything it does not know is
-ignored):
-
-| Option | What it does |
-|---|---|
-| `-f`, `--fullscreen` | Start the game in fullscreen |
-| `-w`, `--windowed` | Start the game in a window |
-| `-x`, `--exit-on-close` | Quit the program when the game is closed (Stop, Close ROM), so the frontend gets control back. Also quits if the ROM did not load. |
-| `-s N`, `--state N` | Load save state slot N (0–9) once the game has started |
-| `-h`, `--help` | Show this list |
-
-```
-"Genesis Plus.exe" --fullscreen --exit-on-close "C:\Roms\Sonic The Hedgehog (USA, Europe).zip"
-```
-
-The fullscreen option applies to that launch only; it does not change your
-saved settings. Where to put this:
-
-- **LaunchBox** – Tools → Manage → Emulators → Add: set *Emulator Application
-  Path* to `Genesis Plus.exe`, add the platform (Sega Genesis, Master System, Game
-  Gear, Sega CD, SG-1000), and put `--fullscreen --exit-on-close` in
-  *Default Command-Line Parameters*. LaunchBox adds the ROM path itself.
-- **Pegasus** – in `metadata.pegasus.txt` (or the collection file):
-  `launch: "C:\Emulators\Genesis Plus.exe" --fullscreen --exit-on-close "{file.path}"`
-- **Playnite** – an emulator profile with *Arguments*
-  `--fullscreen --exit-on-close "{ImagePath}"`.
-- **ES-DE / EmulationStation / RetroBat** – a command such as
-  `"C:\Emulators\Genesis Plus.exe" --fullscreen --exit-on-close %ROM%`.
-- **Steam ROM Manager and others** – any launcher that runs
-  `"Genesis Plus.exe" [options] "<rom>"` works.
-
-Multi-disc Mega CD games: give the `.cue` (or `.chd`) of the first disc.
-
----
-
-## Using it
-
-Open a ROM with **File → Open**, drag one onto the window, pass it on the
-command line, or browse a folder with **File → ROMs Directory** (Ctrl+R). ZIP
-and GZ archives work directly. The window remembers its position, size and
-maximized state between runs.
-
-### Keyboard
-
-| Key | Pad button |
-|---|---|
-| Arrow keys | D-pad |
-| Z, X, C | A, B, C |
-| A, S, D | X, Y, Z |
-| Enter | Start |
-| Right Shift | Mode |
-
-A connected gamepad works with no setup, laid out the way a 6-button Control
-Pad expects: the left stick and D-pad move, the Xbox X, A and B buttons give A, B and C, Y gives X, RB (Right Bumper) gives Y, RT (Right Trigger) gives Z, Start is Start and Back is Mode. LB (Left Bumper) fast-forwards and LT (Left Trigger) rewinds.
-Change any of it under **Input → Controls**.
-**Input → Enable Background Input** keeps the controls working while another
-window has focus (keyboard pad keys and gamepads only; hotkeys and the mouse
-still need the emulator window to be active).
-
-### Shortcuts
-
-| Shortcut | Action |
-|---|---|
-| Ctrl+O | Open a ROM |
-| Ctrl+R | ROMs Directory |
-| Ctrl+W | Close the ROM |
-| F2 | Pause and resume |
-| F3 | Stop the ROM |
-| F4 / Ctrl+F4 | Reset / hard reset |
-| F5 / F8 | Save / load the current slot |
-| 0 - 9 | Load state from that slot |
-| Shift+0 - Shift+9 | Save state to that slot |
-| F6 / F7 | Previous / next slot |
-| Ctrl+F8 / Ctrl+F5 | Undo the last state load / save |
-| Tab (Hold) | Fast forward |
-| Ctrl+Tab | Slow motion on / off |
-| Backspace (Hold) | Rewind (the keys can be changed under Input > Hotkeys) |
-| `\` | Advance one frame while paused |
-| Ctrl+F | Show / hide the search bar |
-| Alt+Enter / Esc | Toggle fullscreen |
-| Ctrl+M / Ctrl+N / Ctrl+B | Mute / mute FM / mute PSG |
-| Ctrl+C | Cheats |
-| Shift+F11 | Record video + audio (start / stop) |
-| Ctrl+F11 | Record audio only (start / stop) |
-| Alt+F11 | Stop recording |
-| F12 | Save a screenshot |
-
-Assigning a control works by listening rather than by picking from a list:
-select a button, choose Assign, then press what you want it to be. The same
-pass catches keyboard keys and gamepad buttons, so there is no separate mode
-for controllers.
-
-### Cheats
-
-**Tools → Cheats...** opens a list where you can paste Game Genie or
-Action Replay codes, tick them on and off, and give each one a name. Codes are
-saved per ROM under `cheats/<name>.cht` and reload automatically the next time
-that ROM runs.
-
-**Enable Cheats** is off until you turn it on. Select a code in the list to see
-its name and code in the fields underneath; change them and press **Save** to
-update that entry where it is (it keeps its place in the list). **Add code**
-adds a new one. The same list opens from **Edit Cheats** on a ROM's right-click
-menu in the browser, without starting the game, and is saved the same way.
-
-Accepted formats depend on the console, same as the codes you'd find in any
-cheat database:
-
-| Console | Formats |
-|---|---|
-| Mega Drive / Genesis | Game Genie (`ABCD-EFGH`), raw patch (`aaaaaa:dddd`) |
-| Master System / Game Gear / SG-1000 | Game Genie (`ABC-DEF`, or `ABC-DEF-GHI` with a reference byte), Action Replay (`00XX-YYYY`), raw RAM (`aaaa:dd`) |
-
-Toggling a code takes effect immediately, with no need to reset.
-
-On the Mega Drive, a code whose value is `00` followed by a byte (for example
-`FFFE12:0009`) writes that one byte at exactly the address it names; a value
-with a non-zero first byte (`FFFE12:0900`) writes both bytes. Earlier versions
-put a byte code on the neighboring address instead, so a code that only worked
-because of that (for example `FFFE20:00C8` for Sonic's rings) needs its address
-moved by one (`FFFE21:00C8`).
-
-### ROM Browser
-
-**File → ROMs Directory** (Ctrl+R) scans a folder for ROMs and lists them —
-double-click one, or select it and press **Play**, to launch it. **Change...**
-picks a different folder; **Refresh** rescans after adding files. The scan
-goes into subfolders (six levels deep, capped at 4000 files, generous for how
-anyone actually organizes a collection) and recognizes the same file types
-the Open dialog does. A standalone `.bin` is hidden when a `.cue` with the
-same name sits next to it, since the `.cue` is the real entry point for that
-Mega CD dump.
-
-**Multi-disc Mega CD games** (*Lunar: Eternal Blue*, *Popful Mail*, and a
-handful of others) prompt for the next disc themselves, the same way they
-would on real hardware: when the game opens the drive to ask for it, a
-dialog offers to pick the next disc's file. Picking one swaps just the
-loaded disc image, keeping the game running exactly as it was -- no reset,
-no lost progress.
-
-### Render Filters
-
-**Video → Render Filter** applies a CPU pixel filter to the game image before
-it is scaled to the window. They are built into the executable, so there is
-nothing to install and nothing to load:
-
-| Filter | Output | What it does |
-|---|---|---|
-| Scale2x | 2x | AdvMAME's pixel-art scaler; smooths diagonals, keeps everything else |
-| Scale3x | 3x | The same idea at 3x, smoother still |
-| Eagle 2x | 2x | The classic Eagle rules; tends to thin single-pixel lines |
-| Smooth 2x (xBR-style) | 2x | Edge-directed corner smoothing; see below |
-| Smooth 4x (xBR-style) | 4x | Two passes of the above; the softest, roundest result |
-| **xBRZ 2x – 6x** | 2x – 6x | **The real xBRZ.** Anti-aliased, almost vector-like curves and clean thin lines; see below |
-| Scanlines 2x | 2x | Every second row dimmed |
-| CRT 3x (RGB mask) | 3x | Red/green/blue phosphor stripes plus scanlines, about 80% of source brightness |
-| Sharp 4x | 4x | Plain pixel replication, no smoothing. With **Smooth scaling** on this is the well-known "sharp bilinear" look: crisp pixels without shimmer at non-integer window sizes |
-
-Each filter's output size is fixed by the filter itself; the final resize to
-the window is done afterwards through Direct3D or `StretchBlt` and follows your
-**Smooth scaling** setting. A filter is mutually exclusive with the built-in
-NTSC filter — turning one on turns the other off — since running one image
-reshaper after the other is a combination nothing here has examined.
-
-**xBRZ.** This is Zenju's actual xBRZ code, not a lookalike, at its default
-settings — the same algorithm the xBRZ render plugins for Kega Fusion were
-built from. It is the best-looking filter here on curves, diagonals and thin
-lines, and it is anti-aliased: unlike Scale2x or Smooth it blends colors, so
-the result is softer, and very small details (a one-pixel eye) come out a touch
-dimmer than the source. Higher multipliers give smoother curves; 3x or 4x is a
-good everyday choice, 6x is for large displays.
-
-Things to know about it:
-
-- **Memory.** xBRZ keeps a 64 MB color-distance table. It is built when you
-  select an xBRZ filter (about a tenth of a second) and freed when you switch
-  to anything else, so it costs nothing unless you are using it. Expect about
-  80-100 MB more while it is active, more at 5x/6x on tall interlaced frames.
-- **Cost.** About 1 ms per frame at 2x, 2 ms at 4x, under 4 ms at 6x on a
-  320x224 frame; up to about 9 ms for a 6x interlaced frame. Frames that are
-  nearly all noise, which real games do not produce, take up to 10-30 ms.
-- **Direct3D texture size.** 6x of an interlaced frame is a 1920x2688 texture.
-  Almost all GPUs accept that; one that does not falls back to the slower GDI
-  path for those frames rather than showing nothing.
-
-### Shaders Presets (librashader)
-
-**Video → Render Filter → Shaders → Preset...** runs the picture through a
-[librashader](https://github.com/SnowflakePowered/librashader) filter chain --
-the same shader format (`.slangp` presets, `.slang` shaders) RetroArch uses,
-so any preset from its `slang-shaders` repository (CRT looks, scanline and
-phosphor-mask effects, upscalers, and so on) works here too. Runs after
-whatever CPU **Render Filter** is selected, if any, and only on the
-**Direct3D 11** renderer.
-
-`librashader.dll` ships alongside `Genesis Plus.exe` -- nothing to download
-separately. It's loaded at runtime rather than linked in (see
-`win32/librashader/README-librashader.txt` for why), so it still has to sit
-next to the exe to actually be found; `make pack` copies it there
-automatically. **64-bit only**: librashader has no 32-bit Windows build, so
-`Genesis Plus-32bit.exe` has no Shaders menu at all. **Shaders → None** turns it
-back off.
-- **Fidelity.** The port was checked to give bit-for-bit the same output as
-  the untouched original at every factor from 2x to 6x; the only step added is
-  rounding its 8-bit result back to the 5/6/5 bits the frame buffer holds.
-
-
-**What "Smooth (xBR-style)" is, and is not.** It is not hqx and it is not
-xBRZ. It is a compact, independently written edge-directed smoother built on
-the same idea as xBR: for every corner of every source pixel, compare how much
-color changes along the two diagonals through it, and if the edge runs
-across that corner, blend the corner toward the neighbor it belongs to.
-It is cruder than xBRZ but crisper (it does not soften small details), much
-cheaper, and — unlike xBRZ — carries no license restriction. Two rules keep it
-from damaging detail: a corner is only cut when the pixel actually continues
-away from it (so single-pixel eyes, letter dots and 1-pixel lines are left
-alone — an early version without this rule smudged them), and similarity uses
-a tolerance so dither patterns and flat areas are untouched.
-
-
-**Cost of the others.** Measured on a desktop CPU with an optimized build, on
-320x224 frames: Scale2x, Eagle, Scanlines and Sharp are well under 1 ms; Scale3x
-and CRT are under 1 ms; Smooth 2x is about 1 ms; Smooth 4x is about 3.5 ms
-(about 7 ms on 320x448 interlaced frames). A frame of pure random noise, which
-no game produces, takes up to 14 ms at Smooth 4x.
-
-**Upgrading from the `.rpi` build.** `.rpi` files are no longer used, the
-`filters\` folder is no longer created, and **Filter Scale** and **Rescan
-filters folder** are gone (xBRZ now comes in fixed 2x-6x entries instead). If
-your settings file names a plugin that happens to match a built-in
-("Scale2x.rpi"), it carries over; anything else falls back to no filter. The
-obsolete `rpi_filter` / `rpi_scale` keys are removed the next time settings
-are saved.
-
-**Adding your own.** A filter is one function in `filters.c` —
-`void f(const uint16_t *src, int src_pitch, int w, int h, uint16_t *dst, int dst_pitch)`
-producing exactly `scale` times as many pixels each way — plus one line in the
-table at the bottom of the file. The menu is built from that table, and
-`filters.c` has no Windows dependency, so it can be built and tested on its own.
-`tests/filters_test.c` does exactly that — no Windows and no emulator core
-needed; the build commands are at the top of the file.
-
----
-
-## Advanced Audio
-
-**Audio → Advanced Audio...** exposes the rest of the core's sound options:
-
-- **Audio Filter:** Off, Low-Pass (a gentle smoothing that mimics the console's
-  analog output; its strength is adjustable, 60% by default), or a 3-Band EQ
-  with low / mid / high gains (100% is flat) and the two crossover frequencies.
-- **High-Quality FM Synthesis:** band-limited rendering of the FM chip (on by
-  default) instead of cheaper linear resampling.
-- **Master System FM Unit / Chip:** whether the YM2413 FM sound unit is used
-  (auto, off, on) and which emulation renders it (MAME or Nuked).
-- **Sega CD PCM Volume:** separate from the CD Audio slider in Levels and Latency.
-
-**Audio → FM Chip** picks the Genesis FM chip emulation. **YM2612 (Nuked)**, the default, and
-YM3438 (Nuked) are the slower, cycle-accurate core behaving as a YM2612 or a
-YM3438. YM2612 (MAME, Discrete) is the early console's chip including its DAC
-"ladder" distortion, YM3438 (MAME, ASIC) is the later chip built into the
-console's ASIC, and YM3438 (MAME, Enhanced) is a cleaner 14-bit variant. Changing the chip or the
-FM unit while a game runs can leave some instruments quiet until the game
-re-sends them or you reset. All of these are locked during netplay.
-
-## More Video Options
-
-- **Video → Visual Effects → LCD Ghosting:** bright pixels fade over the next
-  frame instead of vanishing at once (Off, Light, Medium, Heavy), like a slow
-  handheld LCD. Not used together with the NTSC filter.
-- **Video → Frameskip:** Off, Auto, or Manual. Skipping means a frame is run
-  but not drawn, which lets a slow PC catch up; the sound and the game itself
-  are unaffected. The sound card sets the pace, so "behind" means its buffer is
-  running low: Auto skips when it is nearly empty, Manual when it drops below
-  25%, 33%, 50% or 75%. At most four frames in a row are skipped. It is not used
-  during netplay or recording.
-- **Video → Borders → Interlaced Mode:** Single Field (the default) or Double Field.
-  Some games (Sonic 2 two-player, Combat Cars) use a 448-line interlaced mode;
-  Double Field shows both fields at twice the height.
-- **Options → Show Master System Side Borders:** off by default, so 8 pixels are
-  cropped off each side of Master System pictures, hiding the column games blank
-  to mask scrolling. Turn it on to see the whole picture. It has no effect while **Video → Borders** already
-  shows the left/right borders.
-
-## Force VDP Mode
-
-**Options → Force VDP Mode** (Auto, NTSC (60 Hz), PAL (50 Hz)) overrides the
-video timing while leaving the region ID the game sees alone (that is
-**Options → Region**). Forcing 60 Hz runs a European game at NTSC speed, without
-the slowdown many PAL ports suffer; forcing 50 Hz does the opposite. Music tempo
-follows, and a few games that depend on their native timing may misbehave. It is
-applied straight away and locked during netplay.
-
-## Screenshot Output
-
-**Tools → Screenshot Output** chooses what **F12** saves (as
-`<game>_YYYYMMDD_HHMMSS.png` in `screenshots/`):
-
-- **Final:** the render filter (Video → Render Filter) is applied first, then the
-  picture is stretched to 4:3 at the filter's output width, so a 2x filter gives
-  640x480 and a 3x one 960x720. With no filter chosen it is the same as
-  Corrected.
-- **Corrected:** the plain picture stretched to a 4:3 640x480 frame with smooth
-  (bilinear) resampling.
-- **Raw:** exactly what the emulator drew, at its own size. This is the default
-  and how screenshots always used to work.
-
-Scanlines and Brighten are display effects and are never included. The NTSC
-filter is part of the emulator's own picture, so it shows in all three.
-
-## Netplay (LAN)
-
-Two people on the same local network can play a game together, one on each PC.
-Open **Tools → Netplay...**.
-
-1. Both players load the **same ROM** and use the **same `Genesis Plus.exe`** (copy it
-   from one PC to the other), with the same emulation settings.
-2. The host chooses a port (default 55455), an input delay (1-4 frames; 2 is
-   fine on a normal LAN) and optionally a session code, then presses **Host**.
-3. The guest presses **Find hosts** and picks the host from the list (or types
-   its address), enters the code if there is one, and presses **Join**.
-
-The host plays Player 1 and the guest Player 2. Each player uses their own
-**Player 1** controls. Both games hard-reset and start together.
-
-While a session runs, pause, reset, save states, cheats, fast-forward, rewind
-and settings that change emulation are locked, and game saves made during the
-session are not written to disk. Cheats must be off before connecting. Only
-cartridge games are supported (not Sega CD), and both ports need a plain
-Control Pad. If a setting differs between the PCs, the connection is refused
-and the setting is named. The two games are compared every second; if they
-drift apart the session ends with a message. **Tools → Stop Netplay** (or
-closing the game) ends it.
-
-It is lockstep, without rollback: each frame waits for the other player's
-input, so it suits a LAN and not the internet. The first time you host, Windows
-Firewall may ask to allow the program (TCP 55455, and UDP 55456 for finding
-hosts). The session code only guards against joining the wrong machine; it
-does not encrypt anything.
-
-## Menu Guide
-
-The same page is in the program under **Help → Menu Guide**.
-
-**File**
-
-- **Open ROM... (Ctrl+O)** – Pick a game file to play: Mega Drive / Genesis, Master System, Game Gear, SG-1000, Mega CD, or a .zip / .7z / .gz that holds one.
-- **ROMs Directory... (Ctrl+R)** – Shows the game browser for a folder of games. Double-click a game to play it, right-click for more choices (play with a saved state, cheats, cover image, clear the recently played list: it is greyed when there is nothing to clear). Folders inside it are searched too (Settings > General > Scan ROMs Subfolders, on by default).
-- **Recent Files** – Your last games, each shown with its console.
-- **Close ROM (Ctrl+W)** – Stops the game.
-- **ROM Information...** – The game's name, console, genre, favorite state, file size and location, the CRC32, the cartridge header (console name, type, titles, product code, region, copyright, supported controllers, save RAM), and the ROM size and checksum.
-- **Open Genesis Plus Folder** – Opens the program folder: settings, saves, states, screenshots, recordings, cheats, covers and BIOS files.
-- **Exit** – Quits.
-
-**Emulation**
-
-- **Pause (F2 / Pause), Stop (F3)** – Freeze the game, or end it.
-- **Reset (F4), Hard Reset (Ctrl+F4)** – Reset is the console's reset button. Hard Reset power-cycles the console (saved game data is kept).
-- **Load State** – Load State from Selected Slot (F8) restores the exact moment saved in the selected slot. Load State from Slot (keys 0-9) loads any of the slots 0-9 directly, whichever is selected (empty slots are greyed). Undo Load State (Ctrl+F8) puts the game back as it was just before the last load; one level, cleared when the game is closed.
-- **Save State** – Save State to Selected Slot (F5) saves the exact moment into the selected slot. Save State to Slot (Shift+0 - Shift+9) saves into any of the slots 0-9 directly. Undo Save State puts the slot back as it was before the last save (or empties it if it was empty); one level, cleared when the game is closed.
-- **Select State Slot** – Choose slot 0-9 for F5 / F8 (F6 / F7 = previous / next). Each entry shows when the slot was last saved.
-- **Manage States...** – Thumbnails of all ten slots: left-click loads one, right-click saves or deletes.
-- **Enable Rewind (Backspace, Hold)** – Keeps a history of recent play so holding Backspace runs it backwards. Uses about 200 MB and some CPU while on; switch it off if you never rewind. Not available during netplay.
-- **Pause When Inactive** – Pauses the game while another window has focus.
-- **Auto Resume** – Saves the game when you close it (or quit) and, the next time you open that game, asks whether to carry on from there. The question has a "Do not ask again" box that remembers your answer; the Restore Dialog button next to Auto Resume in Settings brings it back. It uses a state of its own, so your ten save slots are untouched.
-- **Slow Motion (Ctrl+Tab)** – Runs the game at half speed (the sound slows down with it). To step one frame at a time, pause and press the Advance One Frame key, \ by default.
-- **Fast Forward (Tab), Rewind (Backspace)** – Ticked items that keep the game running fast, or backwards, until you untick them (Rewind needs Enable Rewind). The keys themselves work while held; they can be changed under Input > Hotkeys. Only one of Fast Forward, Slow Motion and Rewind is on at a time, and Slow Motion is greyed out when no game is running.
-
-**View**
-
-- **View Mode** – List View or Grid View: how the game browser shows your games.
-- **List Columns** – Choose which columns the list view shows: Favorite (a star: click it to mark a game as a favorite), and Console (Name is always shown), and Genre (shown after Console, hidden at first). Click a column's title to sort by it (View > Show Recently Played shows what you played last). Right-clicking the column header does the same. The choices are greyed out while the grid view is shown.
-- **Theme** – System (follow Windows), Light or Dark.
-- **Larger UI** – Bigger menus and dialogs.
-- **Show Favorites Only** – Mark a game as a favorite by clicking its star in the Favorite column (the right-click menu has Add To Favorites too). Show Favorites Only, or the star on the toolbar, hides every other game. Sorting by the Favorite column puts your favorites first.
-- **Show Toolbar, Show Search Bar (Ctrl+F), Show Filter Bar** – Switch the rows above the game list on or off. The toolbar has buttons for open ROM, refresh, favorites only, play, pause, stop, reset, switch fullscreen, screenshot, settings, the Video and Audio settings tabs and the player controls; a star button next to Refresh shows only your favorites. The toolbar stays above the game while it runs in a window; in fullscreen it slides in at the top edge of the screen together with the menu bar (View > Toolbar in Fullscreen switches that on; it is off to start with). The search bar narrows the list as you type (Ctrl+F jumps to it; Close or Show Search Bar hides it, and Show Search Bar brings it back). The filter bar narrows it by console, genre (looked up from the game's title in a table built into the program; a game that is not in it is listed as Unknown) and region (read from tags such as (USA) in the file name).
-- **Show Recently Played** – Shows the last few games you opened as a group at the top of the list, above all the others. Choose it again to switch it off.
-- **Clean Game Names** – The game list shows "Sonic The Hedgehog" instead of "Sonic The Hedgehog (USA, Europe) [!].md". Only the list changes, not the files.
-- **Show Grid Lines** – Thin horizontal lines between the rows of the lists (the game list in list view, and the lists in other windows); the lines between columns are always shown. Also in Settings > General.
-- **Reset Window Size** – Puts the window back at the size chosen under Video → Window Size.
-
-**Video**
-
-- **Window Size** – 1x to 6x (3x to start with).
-- **Fullscreen (Alt+Enter), Start ROM in Fullscreen** – Esc also toggles fullscreen. In fullscreen, move the mouse to the top edge of the screen to show the menu bar; it hides again when the mouse moves away. The mouse cursor stays visible in fullscreen and hides itself after a few idle seconds. Closing the ROM leaves fullscreen and returns to the selected window size.
-- **Always on Top** – Keeps the window above every other window.
-- **Render Filter** – Pixel-art scalers and CRT looks (Scale2x, Smooth, xBRZ, Scanlines, CRT...) applied before the picture is shown.
-- **Shaders** – Runs a librashader (`.slangp`) GPU shader chain on top of the picture, Direct3D 11 only; `librashader.dll` ships with the 64-bit exe; the 32-bit exe has no Shaders menu (see [Shaders Presets](#shaders-presets-librashader) above).
-- **Visual Effects** – Smooth Scaling (soft edges when enlarged), Integer Scaling (enlarges the picture by whole multiples only, 1x, 2x, 3x ..., so every pixel is the same size; it is centered, with borders, when the window is between two sizes, and follows the Aspect Ratio setting for the shape of the pixels), Brighten (a gentle brightness lift), LCD Ghosting (bright pixels fade slowly, like a handheld screen).
-- **Scanlines** – Dark lines between rows: Off, 25, 50, 75 or 100 %.
-- **NTSC Filter** – Composite, S-Video or RGB television look.
-- **Aspect Ratio** – Square Pixels, 4:3 (as on a CRT) or Fill the Window.
-- **Borders** – Hide or show the overscan borders (top/bottom, left/right).
-- **Interlaced Mode** – Single Field (the default) or Double Field, for games that use the 448-line interlaced mode.
-- **Frameskip** – Skips drawing some frames on a slow PC (Off, Auto, or Manual by audio-buffer level). Not used during netplay or recording.
-- **Renderer** – GDI draws with the CPU; Direct3D 9 and Direct3D 11 use the graphics card instead (each falls back to GDI automatically if it isn't available).
-- **VSync** – Wait for the screen's refresh after each frame so motion is even. Works with any renderer; it is skipped for a frame whenever the sound buffer runs low, so it never causes crackle. Off by default.
-
-**Audio**
-
-- **Mute FM Sound (Ctrl+N), Mute PSG Sound (Ctrl+B)** – Silence the FM chip (the main music) or the PSG chip (the square-wave sound) on its own, without touching the saved levels.
-- **Mute (Ctrl+M)** – Silences the sound; untick to hear it again.
-- **Levels and Latency...** – Master volume, FM and PSG levels, CD audio, and how many frames of sound are buffered.
-- **Advanced Audio...** – Audio filter (Off, Low-Pass or a 3-Band EQ) and its settings, High-Quality FM, Master System FM unit and chip, and Sega CD PCM volume.
-- **FM Chip** – Which Genesis FM sound chip is emulated: YM2612 or YM3438, the exact Nuked versions (default is YM2612 Nuked) or MAME.
-- **Sample Rate** – 44100 or 48000 Hz.
-- **High-Quality PSG Resampling, Low-Pass Filter, Mono Output** – Cleaner PSG sound, a soft high-frequency roll-off, and mono instead of stereo.
-
-**Input**
-
-- **Hotkeys...** – Every keyboard shortcut in one list: select an action, click Assign (or double-click it) and press the key you want, alone or with Ctrl, Shift or Alt. A key can only be on one action: the old one loses it. Clear removes a shortcut and Restore Defaults brings the original keys back. The menu labels and the Keyboard Shortcuts window follow your choices. Fast Forward and Rewind (the keys you hold, Tab and Backspace by default) are in the list too; their gamepad buttons are under Controls > Gamepad Hotkeys.
-- **Controls...** – One window with a tab for Player 1 and one for Player 2, laid out around a picture of the pad. Click a button, then press the key or gamepad button you want (right-click a button to clear it; clicking its spot on the picture works too). Right-click A, B, C, X, Y or Z to turn Turbo on for it: held down, it then fires repeatedly. A key or button can only be on one pad button: assigning it takes it off the one that had it (also on the other player, for keys), and a line under the pad says what was removed, and when the key is also a shortcut or the pad button also a gamepad hotkey. Auto Assign goes through them all in turn. Pressing a mapped key or gamepad button lights its spot on the picture, so you can check a pad; tick Test Keys to try keys such as Enter, Tab and Esc without them operating the window. Set keyboard keys and gamepad buttons, and set the gamepad thumbstick's deadzone (how far it has to move off-center before it registers at all). The right stick counts as four more buttons (Right Stick Up, Down, Left, Right) that can be assigned like any other; this works for XInput pads and, where the pad reports the stick on its Rx / Ry or Z / Rz axes, for DirectInput ones. Gamepad Hotkeys... opens a window to choose which pad button runs each shortcut, pressed on its own (no Back needed): Fast Forward and Rewind (held), Slow Motion, Save State and Load State (current slot), and Previous and Next Slot. By default the right stick does the last four (up = save, down = load, left = previous slot, right = next slot) and LB (Left Bumper) / LT (Left Trigger) are Fast Forward / Rewind. A button used there also reaches the game, so the right stick is a good choice. Xbox-style (XInput) pad of Player 1 only. Player 1 defaults: arrows, Z X C = A B C, A S D = X Y Z, Enter = Start, Right Shift = Mode.
-- **Port A / Port B Device** – What is plugged in: Control Pad, Mouse, a light gun (Light Phaser, Menacer or Justifier, depending on the port), XE-1AP analog joystick, Activator, Paddle Control, Sports Pad, Graphic Board (Pico's drawing tablet), or a 4-player Team Player adapter — not every device is on both ports.
-- **Enable Background Input** – Keep reading the controller while another window has focus.
-
-**Tools**
-
-- **Cheats... (Ctrl+C)** – Add Game Genie, Action Replay or raw codes, or load a .cht file.
-- **Netplay... / Stop Netplay** – Two-player game over a local network: one PC hosts, the other joins. Both need the same ROM, the same program file and the same settings.
-- **Record** – Video + Audio (Shift+F11) makes an .mp4, Audio Only (Ctrl+F11) a .wav. Files go in the recordings folder; Stop Recording (Alt+F11) ends it.
-- **Save Screenshot (F12)** – Saves a PNG named after the game and the time.
-- **Screenshot Output** – Final: the render filter is applied, then the picture is stretched to 4:3. Corrected: the plain picture stretched to 4:3 at 640x480. Raw: exactly what the emulator drew, at its own size.
-
-**Options**
-
-- **Settings...** – Every option of the menus on tabs (General, Video, Audio, Input and Options). Hover over an option for a short description (it hides after 30 seconds). Restore Defaults (bottom left) puts every setting on all tabs back to its default, keeping your controls, ROM folder and cheats. A change takes effect at once, exactly as if you had used the menu; the windows that have their own settings open from a button.
-- **Region** – Which region the console reports to the game: detect from the ROM, USA, Europe or Japan.
-- **Force VDP Mode** – Run the video timing at 60 Hz (NTSC) or 50 Hz (PAL) whatever the region says.
-- **Console** – Detect the console from the game, or force a specific model.
-- **Lock-On Cartridge** – Attach a Game Genie, Action Replay or Sonic & Knuckles to the game.
-- **Boot from BIOS When Available** – Run the console's start-up ROM when a BIOS file is present (see below).
-- **Emulate Address Error Exceptions** – Hardware-accurate crashes on bad memory access; turn off only for a few hacked games.
-- **Show Extended Game Gear Screen** – Show the whole Game Gear picture instead of only the part its screen displayed.
-- **Show Master System Side Borders** – Off by default, which crops the 8-pixel columns at each side; tick to show them.
-- **Show On-Screen Display** – Short messages over the picture, such as "Saved to slot 3" or the name of a screenshot. Untick to hide them (the status bar still shows them).
-- **Show Frame Rate** – Frames per second on screen.
-
-**Help**
-
-- **Keyboard Shortcuts (F1)** – The list of hotkeys.
-- **Menu Guide** – This page. Pick a section on the left to show just that part.
-- **About Genesis Plus** – Version and credits.
-
-The BIOS and firmware files are listed under **Optional ROMs** in the Installing section above.
-
-## How it fits together
+## Source layout
+
+Everything for this front end is in `win32/`. The files `fileio.c`, `unzip.c`
+and `error.c` are reused from `../sdl`, and the include path puts `win32/` first
+so the core sees this port's `osd.h`.
 
 | File | Role |
 |---|---|
-| `osd.h`, `main.h`, `config.h` | What the core expects from the host |
-| `main.c` | Window, menus, ROM lifecycle, emulation loop |
-| `video.c` | DIB rendering, scaling, fullscreen, screenshots, filter output buffer |
-| `filters.c`, `filters.h` | The built-in render filters (no Windows dependency) |
-| `xbrz_glue.cpp`, `xbrz_glue.h` | RGB565 <-> xBRZ pixel conversion; the only C++ this port owns |
-| `xbrz/` | Zenju's xBRZ scaler
-| `audio.c` | waveOut output |
-| `input.c` | Keyboard, XInput, pointer devices |
-| `cheats.c` | Game Genie / Action Replay decoding, patching, persistence |
-| `dialogs.c` | Input mapping, audio levels, shortcuts, about |
-| `browser.c` | ROM Browser: folder scan and launch |
-| `config.c` | Defaults and INI persistence |
-| `sevenzip.c`, `sevenzip.h` | Reading `.7z` archives (browsing and ROM loading) |
-| `lzmasdk/` | Igor Pavlov's LZMA SDK, the `.7z`-container-specific subset only -- see its own README |
-| `shader_chain.c`, `shader_chain.h` | GPU shader presets via librashader.dll, loaded at runtime (see below) |
-| `librashader/` | librashader.h and the librashader.dll shipped with the exe -- see its own README |
-| `gpgx.rc`, `resource.h`, `gpgx.manifest` | Menus, accelerators, dialogs, icon, visual styles |
-
-`fileio.c`, `unzip.c` and `error.c` are reused from `../sdl` rather than
-duplicated — they are platform-neutral. The include path puts `win32/` ahead of
-`sdl/` so this port's `osd.h` is the one the core sees. `.zip` and `.gz` are
-handled that way, by the core itself; `.7z` is handled separately, by this
-frontend (`sevenzip.c`), since the core has no concept of it.
-
-### Decisions worth knowing about
-
-**16-bit RGB565, not 32-bit.** The core's Blargg NTSC filter only supports 15-
-and 16-bit output, so a 32-bit framebuffer would have meant giving up the
-filter. Frames land in a top-down DIB section with bitfield masks and are
-presented with a single `StretchBlt` from a memory DC. `StretchDIBits` would
-have been one call shorter but it flips the meaning of its source rectangle
-depending on the sign of `biHeight`, which is not worth the ambiguity.
-
-**Single-threaded.** Emulation runs on the UI thread from a `PeekMessage` loop.
-That costs a little responsiveness while a menu is open — Windows runs its own
-modal loop there, which the code handles explicitly — but it means no locking
-anywhere near the framebuffer or the core's state.
-
-**The sound card is the clock.** One buffer is queued per emulated frame and
-buffers are recycled by polling `WHDR_DONE` rather than through a callback, so
-nothing runs on a second thread. The number of buffers still in flight is what
-paces emulation, which keeps video locked to the audio clock instead of letting
-the two drift. With sound off it falls back to `QueryPerformanceCounter`
-against the core's own reported frame rate.
-
-**BIOS paths resolve against the executable.** The SDL port hardcodes
-`"./ggenie.bin"`, which breaks the moment you launch from a shortcut or drop a
-ROM on the .exe. These resolve relative to the executable instead.
-
-**XInput is loaded at runtime.** Linking it directly would stop the executable
-from starting on a machine where the DLL is missing, and a gamepad is optional.
-Controller slots 3 and 4 get the default layout automatically, so a Team Player
-game works without extra setup.
-
-**Render filters are built in, not plugins.** They are ordinary functions in
-the executable, working on the same RGB565 buffer the core renders into and
-writing to a second one that is presented in its place. That removes a whole
-class of problems the earlier plugin loader had to defend against: no DLL to
-find or trust, no calling-convention or struct-layout guesses, no crash guard
-needed, and no restriction on the executable's bitness.
-
-**xBRZ is C++ but the program is not.** xBRZ is compiled with no exceptions, no
-RTTI and no thread-safe static guards, and its one `std::vector` became a
-`malloc`, so the object code calls nothing in the C++ runtime library. The link
-step stays plain `gcc`, and the executable still imports only DLLs that ship
-with Windows (it does not need `libstdc++` or `libwinpthread`, whichever MinGW
-threading model your toolchain uses).
+| `main.c` | Window, menus, game start and stop, the emulation loop |
+| `video.c`, `d3d9_video.c`, `d3d11_video.c` | Picture: scaling, renderers, fullscreen, on-screen text, screenshots |
+| `filters.c`, `xbrz_glue.cpp`, `xbrz/` | Built-in render filters, including xBRZ |
+| `shader_chain.c`, `librashader/` | GPU shader presets through `librashader.dll` |
+| `audio.c`, `audio_be.c` | Sound output and the sound backends |
+| `input.c`, `hotkeys.c` | Keyboard, XInput, pointer devices, combos, shortcuts |
+| `browser.c`, `coverart.c`, `history.c` | Game list, grid and covers, play history |
+| `cheats.c`, `patches.c` | Cheats and ROM patches |
+| `dialogs.c`, `settings.c`, `theme.c`, `toolbar.c` | Windows, the Settings dialog, themes and styles, toolbar |
+| `recorder.c`, `movie.c`, `vgm.c` | Recording video, audio and GIF; input recording; VGM logs |
+| `netplay.c`, `upnp.c` | Network play and router port opening |
+| `sevenzip.c`, `lzmasdk/` | `.7z` archives |
+| `config.c`, `config.h` | Defaults and the settings file |
+| `gpex.rc`, `resource.h`, `gpex.manifest` | Menus, dialogs, accelerators, icon and visual styles |
 
 ---
 
 ## License
 
-Same terms as Genesis Plus GX: source must accompany modified redistributions,
-and it may not be sold or used commercially. See `LICENSE.txt` in the
-repository root.
+The same terms as Genesis Plus GX: the source must accompany modified
+redistributions, and the program may not be sold or used commercially. See
+`LICENSE.txt` in the repository root.
