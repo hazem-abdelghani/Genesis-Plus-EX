@@ -39,13 +39,13 @@ static const hk_t hk[] =
 {
   { "Keyboard Shortcuts",             IDM_HELP_SHORTCUTS,          VK_F1 },
   { "Open ROM",                       IDM_FILE_OPEN,               K_CTRL | 'O' },
-  { "ROMs Directory",                 IDM_FILE_BROWSER,            K_CTRL | 'R' },
+  { "ROM Directory",                 IDM_FILE_BROWSER,            K_CTRL | 'R' },
   { "Pause and Resume",               IDM_EMU_PAUSE,               VK_F2 },
-  { "Pause and Resume (second key)",  IDM_EMU_PAUSE,               VK_PAUSE },
+  { "Pause and Resume (Second Key)",  IDM_EMU_PAUSE,               VK_PAUSE },
   { "Stop",                           IDM_EMU_STOP,                VK_F3 },
   { "Reset",                          IDM_EMU_RESET,               VK_F4 },
   { "Hard Reset",                     IDM_EMU_HARDRESET,           K_CTRL | VK_F4 },
-  { "Load State (current slot)",      IDM_ACCEL_QUICKLOAD,         VK_F8 },
+  { "Load State (Current Slot)",      IDM_ACCEL_QUICKLOAD,         VK_F8 },
   { "Load State from Slot 0",          IDM_FILE_LOADSLOT_BASE + 0,  '0' },
   { "Load State from Slot 1",          IDM_FILE_LOADSLOT_BASE + 1,  '1' },
   { "Load State from Slot 2",          IDM_FILE_LOADSLOT_BASE + 2,  '2' },
@@ -57,7 +57,7 @@ static const hk_t hk[] =
   { "Load State from Slot 8",          IDM_FILE_LOADSLOT_BASE + 8,  '8' },
   { "Load State from Slot 9",          IDM_FILE_LOADSLOT_BASE + 9,  '9' },
   { "Undo Load State",                IDM_EMU_UNDOLOAD,            K_CTRL | VK_F8 },
-  { "Save State (current slot)",      IDM_ACCEL_QUICKSAVE,         VK_F5 },
+  { "Save State (Current Slot)",      IDM_ACCEL_QUICKSAVE,         VK_F5 },
   { "Save State to Slot 0",            IDM_FILE_SAVESLOT_BASE + 0,  K_SHIFT | '0' },
   { "Save State to Slot 1",            IDM_FILE_SAVESLOT_BASE + 1,  K_SHIFT | '1' },
   { "Save State to Slot 2",            IDM_FILE_SAVESLOT_BASE + 2,  K_SHIFT | '2' },
@@ -72,18 +72,20 @@ static const hk_t hk[] =
   { "Previous Slot",                  IDM_ACCEL_SLOT_PREV,         VK_F6 },
   { "Next Slot",                      IDM_ACCEL_SLOT_NEXT,         VK_F7 },
   { "Advance One Frame While Paused", HK_FRAMEADV,                 VK_OEM_5 },
-  { "Fast Forward (hold)",            HK_FASTFWD,                  VK_TAB },
+  { "Fast Forward (Hold)",            HK_FASTFWD,                  VK_TAB },
   { "Pause Menu",                     IDM_INPUT_PAUSEMENU,         0 },
   { "Game Speed: Faster",             IDM_EMU_SPEEDUP,             K_CTRL | VK_OEM_PLUS },
   { "Game Speed: Slower",             IDM_EMU_SPEEDDOWN,           K_CTRL | VK_OEM_MINUS },
   { "Game Speed: Normal",             IDM_EMU_SPEEDRESET,          K_CTRL | '0' },
-  { "Rewind (hold)",                  HK_REWIND,                   VK_BACK },
+  { "Rewind (Hold)",                  HK_REWIND,                   VK_BACK },
   { "Show / Hide the Search Bar",     IDM_VIEW_FINDSEARCH,         K_CTRL | 'F' },
   { "Fullscreen",                     IDM_VIDEO_FULLSCREEN,        K_ALT | VK_RETURN },
   { "Leave Fullscreen",               IDM_ACCEL_LEAVE_FULLSCREEN,  VK_ESCAPE },
   { "Mute",                           IDM_AUDIO_ENABLE,            K_CTRL | 'M' },
   { "Mute FM Sound",                 IDM_AUDIO_MUTE_FM,           K_CTRL | 'N' },
   { "Mute PSG Sound",                IDM_AUDIO_MUTE_PSG,          K_CTRL | 'B' },
+  { "Mute PWM Sound",                IDM_AUDIO_MUTE_PWM,          K_CTRL | 'P' },
+  { "Show / Hide the Frame Rate",    IDM_VIDEO_SHOWFPS,           K_CTRL | 'T' },
   { "Console Model: Default",         IDM_SET_MODEL_BASE + 0,      K_CTRL | K_SHIFT | '3' },
   { "Console Model: Genesis Model 1", IDM_SET_MODEL_BASE + 1,      K_CTRL | K_SHIFT | '1' },
   { "Console Model: Genesis Model 2", IDM_SET_MODEL_BASE + 2,      K_CTRL | K_SHIFT | '2' },
@@ -92,6 +94,7 @@ static const hk_t hk[] =
   { "Record Video + Audio",           IDM_FILE_REC_VIDEO,          K_SHIFT | VK_F11 },
   { "Record Audio Only",              IDM_FILE_REC_AUDIO,          K_CTRL | VK_F11 },
   { "Stop Recording",                 IDM_FILE_REC_STOP,           K_ALT | VK_F11 },
+  { "Record VGM File",                IDM_TOOLS_VGM,               K_SHIFT | VK_F10 },
   { "Save a Screenshot",              IDM_FILE_SCREENSHOT,         VK_F12 },
 };
 #define HK_N ((int)(sizeof(hk) / sizeof(hk[0])))
@@ -509,7 +512,7 @@ static INT_PTR CALLBACK hotkeys_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                          "Cancel: keep things as they were.",
                     key, hk[j].name, hk[row].name, key, hk[j].name, hk[row].name, key, hk[row].name, hk[j].name);
           answer = MessageBoxA(dlg, ask, "Shortcut Already Used", MB_YESNOCANCEL | MB_ICONQUESTION);
-          if (answer == IDCANCEL) { hkd_set_hint(dlg, "Cancelled: the shortcut was not changed."); return TRUE; }
+          if (answer == IDCANCEL) { hkd_set_hint(dlg, "Canceled: the shortcut was not changed."); return TRUE; }
           hkd.work[j] = (answer == IDYES) ? hkd.work[row] : 0;
           wsprintfA(other, " (\"%s\" %s)", hk[j].name, answer == IDYES ? "got the old shortcut" : "has none now");
           break;
@@ -557,7 +560,7 @@ static INT_PTR CALLBACK hotkeys_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       switch (LOWORD(wp))
       {
         case IDC_HK_ASSIGN:
-          if (hkd.capture >= 0) { hkd_end(dlg); hkd_set_hint(dlg, "Cancelled."); }
+          if (hkd.capture >= 0) { hkd_end(dlg); hkd_set_hint(dlg, "Canceled."); }
           else hkd_begin(dlg, sel);
           return TRUE;
 
@@ -620,10 +623,10 @@ typedef struct { const char *name; int cmd; int def; } ph_t;
    no game button uses. */
 static const ph_t ph[] =
 {
-  { "Fast Forward (hold)",        0,                    0x0100 },       /* Left Bumper */
-  { "Rewind (hold)",              0,                    0x00010000 },   /* LT */
-  { "Save State (current slot)",  IDM_ACCEL_QUICKSAVE,  0x00040000 },   /* right stick up */
-  { "Load State (current slot)",  IDM_ACCEL_QUICKLOAD,  0x00080000 },   /* right stick down */
+  { "Fast Forward (Hold)",        0,                    0x0100 },       /* Left Bumper */
+  { "Rewind (Hold)",              0,                    0x00010000 },   /* LT */
+  { "Save State (Current Slot)",  IDM_ACCEL_QUICKSAVE,  0x00040000 },   /* right stick up */
+  { "Load State (Current Slot)",  IDM_ACCEL_QUICKLOAD,  0x00080000 },   /* right stick down */
   { "Previous Slot",              IDM_ACCEL_SLOT_PREV,  0x00100000 },   /* right stick left */
   { "Next Slot",                  IDM_ACCEL_SLOT_NEXT,  0x00200000 },   /* right stick right */
   { "Toggle Turbo", IDM_INPUT_TURBO_ALL,  0x0080 },       /* right stick button */
@@ -631,6 +634,7 @@ static const ph_t ph[] =
   { "Reset",                      IDM_EMU_RESET,        0 },
   { "Save a Screenshot",          IDM_FILE_SCREENSHOT,  0 },
   { "Fullscreen",                 IDM_VIDEO_FULLSCREEN, 0 },
+  { "Show / Hide the Frame Rate", IDM_VIDEO_SHOWFPS,    0 },
   { "Mute",                       IDM_AUDIO_ENABLE,     0 },
   { "Record Video + Audio",       IDM_FILE_REC_VIDEO,   0 },
   { "Game Speed: Faster",         IDM_EMU_SPEEDUP,      0 },
@@ -880,7 +884,7 @@ static INT_PTR CALLBACK padhk_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       switch (LOWORD(wp))
       {
         case IDC_PH_ASSIGN:
-          if (phd.capture >= 0) { phd_end(dlg); SetDlgItemTextA(dlg, IDC_PH_HINT, "Cancelled."); }
+          if (phd.capture >= 0) { phd_end(dlg); SetDlgItemTextA(dlg, IDC_PH_HINT, "Canceled."); }
           else phd_begin(dlg, sel);
           return TRUE;
 

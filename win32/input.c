@@ -1063,6 +1063,8 @@ static int is_pad_dev(int d)
  * 4 (slots 1-3 only exist with a multitap on port A); on the 8-bit consoles
  * the second pad is slot 1.
  */
+int input_press_logged;     /* 0 after a game is loaded; set when the first press is written to the log */
+
 int gui_input_p2_slot(void)
 {
   int i;
@@ -1117,10 +1119,13 @@ static void resolve_map(int slot, t_pad_map *out)
 static unsigned turbo_frames;
 static int turbo_master = 1;     /* the gamepad hotkey "Toggle Turbo": 0 = every Turbo button acts as a plain button (for this run) */
 int gui_input_toggle_turbo(void) { turbo_master = !turbo_master; return turbo_master; }
-static int turbo_half_period(void)      /* frames the button stays down (and then up), for gui.turbo_rate 0-3 */
+/* Whether a Turbo button is held down in this frame: it goes through num / den turns (down, then up) a frame, which is 7.5, 10, 15, 22.5 and 30
+   presses a second at 60 frames (gui.turbo_rate 0-4). */
+static int turbo_down(unsigned frame)
 {
-  static const int half[4] = { 4, 3, 2, 1 };   /* 7.5, 10, 15 and 30 presses a second at 60 frames */
-  return half[gui.turbo_rate & 3];
+  static const unsigned num[5] = { 1, 1, 1, 3, 1 }, den[5] = { 8, 6, 4, 8, 2 };
+  int r = gui.turbo_rate < 0 || gui.turbo_rate > 4 ? 2 : gui.turbo_rate;
+  return (frame * num[r]) % den[r] >= den[r] / 2;
 }
 
 /* Combo buttons: lines like "Q = A+B" or "Pad:LB = B+C" (gui.combo_text): one key or pad button presses several game buttons
@@ -1281,8 +1286,8 @@ static uint16 read_pad(int slot)
   if (PRESSED(PAD_Z))     pad |= INPUT_Z;
   if (PRESSED(PAD_MODE))  pad |= INPUT_MODE;
 
-  /* Turbo buttons fire on and off while they are held: every 1 - 4 frames (Controls > Turbo Rate). */
-  if (map.turbo && turbo_master && ((turbo_frames / (unsigned)turbo_half_period()) & 1))
+  /* Turbo buttons fire on and off while they are held: 7.5 to 30 times a second (Controls > Turbo Rate). */
+  if (map.turbo && turbo_master && turbo_down(turbo_frames))
   {
     if (map.turbo & (1u << PAD_A)) pad &= ~INPUT_A;
     if (map.turbo & (1u << PAD_B)) pad &= ~INPUT_B;
@@ -1387,7 +1392,7 @@ static int cursor_in_frame(int *px, int *py)
  * Movement since the last frame, in emulated pixels.
  *
  * The Sega Mouse reports relative motion, not a position, so an absolute
- * offset from the centre of the frame would read as a steady drift towards
+ * offset from the center of the frame would read as a steady drift toward
  * the cursor rather than as the cursor moving.
  */
 static int cursor_delta(int slot, int *dx, int *dy)
@@ -1658,7 +1663,7 @@ int win32_input_update(void)
 
         /* No DirectInput equivalent of an XInput shoulder button is assumed
            (an arbitrary joystick has no fixed button layout to guess one
-           from), so this second analog channel only ever moves off-centre
+           from), so this second analog channel only ever moves off-center
            for an XInput pad -- same as before DirectInput support existed. */
         input.analog[slot + 1][0] = (!is_di_device(map.device) && (buttons & XPAD_LEFT_SHOULDER)) ? 0 : 128;
         input.analog[slot + 1][1] = 128;
@@ -1703,6 +1708,12 @@ int win32_input_update(void)
   {
     int p2 = netplay_active() ? gui_input_p2_slot() : -1;
     if (p2 >= 0) netplay_apply_input(&input.pad[0], &input.pad[p2]);
+  }
+
+  if (!input_press_logged && (input.pad[0] || input.pad[4]))      /* for the log: the first button press of the game was seen */
+  {
+    input_press_logged = 1;
+    gui_log("Input: the first press was seen (Player 1 %04X, Player 2 %04X)", (unsigned)input.pad[0], (unsigned)input.pad[4]);
   }
 
   movie_frame();     /* input recording / playback */
@@ -2135,7 +2146,7 @@ const char *input_key_name(int vk)
 
   switch (vk)
   {
-    /* Keys on the grey block report the same scan code as the numpad. */
+    /* Keys on the gray block report the same scan code as the numpad. */
     case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN:
     case VK_PRIOR: case VK_NEXT: case VK_END: case VK_HOME:
     case VK_INSERT: case VK_DELETE: case VK_DIVIDE: case VK_NUMLOCK:

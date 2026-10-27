@@ -12,7 +12,7 @@
  *     D3D9 is the worse-performing or buggier of the two. Offering both
  *     lets a person route around whichever one their particular driver
  *     handles badly, without losing the other for everyone else.
- *   - It is the API a GPU shader post-processing library such as
+ *   - It is the API a shader post-processing library such as
  *     librashader (github.com/SnowflakePowered/librashader) actually
  *     targets -- D3D9 support there is explicitly limited/experimental,
  *     so real shader-preset support needs this path to exist regardless
@@ -50,7 +50,7 @@ int  d3d11_available(void);
 /* Renders one frame: clears the whole client area to black (handling the
    letterbox/border), then draws src_pixels (RGB565, src_pitch bytes per
    row, src_w x src_h) stretched into dest with hardware bilinear
-   filtering when smooth is set, nearest-neighbour otherwise. client_w/h
+   filtering when smooth is set, nearest-neighbor otherwise. client_w/h
    is the current client area size. Returns 1 if the frame was rendered
    (the caller should then draw its overlay and call d3d11_present()), 0
    if the device isn't usable right now -- the caller should fall back to

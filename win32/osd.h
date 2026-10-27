@@ -52,17 +52,17 @@ extern void win32_cd_tray_callback(void);
  * drops a ROM on the .exe. These resolve against the executable's own folder
  * instead, under a "bios" subdirectory.
  */
-#define GG_ROM      osd_path("bios\\ggenie.bin")
-#define AR_ROM      osd_path("bios\\areplay.bin")
-#define SK_ROM      osd_path("bios\\sk.bin")
-#define SK_UPMEM    osd_path("bios\\sk2chip.bin")
-#define CD_BIOS_US  osd_path("bios\\bios_CD_U.bin")
-#define CD_BIOS_EU  osd_path("bios\\bios_CD_E.bin")
-#define CD_BIOS_JP  osd_path("bios\\bios_CD_J.bin")
-#define MD_BIOS     osd_path("bios\\bios_MD.bin")
-#define MS_BIOS_US  osd_path("bios\\bios_U.sms")
-#define MS_BIOS_EU  osd_path("bios\\bios_E.sms")
-#define MS_BIOS_JP  osd_path("bios\\bios_J.sms")
-#define GG_BIOS     osd_path("bios\\bios.gg")
+#define GG_ROM      osd_path("BIOS\\ggenie.bin")
+#define AR_ROM      osd_path("BIOS\\areplay.bin")
+#define SK_ROM      osd_path("BIOS\\sk.bin")
+#define SK_UPMEM    osd_path("BIOS\\sk2chip.bin")
+#define CD_BIOS_US  osd_path("BIOS\\bios_CD_U.bin")
+#define CD_BIOS_EU  osd_path("BIOS\\bios_CD_E.bin")
+#define CD_BIOS_JP  osd_path("BIOS\\bios_CD_J.bin")
+#define MD_BIOS     osd_path("BIOS\\bios_MD.bin")
+#define MS_BIOS_US  osd_path("BIOS\\bios_U.sms")
+#define MS_BIOS_EU  osd_path("BIOS\\bios_E.sms")
+#define MS_BIOS_JP  osd_path("BIOS\\bios_J.sms")
+#define GG_BIOS     osd_path("BIOS\\bios.gg")
 
 #endif /* _OSD_H_ */

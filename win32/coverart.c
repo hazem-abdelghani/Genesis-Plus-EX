@@ -55,7 +55,7 @@ static char covers_cache[GUI_PATH_LEN];
 
 static const char *covers_base(void)
 {
-  if (!covers_cache[0]) lstrcpynA(covers_cache, osd_path("covers"), sizeof(covers_cache));
+  if (!covers_cache[0]) lstrcpynA(covers_cache, osd_path("Covers"), sizeof(covers_cache));
   return covers_cache;
 }
 
@@ -77,6 +77,8 @@ static const char *console_dir_name(const char *console)
   if (!lstrcmpiA(console, "Game Gear"))             return "GameGear";
   if (!lstrcmpiA(console, "SG-1000"))               return "SG1000";
   if (!lstrcmpiA(console, "Mega CD / Sega CD"))     return "MegaCD";
+  if (!lstrcmpiA(console, "32X"))              return "32X";
+  if (!lstrcmpiA(console, "Sega Pico"))        return "Pico";
   return "Other";
 }
 
@@ -114,6 +116,15 @@ int coverart_find_cached(const char *rom_full_path, const char *console,
   console_covers_dir(console, cdir, sizeof(cdir));
   covers_dir(fdir, sizeof(fdir));
   base_name_only(rom_full_path, base, sizeof(base));
+
+  if (*cache >= 0)              /* the cover was found before: it may have been moved since (into the console's folder, say) */
+  {
+    char known[GUI_PATH_LEN];
+    int flat = *cache >= COVER_FLAT;
+
+    build_candidate(flat ? fdir : cdir, base, flat ? *cache - COVER_FLAT : *cache, known, sizeof(known));
+    if (GetFileAttributesA(known) == INVALID_FILE_ATTRIBUTES) *cache = COVERART_UNCHECKED;
+  }
 
   if (*cache >= COVER_FLAT)
   {
@@ -206,8 +217,8 @@ void coverart_round_corners(unsigned char *bits, int size, int x0, int y0, int w
 
 /* Scales the part cx,cy,cw,ch of an RGBA picture (stb_image's, straight alpha) into the rectangle dx,dy,dw,dh of a
    size x size premultiplied BGRA bitmap. Shrinking averages every source pixel under a destination pixel (a box
-   filter: no shimmer or jagged edges, which nearest-neighbour gave on a large cover); enlarging blends the two nearest
-   (bilinear). The colour is premultiplied by its alpha *before* averaging and stays that way: the bitmap is drawn
+   filter: no shimmer or jagged edges, which nearest-neighbor gave on a large cover); enlarging blends the two nearest
+   (bilinear). The color is premultiplied by its alpha *before* averaging and stays that way: the bitmap is drawn
    with AlphaBlend, which expects it, and a transparent PNG no longer gets a bright or dark fringe along its edges. */
 #define COVER_MAX_TAPS 256
 
@@ -302,7 +313,7 @@ static int resample_rgba(const unsigned char *src, int src_w, int src_h, int cx,
         p = mid + ((size_t)(r - row_lo) * dw + x) * 4;
         acc[0] += p[0] * wts[k]; acc[1] += p[1] * wts[k]; acc[2] += p[2] * wts[k]; acc[3] += p[3] * wts[k];
       }
-      if (straight)          /* RGBA, colour not multiplied by alpha: the shrunk copy kept for later scaling (see cover_source) */
+      if (straight)          /* RGBA, color not multiplied by alpha: the shrunk copy kept for later scaling (see cover_source) */
       {
         float al = acc[3] > 0.0001f ? acc[3] : 0.0001f;
         int r = (int)(acc[0] / al + 0.5f), g = (int)(acc[1] / al + 0.5f), b = (int)(acc[2] / al + 0.5f), a = (int)(acc[3] * 255.0f + 0.5f);
@@ -313,7 +324,7 @@ static int resample_rgba(const unsigned char *src, int src_w, int src_h, int cx,
       {
         int b = (int)(acc[2] + 0.5f), g = (int)(acc[1] + 0.5f), r = (int)(acc[0] + 0.5f), a = (int)(acc[3] * 255.0f + 0.5f);
         if (a > 255) a = 255;
-        if (b > a) b = a;      /* premultiplied: a colour never exceeds its alpha */
+        if (b > a) b = a;      /* premultiplied: a color never exceeds its alpha */
         if (g > a) g = a;
         if (r > a) r = a;
         dst[x * 4 + 0] = (unsigned char)b; dst[x * 4 + 1] = (unsigned char)g;

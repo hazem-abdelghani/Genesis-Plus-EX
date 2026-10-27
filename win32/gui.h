@@ -13,7 +13,7 @@
 #define APP_NAME    "Genesis Plus EX"
 #define APP_NAME_W  L"Genesis Plus EX"
 #define APP_CLASS   "GenesisPlusEXWindow"
-#define APP_VERSION "2.0.0"
+#define APP_VERSION "3.0.0"
 #ifdef _WIN64
 #define APP_BITS    "64-bit"
 #else
@@ -97,15 +97,19 @@ extern void apply_always_on_top(void);
 extern int   video_init(void);
 extern void  video_shutdown(void);
 extern void  video_frame(void);          /* blit the current core bitmap */
+extern void  video_deinterlace_reset(void);  /* the picture changed under it (a state was loaded, a rewind step): start its history again */
+extern void  video_deinterlace(void);    /* Interlaced Mode > Double Field: removes the comb teeth of a moving object from the frame just made */
 extern void  video_repaint(HDC hdc);     /* redraw from WM_PAINT */
 extern void  video_set_ntsc(int mode);   /* 0 off, 1 composite, 2 s-video, 3 rgb */
 extern void  video_viewport_changed(void);
+extern int   gui_pico_unsupported(int id);     /* 1: does nothing for the 32X game that is running (grayed out) */
+extern void  video_pico_frame(const void *src, int w, int h, int pitch);   /* a 32X game's picture (RGB565) into the frame buffer */
 extern void  video_force_redraw(void);
 extern void  video_set_renderer(int renderer);
 extern void  video_set_vsync_allowed(int allowed);   /* false: skip this frame's VSync wait */
 extern void  video_invalidate(void);
 extern void  video_preferred_size(int scale, int *w, int *h);
-extern void browser_display_name(const char *name, char *out, int out_len);   /* a game's name as the list shows it (View > Show Clean Names) */
+extern void browser_display_name(const char *name, char *out, int out_len);   /* a game's name as the list shows it (View > Game List > Clean Game Names) */
 extern int   video_screenshot(char *path_out, int path_len);
 extern void video_wait_screenshots(void);                      /* at exit: lets a screenshot just taken be finished */
 extern int   video_save_thumbnail(const char *path);
@@ -118,11 +122,13 @@ extern void  video_show_notice(const char *text, int ms);
 extern void  video_osd_font_changed(void);     /* Font Size under Settings > OSD */
 extern int   rewind_set_memory(int mb);                      /* the history's size; 0 = not enough memory */
 extern int  extras_make_shortcut(const char *rom_path, int start_menu);
-extern void emu_insert_disc(void);                    /* Emulation > Insert Disc... */
+extern void emu_insert_disc(void);                    /* File > Insert Disc... */
 extern void emu_save_state_file(const char *path);     /* a state in a file of the player's choice */
 extern void emu_load_state_file(const char *path);
 extern void browser_density_changed(void);
-extern void  rewind_status(int *entries, int *peak);       /* frames of history left, and the most there were */
+#define WM_APP_PICOSCAN (WM_APP + 43)       /* browser.c: the thread that looks for Sega Pico games has an answer */
+extern void browser_pico_done(LPARAM result);
+extern int   rewind_status(void);                            /* frames of history left */
 extern void  video_show_rewind(int permille, int tenths);   /* the rewind timeline bar, shown for a moment */
 extern void  video_get_output_rect(RECT *dest, int *src_w, int *src_h);
 extern void  video_set_fullscreen(int on);
@@ -132,7 +138,7 @@ extern void  video_report_fps(int fps);
    fixed table; -1 means "no filter". */
 extern int   video_filter_count(void);
 extern const char *video_filter_name(int index);
-extern int   video_filter_separator_before(int index);      /* 1 = start a new menu group here */
+extern const char *video_filter_group(int index);                 /* the sub-menu of Render Filter it is listed in, or NULL */
 extern int   video_filter_current(void);                   /* index, or -1 */
 extern void  video_set_filter(int index);
 extern int   video_set_filter_by_name(const char *name);   /* 1 if it matched */
@@ -151,16 +157,17 @@ extern void waveout_flush(void);
 extern void waveout_set_volume(int percent);
 extern int  waveout_rate(void);
 extern void waveout_set_width(int percent);                 /* stereo width, 100 = unchanged */
-extern int  waveout_list_devices(char names[][32], int max);
+extern int  waveout_list_devices(char names[][96], int max);
 extern unsigned video_bar_color(void);                      /* 0xRRGGBB of the bars around the picture */
 extern void video_adjust_changed(void);
 extern void video_restore_display_mode(void);
 extern int  video_fullscreen_modes(int *ws, int *hs, int max);
-extern int  gui_slider_range(int id, int *lo, int *hi, int *def);   /* a Settings slider: 1 if id is one */
+extern int  gui_slider_range(int id, int *lo, int *hi, int *def);   /* a Picture Adjustments slider: 1 if id is one */
 extern int  gui_slider_get(int id);
 extern void gui_slider_set(int id, int v);
 extern void gui_slider_commit(void);          /* saves the sliders (not done at each step of a drag) */
-extern int  gui_dyn_list(int base, char names[][64], int max, int *cur);   /* items of a drop-down filled at run time (sound device, fullscreen resolution) */
+extern size_t settings_guide_text(char *out, size_t cap);   /* the Settings window as text for the User Guide (every tab and option); returns the length (out may be NULL) */
+extern int  gui_dyn_list(int base, char names[][96], int max, int *cur);   /* items of a drop-down filled at run time (sound device, fullscreen resolution) */
 extern int  gui_setgroup_state(int id);                     /* settings-window choices: -1 not one, else 1 selected / 0 not */
 extern int  gui_setgroup_set(int id);                       /* applies it; 1 if id was one */
 
@@ -183,7 +190,7 @@ extern int  gui_input_fast_forward(void);
 extern int  gui_input_rewind(void);
 extern void theme_paint_menu_line(HWND hwnd, HDC dc);
 extern void hotkey_menu_keys(int cmd, char *out, int len);
-extern void dlg_cheat_search(HWND parent);        /* Emulation > Cheat Search: a window that stays open while the game runs */
+extern void dlg_cheat_search(HWND parent);        /* Tools > Cheat Search: a window that stays open while the game runs */
 extern int  cheat_search_message(MSG *msg);       /* keyboard handling for it; 1 = used the message */
 extern void cheat_search_close(void);             /* when the game stops */
 extern void cheat_search_invalidate(void);        /* reset / state load: the search starts again */
@@ -200,6 +207,8 @@ extern void gui_input_devices_changed(void);        /* a USB / Bluetooth device 
 extern int  gui_input_xpad_connected(int slot);    /* an XInput pad is plugged into this slot */
 extern int  gui_input_toggle_turbo(void);       /* gamepad hotkey: Turbo buttons on / off (returns on = 1); the buttons keep their Turbo setting */
 extern int  gui_input_frame_advance(void);
+extern uint8 gui_user_ports[2];       /* the devices of the two controller ports as the user chose them */
+extern int  input_press_logged;       /* log only: the first button press of the game was seen */
 extern int  gui_input_p2_slot(void);   /* -1 unless both ports have a plain control pad */
 extern int  gui_input_save_slot_shortcut(void);
 extern int  gui_input_load_slot_shortcut(void);
@@ -275,12 +284,18 @@ extern void cheats_remove_all(void);
 extern void cheats_set_enabled(int index, int on);
 
 extern int  cheats_active(void);
+extern void cheats_hold_for_boot(void);         /* a game starts or is reset: ROM codes wait for the first button press (the game checks its ROM first)  */
+extern unsigned cheats_fingerprint(void);    /* the cheats that are on, as one number (0: none) */
 extern int  cheats_effective(void);        /* 0 while Enable Cheats is off */
 extern void cheats_set_all_enabled(int on);
 extern int  cheats_is_valid(int index);
 
+/* Accent colors: 0 the default, 1..GUI_ACCENT_HIDDEN-1 the listed ones, GUI_ACCENT_HIDDEN the one found by an easter egg (eggs.c). */
+#define GUI_ACCENT_HIDDEN 19
 extern void cheats_load_for_rom(const char *rom_base);
 extern void cheats_save_for_rom(const char *rom_base);
+extern void cheats_sync_with_disk(const char *rom_base);
+extern void cheats_sync_current(void);
 
 /* Saves against whatever ROM is loaded; implemented in main.c. */
 extern void cheats_save_current(void);
@@ -296,6 +311,7 @@ extern void browser_panel_show(int show);
 extern int  browser_panel_visible(void);
 extern int  browser_has_selection(void);
 extern void browser_show_rom_info(void);   /* File > ROM Information on the game picked in the list */
+extern void browser_edit_cheats(void);      /* Tools > Cheats on the game picked in the list (no game running) */
 extern void browser_panel_layout(const RECT *area);
 extern void browser_grid_zoom(int delta);
 extern void browser_relayout(void);   /* implemented in main.c */
@@ -318,13 +334,14 @@ extern void browser_toolbar_update(void);      /* pressed look of the toolbar's 
 extern int  browser_column_hidden(int col);
 extern void browser_fullscreen_toolbar(int show);    /* fullscreen: the toolbar over the picture while the mouse is at the top */
 extern int  browser_fullscreen_toolbar_shown_height(void);
-extern void browser_toggle_recent(void);           /* View > Recently Played at the Top */
+extern void browser_fullscreen_toolbar_refresh(void);   /* paints the fullscreen toolbar again (it was sometimes left half drawn) */
+extern void browser_toggle_recent(void);           /* View > Game List > Show Recently Played */
 extern void browser_refresh_names(void);
 extern void browser_hide_search_now(void);        /* Ctrl+F: hide the search bar for this run only */
-extern void browser_rescan_now(void);              /* search the ROMs directory again */
+extern void browser_rescan_now(void);              /* search the ROM directory again */
 extern void browser_redraw(void);
 extern void browser_genre_for(const char *path, char *out, int out_len);
-extern void browser_toggle_favorites_only(void);    /* the toolbar star / View > Show Favorites Only */
+extern void browser_toggle_favorites_only(void);    /* the toolbar star / View > Game List > Show Favorites Only */
 extern int  browser_favorites_only(void);
 extern LRESULT browser_list_customdraw(NMHDR *hdr); /* -1 when it is not the game list */
 extern void browser_toggle_column(int col);
@@ -362,15 +379,17 @@ extern void gui_restore_combo_animation(void);   /* puts the drop-down animation
 extern void gui_center_window(HWND w);
 extern int  gui_game_running(void);        /* a game is running */
 extern void gui_window_icon(HWND w);       /* the program's icon in the title bar of one of its windows */
+extern HBITMAP gui_logo_bitmap(int dh, int *pw);   /* the program's logo, dh pixels high (the caller deletes it); *pw = its width */
 extern HBITMAP gui_scale_rgba(const unsigned char *img, int sw, int sh, int dh, int *pw);   /* RGBA picture -> premultiplied BGRA bitmap dh high (box filter); *pw = its width */
+extern int  gui_popup(HMENU menu, UINT flags, int x, int y);   /* a pop-up menu of one of the program's windows, drawn like the main menus; returns the command (TPM_RETURNCMD is added) */
+extern int  gui_pico_only(int id);      /* 1 = an option that only 32X games use, and a game of another system is running: gray it */
 extern int  gui_msgbox(HWND owner, const char *text, const char *caption, UINT flags);   /* MessageBox, centered over the program's window */
-extern int  gui_msgbox_blocks(UINT msg, WPARAM wp, LPARAM lp);   /* 1 = a question box is open and the main window must ignore this message */
-extern void gui_msgbox_follow(void);                            /* the main window moved: the question box goes with it */
 #define MessageBoxA gui_msgbox
 extern void gui_pace(int on);                 /* a window with its own message loop opens (1) / closes (0): the game keeps being driven */
 extern void gui_run_step(void);              /* one step of the main loop, from a modal window */
 /* Asks for some text (multiline: a big box for pasting). Returns 1 for OK. */
 extern int     gui_cursor_show(void);
+extern int     gui_cursor_depth;         /* how many windows have asked for the pointer (no idle hiding meanwhile) */
 extern void    gui_cursor_restore(int hidden_count);
 
 /* Open-file picker (see dialogs.c). `which` selects which remembered-state
@@ -388,6 +407,7 @@ extern int gui_pick_file(HWND owner, int which, const char *title, const char *f
 extern void dlg_state_manager(HWND parent);
 extern void dlg_input(HWND parent, int player);
 extern void dlg_audio(HWND parent);
+extern void dlg_picture_adjust(HWND parent);       /* Video > Picture Adjustments... */
 extern void dlg_shortcuts(HWND parent);
 extern void dlg_menu_guide(HWND parent);
 extern HMENU gui_main_menu(void);
@@ -397,15 +417,16 @@ extern int  gui_set_shader(const char *path);    /* a .slangp preset, or NULL / 
    text) beside it; they show after a short delay and hide after 30 seconds. */
 typedef struct { int id; const char *label; const char *tip; } GuiTip;
 extern void gui_dialog_tips(HWND dlg, const GuiTip *defs, int n);
+extern void gui_list_header_menu(HWND list);   /* right-clicking the list's column titles offers Size All Columns to Fit */
 
 /* history.c: when each game was last played, how often and for how long */
 extern void history_load(void);
 extern void history_remove(const char *path);        /* right-click > Remove From Recently Played */
-extern void history_clear(void);                  /* View > Clear Recently Played */
+extern void history_clear(void);                  /* Clear Recently Played in the right-click menu */
 extern void browser_clear_recent(void);
 extern int  browser_toolbar_one_row_width(void);   /* the width at which the toolbar does not wrap */
-extern COLORREF video_bar_color_of(int n);      /* the colour of the n-th Border Color choice (Settings > Picture) */
-extern COLORREF video_osd_color_of(int n);      /* the colour of the n-th Font Color choice (Settings > OSD) */
+extern COLORREF video_bar_color_of(int n);      /* the color of the n-th Border Color choice (Settings > Video) */
+extern COLORREF video_osd_color_of(int n);      /* the color of the n-th Font Color choice (Settings > OSD) */
 extern int  history_count(void);
 extern const char *history_entry_path(int i);
 extern unsigned long long history_entry_last(int i);

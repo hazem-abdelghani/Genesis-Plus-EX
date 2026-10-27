@@ -344,7 +344,25 @@ static int tb_icon_px(void)
   return TBS(px[s < 0 || s > 2 ? 0 : s]);
 }
 
-static int tb_label_h(void) { return gui.toolbar_labels ? TBS(15) : 0; }
+/* The line under the icon: room for the font in use (The Large interface has a taller one, whose descenders - the g of Settings - were cut). */
+static int tb_label_h(void)
+{
+  int h = TBS(15);
+  HDC dc;
+  TEXTMETRICA tm;
+  HGDIOBJ of;
+
+  if (!gui.toolbar_labels) return 0;
+  dc = GetDC(NULL);
+  if (dc)
+  {
+    of = SelectObject(dc, gui_get_ui_font());
+    if (GetTextMetricsA(dc, &tm) && tm.tmHeight + 3 > h) h = tm.tmHeight + 3;
+    SelectObject(dc, of);
+    ReleaseDC(NULL, dc);
+  }
+  return h;
+}
 
 int tb_button_h(void) { return tb_icon_px() + TBS(12) + tb_label_h(); }
 
@@ -374,6 +392,31 @@ int tb_button_w(HWND b)
 }
 
 /* Theme colors. */
+COLORREF tb_icon_color(int icon)
+{
+  int dark = theme_is_dark();
+
+  switch (icon)
+  {
+    case TI_OPEN:       return dark ? RGB(0xF5, 0xB8, 0x3D) : RGB(0xB9, 0x78, 0x00);
+    case TI_REFRESH:
+    case TI_PLAY:       return dark ? RGB(0x4C, 0xC7, 0x64) : RGB(0x1E, 0x8A, 0x3A);
+    case TI_STOP:       return dark ? RGB(0xFF, 0x6B, 0x6B) : RGB(0xC6, 0x28, 0x28);
+    case TI_RESET:
+    case TI_PAUSE:      return dark ? RGB(0xFF, 0xA9, 0x4D) : RGB(0xC4, 0x6A, 0x00);
+    case TI_FULLSCREEN:
+    case TI_VIDEO:      return dark ? RGB(0x38, 0xBD, 0xF8) : RGB(0x03, 0x69, 0xA1);
+    case TI_SCREENSHOT: return dark ? RGB(0xFF, 0x5C, 0x7A) : RGB(0xC0, 0x26, 0x4A);
+    case TI_SETTINGS:   return dark ? RGB(0x2D, 0xD4, 0xBF) : RGB(0x0F, 0x76, 0x6E);
+    case TI_AUDIO:      return dark ? RGB(0xF4, 0x72, 0xB6) : RGB(0xB0, 0x30, 0x6E);
+    case TI_CONTROLS:   return dark ? RGB(0xA3, 0xE6, 0x35) : RGB(0x5C, 0x8A, 0x00);
+    case TI_FAV:
+    case TI_FAVON:      return dark ? RGB(0xFA, 0xCC, 0x15) : RGB(0xA1, 0x62, 0x07);
+    case TI_SEARCH:     return dark ? RGB(0x4D, 0xA3, 0xFF) : RGB(0x0B, 0x62, 0xC4);
+  }
+  return dark ? RGB(0x7A, 0xA2, 0xF7) : RGB(0x3B, 0x63, 0xC9);
+}
+
 COLORREF tb_face_color(void)
 {
   return theme_is_dark() ? RGB(32, 32, 32) : GetSysColor(COLOR_BTNFACE);
@@ -515,6 +558,7 @@ int tb_draw(const DRAWITEMSTRUCT *di)
     HBRUSH hb;
 
     if (icon == TI_FAV && chk) icon = TI_FAVON;   /* the star fills in while Favorites Only is on */
+    if (gui.color_icons && !dis) fg = tb_icon_color(icon);       /* Settings > General > Colorful Icons */
 
     if (!dis && (hot || down || chk))
     {

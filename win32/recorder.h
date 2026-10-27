@@ -31,6 +31,11 @@
    on failure returns 0 and recorder_error() says why. */
 extern int  recorder_start(int mode, const char *path, int sample_rate, double fps);
 
+/* How a video recording is made: the picture `scale` times (1 - 4) its own size, at `mbps` megabits a second (0 = chosen from the
+   size), in the picture's own shape (tv_shape 0), stretched to the 4:3 shape of a TV (1), or stretched to 16:9 (2).
+   Takes effect for the next recording. */
+extern void recorder_set_video_options(int scale, int mbps, int tv_shape);
+
 /* Finishes the file (blocks until it is complete). Safe to call when idle. */
 extern void recorder_stop(void);
 

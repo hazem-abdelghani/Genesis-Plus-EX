@@ -31,6 +31,7 @@
 #include "d3d11_video.h"
 #include "filters.h"
 #include "shader_chain.h"
+#include "picocore.h"
 
 /* Allocated by the frontend, consumed by the core's NTSC blitter. */
 md_ntsc_t  *md_ntsc;
@@ -404,10 +405,10 @@ const char *video_filter_name(int index)
   return f ? f->name : "";
 }
 
-int video_filter_separator_before(int index)
+const char *video_filter_group(int index)
 {
   const filter_def_t *f = filter_get(index);
-  return f && (f->flags & FILTER_SEP_BEFORE) ? 1 : 0;
+  return f ? f->group : NULL;
 }
 
 int video_filter_current(void)
@@ -491,7 +492,7 @@ int video_set_filter_by_name(const char *name)
  *
  * The output size is fixed by the filter itself (Scale3x is always 3x), not
  * by the window: the final resize to the window happens afterwards in
- * present(), through D3D9 or StretchBlt, and always honours the person's own
+ * present(), through D3D9 or StretchBlt, and always honors the person's own
  * Smooth Scaling setting.
  */
 static int filter_run(const uint16 *src, int src_pitch, int src_w, int src_h, HDC *out_dc, int *out_w, int *out_h)
@@ -521,7 +522,7 @@ static void video_reload_shader_preset(void);
 
 int video_init(void)
 {
-  /* BITMAPINFOHEADER followed by the three BI_BITFIELDS colour masks. */
+  /* BITMAPINFOHEADER followed by the three BI_BITFIELDS color masks. */
   struct
   {
     BITMAPINFOHEADER hdr;
@@ -583,7 +584,7 @@ int video_init(void)
   return 1;
 }
 
-/* Restores the GPU shader preset saved in config against the current D3D11
+/* Restores the shader preset saved in config against the current D3D11
    device -- called after d3d11_init() succeeds, both at startup and any
    time the D3D11 renderer is (re)selected or its device is recreated after
    loss, since a filter chain is bound to the specific device it was built
@@ -763,6 +764,111 @@ void video_viewport_changed(void)
   if (g_hwnd) InvalidateRect(g_hwnd, NULL, TRUE);
 }
 
+/* The NTSC Filter for a 32X game. The Genesis Plus GX core's own filter (Blargg's) only takes the Mega Drive's 9-bit colors, so
+   this one is the program's own: the picture goes through luma and chroma (YIQ) and is blurred along each line the way a
+   television set does: Composite blurs both, and the color most; S-Video leaves the brightness sharp; RGB only softens a little.
+   The picture keeps its size. */
+static void pico_ntsc(uint16 *buf, int pitch_bytes, int w, int h, int mode)
+{
+  static int Y[FRAME_MAX_W + 16], I[FRAME_MAX_W + 16], Q[FRAME_MAX_W + 16];
+  static int Y2[FRAME_MAX_W + 16], I2[FRAME_MAX_W + 16], Q2[FRAME_MAX_W + 16];
+  int luma_taps = mode == 1 ? 1 : 0;                 /* 1: [1 2 1] on the brightness */
+  int ci = mode == 1 ? 3 : (mode == 2 ? 2 : 1);      /* half width of the box blur on I */
+  int cq = mode == 1 ? 4 : (mode == 2 ? 3 : 1);      /* ... and on Q */
+  int x, y;
+
+  if (w > FRAME_MAX_W) w = FRAME_MAX_W;
+  for (y = 0; y < h; y++)
+  {
+    uint16 *row = (uint16 *)((uint8 *)buf + (size_t)y * (size_t)pitch_bytes);
+
+    for (x = 0; x < w; x++)
+    {
+      unsigned p = row[x];
+      int r = (int)((p >> 11) << 3 | (p >> 13)), g = (int)(((p >> 5) & 63) << 2 | ((p >> 5) & 63) >> 4), b = (int)((p & 31) << 3 | (p & 31) >> 2);
+
+      Y[x] = (299 * r + 587 * g + 114 * b) / 1000;
+      I[x] = (596 * r - 274 * g - 322 * b) / 1000;
+      Q[x] = (211 * r - 523 * g + 312 * b) / 1000;
+    }
+    for (x = 0; x < w; x++)
+    {
+      int xm = x > 0 ? x - 1 : 0, xp = x < w - 1 ? x + 1 : w - 1, k, si = 0, sq = 0, ni = 0, nq = 0;
+
+      Y2[x] = luma_taps ? (Y[xm] + 2 * Y[x] + Y[xp]) / 4 : Y[x];
+      for (k = -ci; k <= ci; k++) { int xx = x + k; if (xx < 0) xx = 0; if (xx >= w) xx = w - 1; si += I[xx]; ni++; }
+      for (k = -cq; k <= cq; k++) { int xx = x + k; if (xx < 0) xx = 0; if (xx >= w) xx = w - 1; sq += Q[xx]; nq++; }
+      I2[x] = si / ni;
+      Q2[x] = sq / nq;
+    }
+    for (x = 0; x < w; x++)
+    {
+      int r = Y2[x] + (956 * I2[x] + 621 * Q2[x]) / 1000;
+      int g = Y2[x] - (272 * I2[x] + 647 * Q2[x]) / 1000;
+      int b = Y2[x] - (1106 * I2[x] - 1703 * Q2[x]) / 1000;
+
+      if (r < 0) r = 0; else if (r > 255) r = 255;
+      if (g < 0) g = 0; else if (g > 255) g = 255;
+      if (b < 0) b = 0; else if (b > 255) b = 255;
+      row[x] = (uint16)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    }
+  }
+}
+
+/* A picture from the 32X emulator (PicoDrive, RGB565): copied to the top left of the frame buffer, where the picture of
+   the Genesis Plus GX core would be, and the size the rest of the program looks at is set to match. */
+void video_pico_frame(const void *src, int w, int h, int pitch)
+{
+  int y;
+
+  if (!bitmap.data || !src || w <= 0 || h <= 0) return;
+  if (w > FRAME_MAX_W) w = FRAME_MAX_W;
+  if (h > FRAME_MAX_H) h = FRAME_MAX_H;
+
+  if (bitmap.viewport.w != w || bitmap.viewport.h != h || bitmap.viewport.x != 0 || bitmap.viewport.y != 0)
+  {
+    bitmap.viewport.w = w;
+    bitmap.viewport.h = h;
+    bitmap.viewport.x = 0;
+    bitmap.viewport.y = 0;
+    video_viewport_changed();                 /* the old picture is cleared; the new one follows at once */
+  }
+
+  interlaced = 0;
+  reg[12] = (uint8)((reg[12] & ~0x81) | (w >= 320 ? 1 : 0));    /* the pixel shape of the 256 and 320 modes */
+
+  if (config.lcd)
+  {
+    /* LCD Ghosting, as the Genesis Plus GX core does it: a pixel that gets darker keeps part of the old brightness. */
+    unsigned rate = config.lcd;
+
+    for (y = 0; y < h; y++)
+    {
+      const uint16 *s = (const uint16 *)((const uint8 *)src + (size_t)y * (size_t)pitch);
+      uint16 *d = (uint16 *)(bitmap.data + (size_t)y * bitmap.pitch);
+      int x;
+
+      for (x = 0; x < w; x++)
+      {
+        unsigned n = s[x], o = d[x];
+        int r = (int)(n >> 11), g = (int)((n >> 5) & 63), b = (int)(n & 31);
+        int dr = (int)(o >> 11) - r, dg = (int)((o >> 5) & 63) - g, db = (int)(o & 31) - b;
+
+        if (dr > 0) r += (int)((rate * (unsigned)dr) >> 8);
+        if (dg > 0) g += (int)((rate * (unsigned)dg) >> 8);
+        if (db > 0) b += (int)((rate * (unsigned)db) >> 8);
+        d[x] = (uint16)((r << 11) | (g << 5) | b);
+      }
+    }
+    if (config.ntsc) pico_ntsc((uint16 *)bitmap.data, (int)bitmap.pitch, w, h, config.ntsc);
+    return;
+  }
+
+  for (y = 0; y < h; y++)
+    memcpy(bitmap.data + (size_t)y * bitmap.pitch, (const uint8 *)src + (size_t)y * (size_t)pitch, (size_t)w * FRAME_BPP);
+  if (config.ntsc) pico_ntsc((uint16 *)bitmap.data, (int)bitmap.pitch, w, h, config.ntsc);
+}
+
 /* Forces the next present() to redraw fully, without zeroing the frame
    buffer first the way video_viewport_changed() does. That zero-fill is
    correct when the output resolution/mapping itself changed (NTSC filter,
@@ -811,7 +917,7 @@ static void get_source_size(int *w, int *h)
   if (sw <= 0) sw = 320;
   if (sh <= 0) sh = 224;
 
-  if (config.ntsc)
+  if (config.ntsc && !pico_active())      /* a 32X game is not drawn through the NTSC filter */
   {
     sw = (reg[12] & 0x01) ? MD_NTSC_OUT_WIDTH(sw) : SMS_NTSC_OUT_WIDTH(sw);
   }
@@ -828,7 +934,7 @@ static void get_source_size(int *w, int *h)
 /* The width of the game's own picture inside a source width sw (sw is wider when the NTSC filter is on). */
 static int native_width(int sw)
 {
-  if (config.ntsc)
+  if (config.ntsc && !pico_active())
   {
     int nw = bitmap.viewport.w + 2 * bitmap.viewport.x;
     return nw > 0 ? nw : ((reg[12] & 0x01) ? 320 : 256);
@@ -864,6 +970,18 @@ static double corrected_width(int sw, int sh)
   return (double)nw;
 }
 
+/* Double Field draws the 448 lines of the interlaced mode, whose pixels are half as tall: the shape of the picture is worked out from half
+   of them (4:3 is a shape of its own and needs no such care). */
+static int double_lines(void)
+{
+  return interlaced && config.render && !pico_active() && !use_43_correction();
+}
+
+static double shape_height(int sh)
+{
+  return double_lines() ? sh / 2.0 : (double)sh;
+}
+
 static int uses_corrected_width(void)
 {
   return use_43_correction() || (gui.aspect == ASPECT_PAR && (system_hw & SYSTEM_PBC) == SYSTEM_MD);
@@ -876,7 +994,7 @@ double video_display_aspect(void)
   if (gui.aspect == ASPECT_STRETCH) return 0.0;
   get_source_size(&sw, &sh);
   if (sh < 1) return 0.0;
-  return corrected_width(sw, sh) / (double)sh;
+  return corrected_width(sw, sh) / shape_height(sh);
 }
 
 static void get_dest_rect(const RECT *area, int sw, int sh, RECT *out)
@@ -896,7 +1014,7 @@ static void get_dest_rect(const RECT *area, int sw, int sh, RECT *out)
   }
   else
   {
-    ar = corrected_width(sw, sh) / (double)sh;
+    ar = corrected_width(sw, sh) / shape_height(sh);
 
     dh = ah;
     dw = (int)(ah * ar + 0.5);
@@ -911,6 +1029,7 @@ static void get_dest_rect(const RECT *area, int sw, int sh, RECT *out)
     if (gui.integer_scale)
     {
       int bw = uses_corrected_width() ? (int)(corrected_width(sw, sh) + 0.5) : native_width(sw), bh = sh, k;
+      if (double_lines()) bw *= 2;                       /* (twice the lines: twice the width keeps the shape) */
       if (bw > 0 && bh > 0)
       {
         k = aw / bw;
@@ -947,12 +1066,15 @@ void video_preferred_size(int scale, int *w, int *h)
 {
   int sw, sh;
 
-  if (bitmap.data && emu_running) get_source_size(&sw, &sh);
-  else { sw = 320; sh = 224; }
+  if (bitmap.data && emu_running)
+  {
+    get_source_size(&sw, &sh);
 
-  /* Undo the NTSC filter's horizontal expansion so 2x still means 2x. */
-  if (config.ntsc) sw = (reg[12] & 0x01) ? 320 : 256;
-  if (interlaced && config.render) sh /= 2;
+    /* Undo the NTSC filter's horizontal expansion so 2x still means 2x. */
+    if (config.ntsc && !pico_active()) sw = (reg[12] & 0x01) ? 320 : 256;
+    if (interlaced && config.render) sh /= 2;
+  }
+  else { sw = 320; sh = 224; }      /* (nothing runs: what the last game left in the VDP's registers does not count, a double field one would halve the height) */
 
   if (uses_corrected_width())
   {
@@ -970,7 +1092,7 @@ void video_preferred_size(int scale, int *w, int *h)
  * Presenting
  ****************************************************************************/
 
-/* Colours for the bars around the picture (Settings > Video > Border Color). */
+/* Colors for the bars around the picture (Settings > Video > Border Color). */
 static const unsigned bar_colors[7] = { 0x000000, 0x202020, 0x606060, 0xFFFFFF, 0x000050, 0x003000, 0x500000 };
 
 COLORREF video_bar_color_of(int n)
@@ -1020,7 +1142,7 @@ static void fill_borders(HDC hdc, const RECT *area, const RECT *dest)
   DeleteObject(black);
 }
 
-/* The colour of on-screen text: Settings > OSD > Font Color (the n-th of the eight choices). */
+/* The color of on-screen text: Settings > OSD > Font Color (the n-th of the eight choices). */
 COLORREF video_osd_color_of(int n)
 {
   static const COLORREF c[8] =
@@ -1047,26 +1169,6 @@ static void draw_text_shadowed(HDC hdc, int x, int y, UINT align, const char *te
   int n = lstrlenA(text);
 
   SetBkMode(hdc, TRANSPARENT);
-
-  if (gui.ui_style)
-  {
-    /* Modern: the words on a soft rounded plate (dark under light text, light under dark text), no outline. */
-    SIZE sz;
-    HBRUSH pb = CreateSolidBrush(lum > 110 ? RGB(22, 24, 30) : RGB(240, 242, 246));
-    HGDIOBJ ob = SelectObject(hdc, pb), op = SelectObject(hdc, GetStockObject(NULL_PEN));
-    int left, top;
-    GetTextExtentPoint32A(hdc, text, n, &sz);
-    left = ((align & TA_CENTER) == TA_CENTER) ? x - sz.cx / 2 : (align & TA_RIGHT) ? x - sz.cx : x;      /* (TA_CENTER contains the TA_RIGHT bit) */
-    top = (align & TA_BOTTOM) ? y - sz.cy : y;
-    RoundRect(hdc, left - 6, top - 3, left + sz.cx + 6, top + sz.cy + 3, osd_font_px(), osd_font_px());
-    SelectObject(hdc, ob); SelectObject(hdc, op);
-    DeleteObject(pb);
-    SetTextColor(hdc, fill);
-    TextOutA(hdc, x, y, text, n);
-    SetTextAlign(hdc, old_align);
-    SelectObject(hdc, old_font);
-    return;
-  }
 
   /* The outline: the shape of the letters stroked with a round pen (about 1 pixel shows outside), then the text on top. */
   {
@@ -1116,7 +1218,7 @@ static struct
 } fx;
 
 /* Picture adjustments (contrast, saturation, gamma, hue): one table that maps every
-   RGB565 colour, rebuilt whenever a slider moves. */
+   RGB565 color, rebuilt whenever a slider moves. */
 static uint16 *adj_lut;
 static int adj_dirty = 1;
 
@@ -1130,7 +1232,7 @@ static void adj_build(void)
   double c = gui.adj_contrast / 100.0, s = gui.adj_sat / 100.0, ig = 100.0 / (gui.adj_gamma > 0 ? gui.adj_gamma : 100);
   double h = gui.adj_hue * 3.14159265358979 / 180.0;
   double ch = cos(h) * s, sh = sin(h) * s;
-  static float gam[1025];          /* the gamma curve, sampled: 65536 colours times three pow() calls took long enough to be seen as a stutter */
+  static float gam[1025];          /* the gamma curve, sampled: 65536 colors times three pow() calls took long enough to be seen as a stutter */
   int p, k;
 
   if (!adj_lut) adj_lut = (uint16 *)malloc(65536 * sizeof(uint16));
@@ -1161,7 +1263,7 @@ static void adj_build(void)
   adj_dirty = 0;
 }
 
-/* A picture adjustment, the border colour or the performance overlay changed. */
+/* A picture adjustment, the border color or the performance overlay changed. */
 void video_adjust_changed(void)
 {
   adj_dirty = 1;
@@ -1244,6 +1346,114 @@ static int new_frame;      /* video_frame() is presenting a fresh frame (not a r
 static uint16 avg565(uint16 a, uint16 b)
 {
   return (uint16)(((a & 0xF7DE) >> 1) + ((b & 0xF7DE) >> 1) + (a & b & 0x0821));
+}
+
+/* Interlaced Mode > Double Field: a frame holds one new field (every other line) and the other field of the frame before, so
+   a moving object is drawn twice, a line apart, as comb teeth. Where the new lines show motion (they differ from the same lines
+   two fields ago, or the old line itself differs from what it showed two fields before it, which is what a fast object leaves
+   behind; the area widened by two pixels each side so no tooth is left at its edge) the pair of lines is made alike from the new
+   field (partly: see below); a still picture keeps both fields. */
+static uint16 deint_prev[FRAME_MAX_W * FRAME_MAX_H], deint_prev2[FRAME_MAX_W * FRAME_MAX_H];     /* each line as it was when last drawn new, and the time before */
+static int deint_prev_ok;                                                                        /* frames seen (the history is whole at 4) */
+
+static int deint_diff(uint16 a, uint16 b)
+{
+  int dr = ((a >> 11) & 0x1F) - ((b >> 11) & 0x1F), dg = ((a >> 5) & 0x3F) - ((b >> 5) & 0x3F), db = (a & 0x1F) - (b & 0x1F);
+  return (dr < 0 ? -dr : dr) * 8 + (dg < 0 ? -dg : dg) * 4 + (db < 0 ? -db : db) * 8;
+}
+
+static int deint_moved(uint16 a, uint16 b)
+{
+  return deint_diff(a, b) > 32;
+}
+
+void video_deinterlace_reset(void) { deint_prev_ok = 0; }
+
+void video_deinterlace(void)
+{
+  int sw, sh, y, x, stale;
+  size_t row;
+  static uint8 mv[FRAME_MAX_W + 4];
+  static uint8 mask[FRAME_MAX_H][FRAME_MAX_W];                          /* where something moves, for each old line (its pair too) */
+
+  if (!emu_running || !bitmap.data || pico_active() || !interlaced || !config.render) { deint_prev_ok = 0; return; }
+  get_source_size(&sw, &sh);
+  if (sw < 1 || sh < 4) return;
+  row = (size_t)sw * sizeof(uint16);
+  stale = odd_frame ^ 1;                       /* the lines the new field did not draw */
+
+  #define LINE(yy) ((uint16 *)((uint8 *)bitmap.data + (size_t)(yy) * bitmap.pitch))
+
+  /* The old lines go back to what they were when drawn: the last frame's blending changed them in the buffer, and what is kept of
+     them (where nothing moves) must not carry that over. */
+  if (deint_prev_ok >= 1)
+    for (y = stale; y < sh; y += 2) memcpy(LINE(y), deint_prev + (size_t)y * FRAME_MAX_W, row);
+
+  if (deint_prev_ok >= 4)
+  {
+    for (y = stale; y < sh; y += 2)
+    {
+      uint16 *d = LINE(y);
+      const uint16 *up = y > 0 ? LINE(y - 1) : NULL, *dn = y + 1 < sh ? LINE(y + 1) : NULL;
+      const uint16 *pu = y > 0 ? deint_prev + (size_t)(y - 1) * FRAME_MAX_W : NULL;
+      const uint16 *pd = y + 1 < sh ? deint_prev + (size_t)(y + 1) * FRAME_MAX_W : NULL;
+      const uint16 *ps = deint_prev2 + (size_t)y * FRAME_MAX_W;            /* this old line as it was two fields before it */
+
+      if (!up && !dn) continue;
+      for (x = 0; x < sw; x++) mv[x + 2] = (uint8)((up && deint_moved(up[x], pu[x])) || (dn && deint_moved(dn[x], pd[x])) || deint_moved(d[x], ps[x]));
+      mv[0] = mv[1] = mv[sw + 2] = mv[sw + 3] = 0;
+      for (x = 0; x < sw; x++) mask[y][x] = (uint8)(mv[x] | mv[x + 1] | mv[x + 2] | mv[x + 3] | mv[x + 4]);
+    }
+  }
+
+  /* what the new field looked like, for the next frame (before this frame's own changes) */
+  for (y = odd_frame; y < sh; y += 2)
+  {
+    memcpy(deint_prev2 + (size_t)y * FRAME_MAX_W, deint_prev + (size_t)y * FRAME_MAX_W, row);
+    memcpy(deint_prev + (size_t)y * FRAME_MAX_W, LINE(y), row);
+  }
+
+  if (deint_prev_ok >= 4)
+  {
+    /* Where something moves, the old line is rebuilt from the new lines above and below it, along the edge that runs through the
+       pixel, and both lines of the pair are then drawn half of the way to what the new field says about the middle of the pair
+       (3/4 of the new line, 1/4 of the next one over). The new lines alone would be sharp and the rebuilt ones soft, and which are
+       which swaps every frame: a scrolling picture shakes. Made wholly alike the shaking is gone, but a sprite is drawn in blocks. */
+    int f = odd_frame;                                    /* the field just drawn */
+
+    for (y = stale; y < sh; y += 2)
+    {
+      int yf = (f == 0) ? y - 1 : y + 1;                  /* the new line of this pair (its copy in the history: the picture may have been changed already) */
+      int yn = (f == 0) ? yf + 2 : yf - 2;                /* the new line next to it, on the side the pair's middle is not */
+      uint16 *d = LINE(y), *e = (yf >= 0 && yf < sh) ? LINE(yf) : NULL;
+      const uint16 *a = (yf >= 0 && yf < sh) ? deint_prev + (size_t)yf * FRAME_MAX_W : NULL;
+      const uint16 *c = (yn >= 0 && yn < sh) ? deint_prev + (size_t)yn * FRAME_MAX_W : a;
+      const uint16 *up = y > 0 ? deint_prev + (size_t)(y - 1) * FRAME_MAX_W : NULL;
+      const uint16 *dn = y + 1 < sh ? deint_prev + (size_t)(y + 1) * FRAME_MAX_W : NULL;
+
+      if (!a) continue;
+      for (x = 0; x < sw; x++)
+      {
+        uint16 mid, rebuilt;
+
+        if (!mask[y][x]) continue;
+        mid = avg565(a[x], avg565(a[x], c[x]));
+        if (up && dn)
+        {
+          int xl = x > 0 ? x - 1 : x, xr = x + 1 < sw ? x + 1 : x;
+          int d0 = deint_diff(up[x], dn[x]), d1 = deint_diff(up[xl], dn[xr]), d2 = deint_diff(up[xr], dn[xl]);
+          if (d1 < d0 && d1 <= d2)      rebuilt = avg565(up[xl], dn[xr]);
+          else if (d2 < d0)             rebuilt = avg565(up[xr], dn[xl]);
+          else                          rebuilt = avg565(up[x], dn[x]);
+        }
+        else rebuilt = a[x];
+        d[x] = avg565(rebuilt, mid);
+        e[x] = avg565(a[x], mid);
+      }
+    }
+  }
+  #undef LINE
+  if (deint_prev_ok < 4) deint_prev_ok++;
 }
 
 static void fx_process(int sw, int sh, int brighten, int scan_pct)
@@ -1702,7 +1912,7 @@ static void present(HDC hdc)
     const uint16 *src_pixels = base_pixels;
     int src_pitch = bitmap.pitch;
 
-    /* With "Skip the Render Filter With Shaders" a GPU shader is given the game's own picture, not one the filter already
+    /* With "Skip Render Filter with Shaders" a shader is given the game's own picture, not one the filter already
        enlarged (shaders that scale by whole multiples or place a bezel work their sizes out from the picture they get). */
     if (nf.index >= 0 && !(gui.shader_nofilter && gui.renderer == RENDERER_D3D11 && shader_chain_active()))
     {
@@ -1977,7 +2187,7 @@ void video_show_notice(const char *text, int ms)
 
 static char fs_mode_device[CCHDEVICENAME];   /* the monitor whose display mode was changed ("" = none) */
 
-/* The screen sizes the monitor the window is on can be switched to (at least 640x480, at its colour depth), smallest first. */
+/* The screen sizes the monitor the window is on can be switched to (at least 640x480, at its color depth), smallest first. */
 int video_fullscreen_modes(int *ws, int *hs, int max)
 {
   MONITORINFOEXA mi;
@@ -2006,7 +2216,7 @@ int video_fullscreen_modes(int *ws, int *hs, int max)
   return n;
 }
 
-/* "Exclusive": switch the monitor to the chosen fullscreen resolution (Settings > Video) while the game is fullscreen. With
+/* "Exclusive Fullscreen": switch the monitor to the chosen fullscreen resolution (Settings > Video) while the game is fullscreen. With
    the desktop resolution chosen nothing is switched. Undone by video_restore_display_mode(). */
 static void fs_mode_change(const MONITORINFOEXA *mi)
 {
@@ -2111,6 +2321,7 @@ void video_set_fullscreen(int on)
     while (ShowCursor(TRUE) < 0) { }
   }
 
+  theme_refresh_frame(g_hwnd);   /* (the Modern style's frame line and rounded corners are not wanted around a fullscreen picture) */
   browser_toolbar_layout();   /* hidden in fullscreen (it slides in at the top edge), back in a window */
   browser_toolbar_update();   /* the Fullscreen button shows the new state */
 
@@ -2202,7 +2413,7 @@ static unsigned char *shot_expand(const uint8 *base, int pitch, int w, int h)
   return out;
 }
 
-/* Bilinear resize of packed RGB888 (16.16 fixed point, pixel centres aligned). */
+/* Bilinear resize of packed RGB888 (16.16 fixed point, pixel centers aligned). */
 static unsigned char *shot_resize(const unsigned char *in, int iw, int ih, int ow, int oh)
 {
   unsigned char *out = (unsigned char *)malloc((size_t)ow * oh * 3);
@@ -2270,9 +2481,34 @@ static unsigned char *shot_resize(const unsigned char *in, int iw, int ih, int o
  *              one 960x720); with no filter chosen it equals Corrected
  * Scanlines and Brighten are display effects and are never included.
  */
+/* The picture enlarged n times in whole pixels (stays sharp). */
+static unsigned char *shot_enlarge(unsigned char *in, int w, int h, int n)
+{
+  unsigned char *out;
+  int x, y, k;
+
+  if (n <= 1) return in;
+  out = (unsigned char *)malloc((size_t)w * n * h * n * 3);
+  if (!out) { free(in); return NULL; }
+  for (y = 0; y < h * n; y++)
+  {
+    const unsigned char *src = in + (size_t)(y / n) * w * 3;
+    unsigned char *dst = out + (size_t)y * w * n * 3;
+
+    for (x = 0; x < w; x++)
+      for (k = 0; k < n; k++, dst += 3)
+      {
+        dst[0] = src[x * 3]; dst[1] = src[x * 3 + 1]; dst[2] = src[x * 3 + 2];
+      }
+  }
+  free(in);
+  return out;
+}
+
 static unsigned char *shot_build(int *out_w, int *out_h)
 {
   int sw, sh;
+  int n = gui.shot_size + 1;              /* Settings > General > Screenshot Size: 1x .. 4x */
   unsigned char *raw, *img;
 
   get_source_size(&sw, &sh);
@@ -2280,9 +2516,10 @@ static unsigned char *shot_build(int *out_w, int *out_h)
   if (gui.shot_mode == 2)   /* raw */
   {
     raw = shot_expand(bitmap.data, bitmap.pitch, sw, sh);
-    *out_w = sw;
-    *out_h = sh;
-    return raw;
+    if (!raw) return NULL;
+    *out_w = sw * n;
+    *out_h = sh * n;
+    return shot_enlarge(raw, sw, sh, n);
   }
 
   if (gui.shot_mode == 0)   /* final: through the render filter first */
@@ -2296,10 +2533,10 @@ static unsigned char *shot_build(int *out_w, int *out_h)
 
       raw = shot_expand((const uint8 *)nf.pixels, (int)nf.pitch, fw, fh);
       if (!raw) return NULL;
-      img = shot_resize(raw, fw, fh, fw, th);
+      img = shot_resize(raw, fw, fh, fw * n, th * n);
       free(raw);
-      *out_w = fw;
-      *out_h = th;
+      *out_w = fw * n;
+      *out_h = th * n;
       return img;
     }
   }
@@ -2307,10 +2544,10 @@ static unsigned char *shot_build(int *out_w, int *out_h)
   /* corrected (also final with no filter active) */
   raw = shot_expand(bitmap.data, bitmap.pitch, sw, sh);
   if (!raw) return NULL;
-  img = shot_resize(raw, sw, sh, 640, 480);
+  img = shot_resize(raw, sw, sh, 640 * n, 480 * n);
   free(raw);
-  *out_w = 640;
-  *out_h = 480;
+  *out_w = 640 * n;
+  *out_h = 480 * n;
   return img;
 }
 
@@ -2361,7 +2598,7 @@ static DWORD WINAPI shot_thread(LPVOID arg)
   png_put_u32(ihdr + 0, (unsigned long)sw);
   png_put_u32(ihdr + 4, (unsigned long)sh);
   ihdr[8]  = 8;   /* bit depth   */
-  ihdr[9]  = 2;   /* colour type: truecolour */
+  ihdr[9]  = 2;   /* color type: truecolour */
   ihdr[10] = 0;   /* deflate     */
   ihdr[11] = 0;   /* adaptive filtering */
   ihdr[12] = 0;   /* no interlace */
@@ -2410,8 +2647,8 @@ int video_screenshot(char *path_out, int path_len)
   job->w = sw;
   job->h = sh;
 
-  lstrcpynA(dir, osd_path("screenshots"), sizeof(dir));
-  CreateDirectoryA(dir, NULL);
+  emu_console_file_path("Screenshots", ".png", dir, sizeof(dir));          /* Screenshots\<Console>\ (the folders are made) */
+  { char *sl = strrchr(dir, '\\'); if (sl) *sl = '\0'; }
 
   GetLocalTime(&st);
   {

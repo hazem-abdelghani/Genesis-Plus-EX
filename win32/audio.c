@@ -63,22 +63,25 @@ static UINT find_device(const char *name)
   for (i = 0; i < n; i++)
   {
     WAVEOUTCAPSA caps;
-    if (waveOutGetDevCapsA(i, &caps, sizeof(caps)) == MMSYSERR_NOERROR && !lstrcmpA(caps.szPname, name))
+    if (waveOutGetDevCapsA(i, &caps, sizeof(caps)) == MMSYSERR_NOERROR && caps.szPname[0] &&
+        !strncmp(name, caps.szPname, strlen(caps.szPname)))        /* (waveOut cuts the name to 31 characters; the saved one may be longer) */
       return i;
   }
   return WAVE_MAPPER;
 }
 
-/* Fills `names` (up to `max` entries of 32 chars) with the output devices; returns how many. */
-int waveout_list_devices(char names[][32], int max)
+/* Fills `names` (up to `max` entries of 96 chars) with the output devices, by their full names; returns how many. */
+int waveout_list_devices(char names[][96], int max)
 {
-  int i, n = (int)waveOutGetNumDevs(), k = 0;
+  int i, n = (int)waveOutGetNumDevs(), k = be_list_endpoints(names, max);
+
+  if (k > 0) return k;
 
   for (i = 0; i < n && k < max; i++)
   {
     WAVEOUTCAPSA caps;
     if (waveOutGetDevCapsA((UINT)i, &caps, sizeof(caps)) == MMSYSERR_NOERROR)
-      lstrcpynA(names[k++], caps.szPname, 32);
+      lstrcpynA(names[k++], caps.szPname, 96);
   }
   return k;
 }
@@ -351,7 +354,7 @@ static void scale_into(const short *samples, short *dst, int frames)
   }
   else
   {
-    /* Scale in software: waveOutSetVolume is not honoured by every driver. */
+    /* Scale in software: waveOutSetVolume is not honored by every driver. */
     for (i = 0; i < frames * 2; i++) dst[i] = (short)((samples[i] * scale) >> 8);
   }
 }

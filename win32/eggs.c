@@ -1,24 +1,24 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
  *
- *  eggs.c -- hidden extras. Nothing here is in the menus, the Menu Guide or
+ *  eggs.c -- hidden extras. Nothing here is in the menus, the User Guide or
  *  the README on purpose. Compiled in only with GPEX_EGGS (Makefile: EGGS=1).
  *
  *  HOW TO TRIGGER THEM
  *
  *  Credits          On the game list, type G P E X (the letters, one after the other).
  *                   A black window scrolls the credits; a click or any key closes it.
- *  SEGA sound       Help > About: click the program icon 10 times, each click within
- *                   1.5 seconds of the last (plays sega.wav).
- *  Ring sound       Grid view: click the logo above the first heading 10 times, each
- *                   within 1.5 seconds of the last (plays ring_sfx.wav). The clicks do
- *                   not select anything.
- *  Logo shake       Grid view: move the pointer onto the logo; it wobbles for a moment.
+ *  Ring sound       Help > About: click the program icon 7 times, each click within
+ *                   1.5 seconds of the last (plays ring_sfx.wav).
+ *  SEGA sound       User Guide, first page: click the logo 7 times, each within 1.5 seconds
+ *                   of the last (plays sega.wav). The clicks do not select anything.
+ *  Logo shake       User Guide, first page: move the pointer onto the logo; it wobbles for a moment.
  *  Birthdays        Start the program on the day a console came out: 15 July (SG-1000),
  *                   20 October (Master System), 29 October (Mega Drive, Japan),
  *                   14 August (Genesis, USA), 6 October (Game Gear, Japan),
  *                   26 April (Game Gear, USA), 12 December (Mega CD), 15 October
- *                   (Sega CD). A message shows for 6 seconds. To test one, set the
+ *                   (Sega CD), 26 June (Pico, Japan), 21 November (32X, USA), 3 December (Super 32X, Japan).
+ *                   A message shows for 6 seconds. To test one, set the
  *                   PC clock to that day.
  *  Chaos Emerald    Settings > General: right click the Accent Color list 7 times, each
  *                   within 3 seconds of the last. A green "Chaos Emerald" accent is added
@@ -43,7 +43,7 @@
 #include "theme.h"
 #include "toolbar.h"
 
-/* ---- a message that floats over the window, bottom centre (the OSD only shows over a running game) ---- */
+/* ---- a message that floats over the window, bottom center (the OSD only shows over a running game) ---- */
 
 static HWND toast_wnd;
 static char toast_text[160];
@@ -52,7 +52,7 @@ static int toast_drop;                 /* 1: a little lower (the birthdays) */
 
 static void toast_place(HWND w)
 {
-  /* From the size of the window itself, bottom centre, so it stays put when the game area changes as a game starts or stops. */
+  /* From the size of the window itself, bottom center, so it stays put when the game area changes as a game starts or stops. */
   RECT wr, tr;
   POINT p;
   GetWindowRect(g_hwnd, &wr);
@@ -156,7 +156,6 @@ static void play_sfx(int id)
 /* ---- "gpex" for the credits ---- */
 
 static void credits_window(void);
-static void CALLBACK wobble_tick(HWND w, UINT m, UINT_PTR id, DWORD t);
 
 /* "gpex" typed on the game list opens the credits. */
 void eggs_key(WPARAM vk, LPARAM lp)
@@ -189,22 +188,24 @@ static const struct { int month, day; const char *text; } birthdays[] =
   { 10,  6, "Happy birthday, Game Gear! (Japan, 1990)" },
   { 12, 12, "Happy birthday, Mega CD! (Japan, 1991)" },
   {  4, 26, "Happy birthday, Game Gear! (USA, 1991)" },
-  { 10, 15, "Happy birthday, Sega CD! (USA, 1992)" }
+  { 10, 15, "Happy birthday, Sega CD! (USA, 1992)" },
+  {  6, 26, "Happy birthday, Sega Pico! (Japan, 1993)" },
+  { 11, 21, "Happy birthday, 32X! (USA, 1994)" },
+  { 12,  3, "Happy birthday, Super 32X! (Japan, 1994)" }
 };
 
 void eggs_startup(void)
 {
   SYSTEMTIME t;
   int i;
-  SetTimer(NULL, 0, 40, wobble_tick);
   GetLocalTime(&t);
   for (i = 0; i < (int)(sizeof(birthdays) / sizeof(birthdays[0])); i++)
     if (t.wMonth == birthdays[i].month && t.wDay == birthdays[i].day) { toast_drop = 1; toast(6000, "%s", birthdays[i].text); break; }
 }
 
-/* ---- the logo above the grid: ten clicks ---- */
+/* ---- the logo of the User Guide: seven clicks ---- */
 
-void eggs_ring(void)
+void eggs_logo_click(void)
 {
   static int clicks;
   static DWORD last;
@@ -212,10 +213,10 @@ void eggs_ring(void)
 
   if (now - last > 1500) clicks = 0;
   last = now;
-  if (++clicks == 10) { clicks = 0; play_sfx(IDR_RING_SFX); }
+  if (++clicks == 7) { clicks = 0; play_sfx(IDR_SEGA_SFX); }
 }
 
-/* ---- About: ten clicks on the icon ---- */
+/* ---- About: seven clicks on the icon ---- */
 
 void eggs_about_click(HWND dlg, LPARAM lp)
 {
@@ -230,49 +231,17 @@ void eggs_about_click(HWND dlg, LPARAM lp)
   if (!GetWindowRect(GetDlgItem(dlg, IDC_ABOUT_ICON), &r) || !PtInRect(&r, p)) { clicks = 0; return; }
   if (now - last > 1500) clicks = 0;
   last = now;
-  if (++clicks == 10) { clicks = 0; play_sfx(IDR_SEGA_SFX); }
+  if (++clicks == 7) { clicks = 0; play_sfx(IDR_RING_SFX); }
 }
 
-/* ---- the logo shakes when the pointer is on it ---- */
+/* ---- the logo of the User Guide shakes when the pointer is on it ---- */
 
-extern int  browser_logo_rect(RECT *scr);
-extern void browser_logo_redraw(void);
-
-static DWORD wob_start;
-static int wob_hover, wob_dx;
-
-int eggs_logo_dx(void) { return wob_dx; }
-
-static void CALLBACK wobble_tick(HWND w, UINT m, UINT_PTR id, DWORD t)
+int eggs_wobble_dx(DWORD age, int amp)
 {
-  RECT r;
-  POINT p;
-  int hover = 0, dx = 0;
-  (void)w; (void)m; (void)id; (void)t;
-
-  if (browser_logo_rect(&r))
-  {
-    GetCursorPos(&p);
-    hover = PtInRect(&r, p) && GetForegroundWindow() == g_hwnd;
-    if (hover)
-    {
-      GUITHREADINFO gti;                      /* no wobble while a menu (the menu bar, a right-click menu) is open */
-      gti.cbSize = sizeof(gti);
-      if (GetGUIThreadInfo(0, &gti) && (gti.flags & GUI_INMENUMODE)) { hover = 0; wob_start = 0; }
-    }
-  }
-  if (hover && !wob_hover) wob_start = GetTickCount();
-  wob_hover = hover;
-  if (wob_start)
-  {
-    DWORD age = GetTickCount() - wob_start;
-    if (age > 700) wob_start = 0;
-    else dx = (int)(TBS(10) * sin(age / 45.0) * (1.0 - age / 700.0));
-  }
-  if (dx != wob_dx || (wob_dx && !dx)) { wob_dx = dx; browser_logo_redraw(); }
+  return age > 700 ? 0 : (int)(amp * sin(age / 45.0) * (1.0 - age / 700.0));
 }
 
-/* ---- a hidden accent colour: seven right clicks on the Accent Color list ---- */
+/* ---- a hidden accent color: seven right clicks on the Accent Color list ---- */
 
 int eggs_accent_tap(void)
 {
@@ -292,14 +261,17 @@ static const char *const credit_lines[] =
 {
   "GENESIS PLUS EX",
   "",
-  "Windows front end",
+  "Windows Emulator",
   "Hazem Abdelghani",
   "",
-  "Genesis Plus GX core",
+  "Genesis Plus GX Core",
   "Eke-Eke",
   "",
   "Original Genesis Plus",
   "Charles MacDonald",
+  "",
+  "PicoDrive (32X)",
+  "Dave  notaz  irixxxx",
   "",
   "Nuked OPN2 / OPLL",
   "Nuked",
@@ -325,9 +297,8 @@ static LRESULT CALLBACK credits_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CREATE: SetTimer(w, 1, 30, NULL); return 0;
     case WM_TIMER:
     {
-      RECT rc; GetClientRect(w, &rc);
       credits_y -= 1;
-      if (credits_y < -(CREDIT_N * 28 + 40)) credits_y = rc.bottom;
+      if (credits_y < -(CREDIT_N * 28 + 40)) { DestroyWindow(w); return 0; }       /* the last line has gone off the top: the window closes */
       InvalidateRect(w, NULL, FALSE);
       return 0;
     }

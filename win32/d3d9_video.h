@@ -44,7 +44,7 @@ int  d3d9_available(void);
 /* Renders one frame: clears the whole client area to black (handling the
    letterbox/border), then draws src_pixels (RGB565, src_pitch bytes per
    row, src_w x src_h) stretched into dest with hardware bilinear
-   filtering when smooth is set, nearest-neighbour otherwise. client_w/h
+   filtering when smooth is set, nearest-neighbor otherwise. client_w/h
    is the current client area size. Returns 1 if the frame was rendered
    (the caller should then draw its overlay and call d3d9_present()), 0
    if the device isn't usable right now -- the caller should fall back to

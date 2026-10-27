@@ -223,6 +223,10 @@ OBJECTS  += $(OBJDIR)/main.o \
             $(OBJDIR)/d3d11_video.o \
             $(OBJDIR)/shader_chain.o \
             $(OBJDIR)/filters.o \
+            $(OBJDIR)/xbr.o \
+            $(OBJDIR)/hq2x.o \
+            $(OBJDIR)/hq3x.o \
+            $(OBJDIR)/hq4x.o \
             $(OBJDIR)/audio.o \
             $(OBJDIR)/audio_be.o \
             $(OBJDIR)/gui_input.o \
@@ -242,6 +246,7 @@ OBJECTS  += $(OBJDIR)/main.o \
             $(OBJDIR)/patches.o \
             $(OBJDIR)/movie.o \
             $(OBJDIR)/vgm.o \
+            $(OBJDIR)/picocore.o \
             $(OBJDIR)/eggs.o \
             $(OBJDIR)/gpex_res.o
 
@@ -320,9 +325,9 @@ endif
 # Rules
 # ---------------------------------------------------------------------------
 
-.PHONY: all clean pack
+.PHONY: all clean pack picodrive
 
-all: $(TARGET)
+all: $(TARGET) picodrive
 
 $(TARGET): $(OBJECTS)
 	$(CC) $(OBJECTS) $(LDFLAGS) $(LIBS) -o "$(NAME)"
@@ -358,8 +363,18 @@ $(OBJDIR)/d3d11_video.o: $(GUIDIR)/d3d11_video.c $(GUIDIR)/d3d11_video.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/shader_chain.o: $(GUIDIR)/shader_chain.c $(GUIDIR)/shader_chain.h $(GUIDIR)/librashader/librashader.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
-$(OBJDIR)/filters.o: $(GUIDIR)/filters.c $(GUIDIR)/filters.h $(GUIDIR)/xbrz_glue.h
+$(OBJDIR)/filters.o: $(GUIDIR)/filters.c $(GUIDIR)/filters.h $(GUIDIR)/xbrz_glue.h $(GUIDIR)/xbr/libxbr.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+
+# xBR and HQx (xbr/, LGPL): the C files see only their own folder.
+$(OBJDIR)/xbr.o: $(GUIDIR)/xbr/xbr.c $(GUIDIR)/xbr/libxbr.h
+	$(CC) -c $(CFLAGS) -I$(GUIDIR)/xbr $< -o $@
+$(OBJDIR)/hq2x.o: $(GUIDIR)/xbr/hq2x.c $(GUIDIR)/xbr/internal_hqx_common.h $(GUIDIR)/xbr/libxbr.h
+	$(CC) -c $(CFLAGS) -I$(GUIDIR)/xbr $< -o $@
+$(OBJDIR)/hq3x.o: $(GUIDIR)/xbr/hq3x.c $(GUIDIR)/xbr/internal_hqx_common.h $(GUIDIR)/xbr/libxbr.h
+	$(CC) -c $(CFLAGS) -I$(GUIDIR)/xbr $< -o $@
+$(OBJDIR)/hq4x.o: $(GUIDIR)/xbr/hq4x.c $(GUIDIR)/xbr/internal_hqx_common.h $(GUIDIR)/xbr/libxbr.h
+	$(CC) -c $(CFLAGS) -I$(GUIDIR)/xbr $< -o $@
 
 # xBRZ (C++, GPLv3). The C++ files see only their own directory and the glue's.
 $(OBJDIR)/xbrz.o: $(XBRZDIR)/xbrz.cpp $(XBRZDIR)/xbrz.h $(XBRZDIR)/xbrz_config.h
@@ -402,6 +417,8 @@ $(OBJDIR)/patches.o: $(GUIDIR)/patches.c
 $(OBJDIR)/movie.o: $(GUIDIR)/movie.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/vgm.o: $(GUIDIR)/vgm.c
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/picocore.o: $(GUIDIR)/picocore.c $(GUIDIR)/picocore.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/sevenzip.o: $(GUIDIR)/sevenzip.c $(GUIDIR)/sevenzip.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
@@ -447,15 +464,45 @@ $(OBJDIR)/%.o: $(CHDLIBDIR)/deps/zstd-1.5.6/lib/common/%.c
 $(OBJDIR)/%.o: $(CHDLIBDIR)/deps/zstd-1.5.6/lib/decompress/%.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 
+# ---------------------------------------------------------------------------
+# 32X games run on PicoDrive, built from the picodrive folder as a libretro core, picodrive_libretro.dll, which
+# the program loads when a 32X game is opened (see picocore.c). It is built in its own folder under the object
+# directory with the same compiler, so the 64-bit and the 32-bit program each get the matching one.
+#   PICONAME=name.dll  gives the file another name (to keep both sizes in one folder)
+#   PICODRC=1          turns on the SH-2 dynamic recompiler (faster, but untested on Windows; the default is the
+#                      plain interpreter)
+#   PICO=0             does not build it (the program then says 32X games need the library)
+# ---------------------------------------------------------------------------
+PICO      ?= 1
+PICODRC   ?= 0
+PICONAME  ?= picodrive_libretro.dll
+PICODIR    = $(GUIDIR)/picodrive
+PICOBUILD  = $(OBJDIR)/picodrive
+
+ifeq ($(PICO),1)
+picodrive:
+	@mkdir -p "$(PICOBUILD)"
+	cp -au "$(PICODIR)/." "$(PICOBUILD)/"
+	$(MAKE) -C "$(PICOBUILD)" -f Makefile.libretro platform=win use_libchdr=0 use_sh2drc=$(PICODRC) \
+	  CC="$(CC)" CXX="$(CXX)" AS="$(CROSS)as" GIT_REVISION=-gpex
+	mkdir -p "$(OUTDIR)Plugins"
+	cp "$(PICOBUILD)/picodrive_libretro.dll" "$(OUTDIR)Plugins/$(PICONAME)"
+else
+picodrive:
+	@echo "PICO=0: picodrive_libretro.dll is not built"
+endif
+
 pack: $(TARGET)
 	$(STRIP) "$(NAME)"
-	# librashader.dll ships next to the exe (see librashader/README-librashader.txt):
+	# librashader.dll ships in the Plugins folder next to the exe (see librashader/README-librashader.txt):
 	# it's loaded at runtime, not linked, so nothing above needed it to build this,
-	# but Shaders > Preset... needs it sitting right here to actually find it.
-	-cp $(GUIDIR)/librashader/librashader.dll "$(OUTDIR)"
+	# but Shaders > Preset... needs it there to find it. picodrive_libretro lives in the same folder.
+	mkdir -p "$(OUTDIR)Plugins"
+	-cp $(GUIDIR)/librashader/librashader.dll "$(OUTDIR)Plugins/"
+	-$(STRIP) "$(OUTDIR)Plugins/$(PICONAME)"
 
 clean:
-	rm -rf $(OBJDIR) "$(NAME)"
+	rm -rf $(OBJDIR) "$(NAME)" "$(OUTDIR)Plugins/$(PICONAME)"
 
 # Header dependencies written by -MMD (missing on a first build: that is fine).
 -include $(OBJECTS:.o=.d)

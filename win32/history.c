@@ -1,7 +1,7 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
  *
- *  history.c -- when each game was last opened (View > Recently Played First).
+ *  history.c -- when each game was last opened (View > Game List > Show Recently Played).
  *
  *  Kept in the [history] section of genesis-plus-ex.ini (written by config_save), one entry
  *  per game: last opened (Unix time) and the full path. The newest 1000 games are kept.

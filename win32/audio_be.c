@@ -81,6 +81,47 @@ static IMMDevice *find_endpoint(IMMDeviceEnumerator *en, const char *name)
   return dev;
 }
 
+/* The full names of the active output devices (waveOut cuts them to 31 characters); returns how many, 0 when they cannot be listed. */
+int be_list_endpoints(char names[][96], int max)
+{
+  IMMDeviceEnumerator *en = NULL;
+  IMMDeviceCollection *col = NULL;
+  int com = SUCCEEDED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)), k = 0;
+
+  if (SUCCEEDED(CoCreateInstance(&MY_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &MY_IID_IMMDeviceEnumerator, (void **)&en)) && en)
+  {
+    if (SUCCEEDED(IMMDeviceEnumerator_EnumAudioEndpoints(en, eRender, DEVICE_STATE_ACTIVE, &col)) && col)
+    {
+      UINT i, n = 0;
+      IMMDeviceCollection_GetCount(col, &n);
+      for (i = 0; i < n && k < max; i++)
+      {
+        IMMDevice *d = NULL;
+        IPropertyStore *ps = NULL;
+        if (FAILED(IMMDeviceCollection_Item(col, i, &d)) || !d) continue;
+        if (SUCCEEDED(IMMDevice_OpenPropertyStore(d, STGM_READ, &ps)) && ps)
+        {
+          PROPVARIANT pv;
+          PropVariantInit(&pv);
+          if (SUCCEEDED(IPropertyStore_GetValue(ps, &pkey_friendly, &pv)) && pv.vt == VT_LPWSTR && pv.pwszVal)
+          {
+            WideCharToMultiByte(CP_ACP, 0, pv.pwszVal, -1, names[k], 96, NULL, NULL);
+            names[k][95] = '\0';
+            if (names[k][0]) k++;
+          }
+          PropVariantClear(&pv);
+          IPropertyStore_Release(ps);
+        }
+        IMMDevice_Release(d);
+      }
+      IMMDeviceCollection_Release(col);
+    }
+    IMMDeviceEnumerator_Release(en);
+  }
+  if (com) CoUninitialize();
+  return k;
+}
+
 static WAVEFORMATEX make_format(int rate)
 {
   WAVEFORMATEX w;

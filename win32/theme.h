@@ -52,6 +52,8 @@ int theme_is_dark(void);
    window in the relevant sense, so each needs its own call. Safe (a
    no-op) when the effective theme is light. */
 void theme_apply_to_window(HWND hwnd);
+int  theme_combo_measure(MEASUREITEMSTRUCT *mi);       /* the rows of the drop-downs, which draw their own (the chosen one in the accent color) */
+int  theme_combo_draw(const DRAWITEMSTRUCT *di);
 
 /* Call from WM_SETTINGCHANGE. Re-reads the system setting; if the mode
    is THEME_AUTO and the system setting actually changed, re-applies to
@@ -104,6 +106,7 @@ int theme_draw_menu_bar(HWND hwnd, LPARAM lp);
    whatever the theme: this paints it dark. force = 0 repaints only when the item under the
    mouse changed. */
 void theme_paint_menubar(HWND hwnd, int force);
+void theme_paint_menubar_selected(HWND hwnd, int sel);      /* with title number `sel` (or -1: none) lit, not the one under the pointer */
 int theme_draw_menu_item(LPARAM lp);
 
 /* Converts every item in this menu, and every submenu it contains, to
@@ -112,21 +115,31 @@ int theme_draw_menu_item(LPARAM lp);
    above), used specifically because that family's attempt at resizing
    the menu broke it entirely on real Windows. */
 void theme_ownerdraw_menu(HMENU menu);
+void theme_unconvert_menu(HMENU menu);   /* the system draws the menu again */
+void theme_menu_forget(ULONG_PTR key);    /* the picture kept for an owner-drawn item whose text is freed */
+HFONT theme_menu_font(void);             /* the font the program draws its menus in */
 void theme_menu_icon(HMENU menu, UINT id, unsigned short glyph);   /* a picture for one item of a menu built on the spot */
 void theme_draw_dropdown_button(const DRAWITEMSTRUCT *di);   /* a button that opens a list: its text and a whole down arrow */
-/* The dark theme's flat colours, in one place (the same values everywhere they were written out by hand). */
+/* The dark theme's flat colors, in one place (the same values everywhere they were written out by hand). */
 #define THEME_DARK_BG      RGB(32, 32, 32)      /* behind everything */
+#define THEME_DARK_MENU    RGB(44, 44, 44)      /* the background of the menus (Large interface) */
+#define THEME_DARK_MENUBAR RGB(0x27, 0x27, 0x27) /* the background of the menu bar (File, Emulation ...) */
 #define THEME_DARK_TEXT    RGB(240, 240, 240)
 #define THEME_DARK_MUTED   RGB(120, 120, 120)   /* disabled text */
 #define THEME_DARK_HOT     RGB(62, 62, 62)      /* the item under the pointer / selected */
 #define THEME_DARK_LINE    RGB(85, 85, 85)      /* thin frames */
 #define THEME_LIGHT_LINE   RGB(205, 205, 205)
 
-COLORREF theme_accent_bg(void);     /* the accent colour (Settings > General > Accent Color) */
+COLORREF theme_accent_bg(void);     /* the accent color (Settings > General > Accent Color) */
 COLORREF theme_accent_edge(void);
-COLORREF theme_accent_swatch(int i);   /* the colour of choice i in the list */
+COLORREF theme_accent_swatch(int i);   /* the color of choice i in the list */
 void theme_menu_icon_marks(HMENU menu);   /* the choices that are on show their picture on a box (call after the check marks are set) */
-void theme_menu_icons(HMENU menu);     /* a small picture beside the actions in the menus (not with Larger UI) */
+void theme_draw_tickbox(HDC dc, int x, int y, int sz, int checked, COLORREF bg);   /* a smooth tick box like the Modern ones */
+int  theme_menus_owner(void);            /* 1 when the menus are drawn by the program (the Large interface or the Modern style) */
+void theme_menu_text_moved(ULONG_PTR old_key, ULONG_PTR new_key);   /* a menu item's text was replaced: its picture follows */
+void theme_set_menu_bar(HMENU menu);   /* tells which menu is the menu bar (its items are not widened for a gutter) */
+void theme_menu_frame(HWND popup);    /* paints the frame of an open menu dark (dark theme, the Large interface) */
+void theme_menu_icons(HMENU menu);     /* a small picture beside the actions in the menus */
 
 /* Call from the main window's WM_MEASUREITEM/WM_DRAWITEM handlers.
    Both check CtlType == ODT_MENU themselves and return 0 (unhandled)
@@ -135,10 +148,12 @@ void theme_menu_icons(HMENU menu);     /* a small picture beside the actions in 
    owner-drawn in this app. */
 int theme_measure_menu_ownerdraw(LPARAM lp);
 
-/* The Modern style (Settings > General > Style): the same font in Segoe UI Variable (Segoe UI where that is missing).
+/* The Modern style (Settings > General > Style): the same font in Segoe UI Variable (Segoe UI where that is missing), 3% larger.
    With the Classic style the font is returned as it is. */
 HFONT theme_style_font(HFONT base);
-COLORREF theme_modern_accent(void);     /* the colour of the Modern style's highlights (the accent colour chosen, or a blue) */
+LRESULT theme_trackbar_customdraw(NMHDR *hdr, LRESULT prev);   /* a slider's custom-draw message: the knob in the accent color */
+void     theme_refresh_frame(HWND hwnd);    /* the window frame in the Modern style: none around a fullscreen picture */
+COLORREF theme_modern_accent(void);     /* the color of the Modern style's highlights (the accent color chosen, or a blue) */
 int theme_draw_menu_ownerdraw(LPARAM lp);
 
 #endif

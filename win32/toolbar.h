@@ -12,8 +12,12 @@
 enum { TI_OPEN, TI_REFRESH, TI_PLAY, TI_STOP, TI_RESET, TI_PAUSE, TI_FULLSCREEN,
        TI_SCREENSHOT, TI_SETTINGS, TI_VIDEO, TI_AUDIO, TI_CONTROLS, TI_FAV, TI_FAVON, TI_SEARCH, TI_N };
 
-/* Sizes follow the Larger UI setting. */
-#define TBS(v) (gui.large_ui ? (((v) * 1175 + 500) / 1000) : (v))
+/* The display scale of the window the program is on (96 = 100%), kept up to date when the window moves to another monitor. */
+extern int gui_dpi;
+#define DPIS(v) MulDiv((v), gui_dpi, 96)
+
+/* Sizes follow the Interface Size setting and the display scale. */
+#define TBS(v) DPIS(gui.large_ui ? (((v) * 1175 + 500) / 1000) : (v))
 
 /* A flat button showing `icon`; `tip` is its tooltip (must stay valid). */
 HWND tb_button(HWND parent, int id, int icon, const char *tip);
@@ -38,6 +42,9 @@ int tb_draw(const DRAWITEMSTRUCT *di);
 /* Paints one icon (alpha-blended, in `color`) with its top-left at x, y, sz pixels square -- for
    the star in the game list. */
 void tb_paint_icon(HDC dc, int x, int y, int sz, int icon, COLORREF color);
+
+/* The color of an icon when Colorful Icons is on (a bright shade on the dark theme, a deeper one on the light). */
+COLORREF tb_icon_color(int icon);
 
 /* The face color the toolbar, search bar and filter bar sit on. */
 COLORREF tb_face_color(void);

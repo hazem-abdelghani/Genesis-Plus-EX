@@ -1,7 +1,7 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
  *
- *  shader_chain.h -- GPU shader presets (librashader) for the D3D11 renderer.
+ *  shader_chain.h -- shader presets (librashader) for the D3D11 renderer.
  *
  *  librashader (https://github.com/SnowflakePowered/librashader, MIT) is a
  *  Rust library with a C ABI, loaded from librashader.dll at runtime -- like
@@ -18,7 +18,7 @@
 #ifndef _SHADER_CHAIN_H_
 #define _SHADER_CHAIN_H_
 
-/* Locates and loads librashader.dll (next to the exe, then the normal DLL
+/* Locates and loads librashader.dll (in the Plugins folder next to the exe, then next to the exe, then the normal DLL
    search path) and resolves the handful of exports this module calls.
    Safe to call once at startup even on a machine without it -- every other
    function below is then simply a no-op. Idempotent. */
@@ -26,6 +26,10 @@ void shader_chain_init(void);
 
 /* Whether librashader.dll was found and loaded. */
 int  shader_chain_available(void);
+
+/* The text of the message that says Shaders cannot be used because librashader.dll is missing (or could not be loaded), with the
+   Plugins folder it belongs in. */
+void shader_chain_missing_text(char *out, int len);
 
 /* Loads a .slangp preset and builds a filter chain for it against `device`
    (an ID3D11Device*, passed as void* so this header stays includable

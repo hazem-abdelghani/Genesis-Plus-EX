@@ -61,6 +61,7 @@ static struct
   int      rate;
   unsigned fps_x1000;          /* frame rate * 1000 */
   int      canvas_w, canvas_h; /* video output size (even) */
+  int      start_sw, start_sh; /* the picture size the recording began with */
   unsigned bitrate;
 
   HANDLE   thread, sem_items, sem_free, ev_init;
@@ -197,7 +198,7 @@ static void wav_close(void)
 
 /****************************************************************************
  * Picture conversion: RGB565 -> NV12 (8-bit 4:2:0), scaled to the fixed
- * output size with nearest-neighbour so pixels stay sharp.
+ * output size with nearest-neighbor so pixels stay sharp.
  ****************************************************************************/
 
 static void build_rgb_lut(void)
@@ -216,6 +217,15 @@ static void build_rgb_lut(void)
   rgb_lut_ready = 1;
 }
 
+static int opt_scale = 1, opt_mbps, opt_tv;      /* (set before each recording from the settings) */
+
+void recorder_set_video_options(int scale, int mbps, int tv_shape)
+{
+  opt_scale = scale < 1 ? 1 : scale > 4 ? 4 : scale;
+  opt_mbps = mbps;
+  opt_tv = tv_shape;
+}
+
 static void geometry_update(int sw, int sh)
 {
   int W = rec.canvas_w, H = rec.canvas_h;
@@ -223,7 +233,7 @@ static void geometry_update(int sw, int sh)
 
   if (sw == rec.geo_sw && sh == rec.geo_sh) return;
 
-  if (sw * 2 == W && sh * 2 == H)
+  if (sw == rec.start_sw && sh == rec.start_sh)
   {
     rec.geo_dw = W; rec.geo_dh = H; rec.geo_ox = 0; rec.geo_oy = 0;
   }
@@ -255,7 +265,7 @@ static void frame_to_nv12(const unsigned short *src, int sw, int sh)
   int ox, oy, dw, dh;
   int y, x;
 
-  /* Colour matrix: BT.601 for SD-sized pictures, BT.709 above -- what players
+  /* Color matrix: BT.601 for SD-sized pictures, BT.709 above -- what players
      assume when a file doesn't say. */
   const int cy0 = rec.matrix709 ?  47 :  66, cy1 = rec.matrix709 ? 157 : 129, cy2 = rec.matrix709 ? 16 : 25;
   const int cu0 = rec.matrix709 ? -26 : -38, cu1 = rec.matrix709 ? -87 : -74;
@@ -509,7 +519,7 @@ done:
  * Animated GIF
  *
  * Every third emulated frame is kept (20 pictures a second on NTSC), turned
- * into palette indexes with a fixed 6 x 7 x 6 colour cube and ordered
+ * into palette indexes with a fixed 6 x 7 x 6 color cube and ordered
  * dithering, and LZW compressed as it arrives, so nothing but the current
  * picture is held in memory.
  ****************************************************************************/
@@ -573,7 +583,7 @@ static int gif_open(void)
   memcpy(hdr, "GIF89a", 6);
   gif_le16(hdr + 6, rec.canvas_w);
   gif_le16(hdr + 8, rec.canvas_h);
-  hdr[10] = 0x70;   /* no global colour table: every picture brings its own */
+  hdr[10] = 0x70;   /* no global color table: every picture brings its own */
   hdr[11] = 0;
   hdr[12] = 0;
   fwrite(hdr, 1, 13, rec.gif);
@@ -583,7 +593,7 @@ static int gif_open(void)
   return 1;
 }
 
-static int gif_cnt[65536];                 /* how many times each RGB565 colour is in the picture being made */
+static int gif_cnt[65536];                 /* how many times each RGB565 color is in the picture being made */
 static int gif_map[65536];                 /* ... and the palette index it gets */
 static unsigned short gif_used[65536];
 static int gif_nused;
@@ -593,8 +603,8 @@ static int gif_by_count(const void *a, const void *b)
   return gif_cnt[*(const unsigned short *)b] - gif_cnt[*(const unsigned short *)a];
 }
 
-/* RGB565 picture (any size) -> palette indexes at the file's size (nearest neighbour). The picture gets a palette of its
-   own: a console picture rarely has more than 256 different colours, so they are kept exactly, with no dithering. If it
+/* RGB565 picture (any size) -> palette indexes at the file's size (nearest neighbor). The picture gets a palette of its
+   own: a console picture rarely has more than 256 different colors, so they are kept exactly, with no dithering. If it
    has more, the 256 most used are kept and the others take the nearest of them. pal receives the 256 RGB entries. */
 static void gif_quantise(const unsigned short *src, int w, int h, unsigned char *pal)
 {
@@ -629,7 +639,7 @@ static void gif_quantise(const unsigned short *src, int w, int h, unsigned char 
     pal[i * 3 + 2] = (unsigned char)pb[i];
     gif_map[p] = i;
   }
-  for (i = npal; i < gif_nused; i++)         /* the colours that did not fit: the nearest one that did */
+  for (i = npal; i < gif_nused; i++)         /* the colors that did not fit: the nearest one that did */
   {
     unsigned p = gif_used[i];
     int r = (int)((p >> 11) & 31), g = (int)((p >> 5) & 63), b = (int)(p & 31), best = 0, bd = 0x7FFFFFFF;
@@ -702,7 +712,7 @@ static void gif_lzw(const unsigned char *px, size_t n)
     }
   }
   gif_put_code((unsigned)prefix, bits);
-  if (running >= maxcode1) { bits++; maxcode1 = 1 << bits; }
+  if (running >= maxcode1) bits++;
   gif_put_code(257, bits);
   if (gif_nbits > 0) gif_put_byte((unsigned char)(gif_bitbuf & 0xFF));
   gif_flush_block();
@@ -724,7 +734,7 @@ static void gif_frame(const unsigned short *px, int w, int h)
   idesc[0] = 0x2C;
   gif_le16(idesc + 1, 0); gif_le16(idesc + 3, 0);
   gif_le16(idesc + 5, rec.canvas_w); gif_le16(idesc + 7, rec.canvas_h);
-  idesc[9] = 0x87;                     /* this picture's own colour table, 256 entries */
+  idesc[9] = 0x87;                     /* this picture's own color table, 256 entries */
   fwrite(idesc, 1, 10, rec.gif);
   fwrite(pal, 1, sizeof(pal), rec.gif);
 
@@ -916,12 +926,16 @@ int recorder_start(int mode, const char *path, int sample_rate, double fps)
       return 0;
     }
 
-    /* 2x the current picture, integer-scaled and sharp. Fixed for the whole
+    /* A multiple of the current picture (Settings > Options > Video Recording), sharp when it is the picture's own shape. Fixed for the whole
        file: a later change in the game's resolution is letterboxed into it. */
-    rec.canvas_w = (sw * 2 + 1) & ~1;
-    rec.canvas_h = (sh * 2 + 1) & ~1;
+    rec.start_sw = sw;
+    rec.start_sh = sh;
+    rec.canvas_h = (sh * opt_scale + 1) & ~1;
+    rec.canvas_w = ((opt_tv == 2 ? rec.canvas_h * 16 / 9 : opt_tv ? rec.canvas_h * 4 / 3 : sw * opt_scale) + 1) & ~1;
     rec.matrix709 = (rec.canvas_w >= 1280 || rec.canvas_h >= 720);
 
+    if (opt_mbps > 0) rec.bitrate = (unsigned)opt_mbps * 1000000u;
+    else
     {
       double bps = (double)rec.canvas_w * rec.canvas_h * fps * 0.5;
       if (bps < 4000000.0)  bps = 4000000.0;

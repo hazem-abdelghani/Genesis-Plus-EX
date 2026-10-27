@@ -27,7 +27,7 @@
 #include <windows.h>
 
 #define NP_DEFAULT_PORT   55455
-#define NP_MAX_SETTINGS   24
+#define NP_MAX_SETTINGS   32
 
 enum { NP_IDLE = 0, NP_LISTEN, NP_HANDSHAKE, NP_ACTIVE };
 enum { NP_ROLE_NONE = 0, NP_ROLE_HOST = 1, NP_ROLE_GUEST = 2 };

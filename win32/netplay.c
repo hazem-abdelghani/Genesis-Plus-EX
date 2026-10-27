@@ -1464,7 +1464,7 @@ int netplay_join_start(const char *address, int port, const char *code, char *er
   HANDLE h;
 
   if (joinjob.state == 1) { set_err(err, err_len, "A connection attempt is already going on. Try again in a moment."); return 0; }
-  if (joinjob.state == 2)                                   /* an attempt nobody collected (it was cancelled as it finished) */
+  if (joinjob.state == 2)                                   /* an attempt nobody collected (it was canceled as it finished) */
   {
     if (joinjob.ok) closesocket(joinjob.sock);
     joinjob.ok = 0;
@@ -1748,7 +1748,7 @@ const char *netplay_status_text(void)
       else if (np.ping_ms)
         wsprintfA(np.status, "Netplay: Player %d, delay %d, ping %d ms%s%s",
                   np.role == NP_ROLE_HOST ? 1 : 2, np.delay, np.ping_ms,
-                  netplay_suggested_delay() != np.delay ? (netplay_suggested_delay() > np.delay ? " (a delay of more is suggested)" : " (a lower delay would do)") : "",
+                  netplay_suggested_delay() != np.delay ? (netplay_suggested_delay() > np.delay ? " (a higher delay is suggested)" : " (a lower delay would do)") : "",
                   np.waiting ? " (waiting for the other player)" : "");
       else
         wsprintfA(np.status, "Netplay: Player %d, delay %d%s",

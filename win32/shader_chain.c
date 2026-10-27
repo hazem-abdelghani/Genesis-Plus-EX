@@ -67,7 +67,22 @@ void shader_chain_init(void)
   return;            /* 32-bit build: shaders are not offered at all */
 #endif
 
-  dll = LoadLibraryA("librashader.dll");
+  {
+    /* In the Plugins folder next to the exe, then next to the exe (how it used to be), then wherever Windows looks. */
+    char path[MAX_PATH + 32], *slash;
+
+    if (GetModuleFileNameA(NULL, path, MAX_PATH) > 0 && (slash = strrchr(path, '\\')) != NULL)
+    {
+      lstrcpyA(slash + 1, "Plugins\\librashader.dll");
+      dll = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+      if (!dll)
+      {
+        lstrcpyA(slash + 1, "librashader.dll");
+        dll = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+      }
+    }
+    if (!dll) dll = LoadLibraryA("librashader.dll");
+  }
   if (!dll) return;
 
   /* GetProcAddress returns a function pointer type incompatible (by strict
@@ -115,6 +130,18 @@ void shader_chain_init(void)
 int shader_chain_available(void)
 {
   return dll != NULL;
+}
+
+void shader_chain_missing_text(char *out, int len)
+{
+  char folder[MAX_PATH + 16], *slash;
+  char text[MAX_PATH + 400];
+
+  folder[0] = '\0';
+  if (GetModuleFileNameA(NULL, folder, MAX_PATH) > 0 && (slash = strrchr(folder, '\\')) != NULL) lstrcpyA(slash + 1, "Plugins");
+  wsprintfA(text, "Shaders need librashader.dll, and it was not found or Windows could not load it.\n\n"
+                  "Put librashader.dll (it is in the zip the program came in) in the Plugins folder:\n%s\n\nThen turn the shader on again.", folder);
+  lstrcpynA(out, text, len);
 }
 
 void shader_chain_unload(void)

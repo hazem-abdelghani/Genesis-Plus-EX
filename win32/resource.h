@@ -66,8 +66,8 @@
 #define IDM_OPTIONS_SETTINGS      279   /* Options > Settings... */
 #define IDM_VIEW_COL_FAV          284   /* List Columns > Favorite */
 #define IDM_VIEW_CLEANNAMES       2533  /* View > hide (...) and [...] in game names */
-#define IDM_VIEW_FSTOOLBAR        287   /* View > Toolbar in Fullscreen */
-#define IDM_VIEW_FAVONLY          285   /* View > Show Favorites Only */
+#define IDM_VIEW_FSTOOLBAR        287   /* View > Toolbars > Toolbar in Fullscreen */
+#define IDM_VIEW_FAVONLY          285   /* View > Game List > Show Favorites Only */
 #define IDM_OPTIONS_SETTINGS_VIDEO 280  /* toolbar: Settings, on the Video tab */
 #define IDM_OPTIONS_SETTINGS_AUDIO 281  /* toolbar: Settings, on the Audio tab */
 
@@ -89,14 +89,18 @@
 #define IDM_VIDEO_FRAMESKIP_BASE  450   /* .. 455: off, auto, manual 25/33/50/75% */
 #define IDM_VIDEO_SMSBORDER       460   /* show / crop the Master System side borders */
 #define IDM_VIDEO_SHADER_PRESET   461   /* pick a librashader .slangp preset (D3D11 only) */
-#define IDM_VIDEO_SHADER_NONE     462   /* turn the GPU shader off */
+#define IDM_VIDEO_SHADER_NONE     462   /* turn the shader off */
 #define IDM_TOOLS_SHOT_BASE       465   /* .. 467: screenshot output: final, corrected, raw */
+#define IDM_TOOLS_SHOTSIZE_BASE   470   /* .. 473: screenshot size: 1x, 2x, 3x, 4x */
+#define IDM_SET_RECSIZE_BASE      3730  /* 4: video recording size: 1x, 2x, 3x, 4x */
+#define IDM_SET_RECQUAL_BASE      3735  /* 5: video recording quality: Auto, 4, 8, 16, 32 Mbit/s */
+#define IDM_SET_RECSHAPE_BASE     3745  /* 3: video recording shape: the picture's own, 4:3, 16:9 */
 #define IDM_VIDEO_GGEXTRA         362
 #define IDM_VIDEO_FILTER_NONE     363
                                         /* 364 .. 369 were the .rpi rescan and
                                            filter-scale items; left unused so
                                            the numbers below do not move */
-#define IDM_VIDEO_FILTER_BASE     370   /* .. 393, one per built-in filter */
+#define IDM_VIDEO_FILTER_BASE     3800  /* .. 3847, one per built-in filter */
 #define IDM_VIDEO_VSYNC           395
 #define IDM_VIDEO_THEME_BASE      396   /* .. 398: Auto/Light/Dark */
 #define IDM_VIDEO_LARGE_UI        399
@@ -136,7 +140,8 @@
 #define IDM_BROWSER_CHEATS         833
 #define IDM_BROWSER_SET_COVER      834
 #define IDM_BROWSER_REMOVE_COVER   835
-#define IDM_BROWSER_OPENDIR        840   /* context menu: Open ROMs Directory */
+#define IDM_BROWSER_OPENDIR        840   /* context menu: Open ROM Directory */
+#define IDM_BROWSER_OPENDIR_BASE   850   /* .. 856: with more than one ROM folder, the submenu of Open ROM Directory has one entry for each (the ROM directory and the 6 more) */
 #define IDM_BROWSER_CLEAR_RECENT   841   /* context menu: Clear Recently Played */
 #define IDM_BROWSER_REMOVE_RECENT  848   /* context menu: Remove From Recently Played (this game only) */
 #define IDM_BROWSER_SHORTCUT_DESKTOP 842  /* context menu: Create Desktop Shortcut */
@@ -203,6 +208,13 @@
 #define IDC_AUDIO_LATENCY_TEXT   1027
 #define IDC_AUDIO_CDDA           1028
 #define IDC_AUDIO_CDDA_TEXT      1029
+#define IDC_AUDIO_CDDA_LABEL     1900   /* the caption of the CD Audio slider (grayed with it) */
+#define IDC_ADV_PCM_LABEL        1901
+#define IDC_AUDIO_PWM            1905   /* the level of the 32X PWM sound */
+#define IDC_AUDIO_PWM_TEXT       1906
+#define IDC_AUDIO_PWM_LABEL      1907
+#define IDC_CS_REGION_LABEL      1902   /* the caption "Memory:" of the Cheat Search list */
+#define IDC_INPUT_PADTYPE_LABEL  1903
 #define IDC_AUDIO_DEFAULTS       1030
 #define IDC_AUDIO_METER_L        1031
 #define IDC_AUDIO_METER_R        1032
@@ -221,8 +233,7 @@
 #define IDC_CHEATS_REMOVE        1054
 #define IDC_CHEATS_CLEAR         1055
 #define IDC_CHEATS_HINT          1056
-#define IDC_INPUT_CB_FIRST       1620   /* Controls > Advanced tab, combos frame, 1620 - 1639 */
-#define IDC_CB_LISTLBL           1621
+#define IDC_INPUT_CB_FIRST       1620   /* Controls > Extras tab, combos frame, 1620 - 1639 */
 #define IDC_CB_LIST              1622
 #define IDC_CB_BIND              1624   /* click, then press the key or pad button to bind */
 #define IDC_CB_UNDO              1626   /* Remove Last */
@@ -230,11 +241,11 @@
 #define IDC_CB_G0                1628   /* .. + 11: A B C X Y Z Start Mode Up Down Left Right */
 #define IDC_INPUT_CB_LAST        1639
 #define IDC_CB_PAUSE             1650   /* Combos tab: the Pause button (its menu: a pause before the next action) */
-#define IDC_CB_COL1              1651   /* the list's column titles: # (IDC_CB_LISTLBL), Trigger, Actions */
-#define IDC_CB_COL2              1652
 #define IDC_CB_HELP              1653   /* "How it works" */
 #define IDC_CB_HOLDTIME          1649   /* Combos tab: the Hold button (its menu: how long the action just added stays down) */
-#define IDC_CHEATS_FILES         1790   /* drop-down of similar cheat files (only shown when there are some) */
+#define IDC_CHEATS_FILES_LABEL   1791
+#define IDC_CHEATS_EXPORT        1793   /* Cheats: save the list as a .cht file */
+#define IDC_CHEATS_FILES         1790   /* drop-down of similar cheat files (grayed out when there are none) */
 #define IDC_CHEATS_LOADCHT       1057
 #define IDC_CHEATS_SAVE          1058
 #define IDC_CHEATS_ENABLE        1059
@@ -300,13 +311,14 @@
 #endif /* _RESOURCE_H_ */
 
 /* --- later additions ------------------------------------------------------ */
-#define IDM_VIDEO_INTSCALE         2502   /* Video > Integer Scaling */
-#define IDM_AUDIO_MUTE_FM          2503   /* Audio > Mute FM Sound */
-#define IDM_AUDIO_MUTE_PSG         2504   /* Audio > Mute PSG Sound */
+#define IDM_VIDEO_INTSCALE         2502   /* Video > Visual Effects > Integer Scaling */
+#define IDM_AUDIO_MUTE_FM          2503   /* Audio > Mute > FM Sound */
+#define IDM_AUDIO_MUTE_PSG         2504   /* Audio > Mute > PSG Sound */
+#define IDM_AUDIO_MUTE_PWM         2509   /* Audio > Mute > PWM Sound (32X games) */
 #define IDM_EMU_AUTOSAVE           2505   /* Emulation > Auto Resume */
 #define IDM_OPTIONS_OSD            2506   /* Options > Show On-Screen Display */
 #define IDM_VIEW_COL_EXTRA        2510   /* List Columns > Genre, Region, File Size, File Type (.. 2513) */
-#define IDM_VIEW_SORT_RECENT      2514   /* View > Recently Played at the Top */
+#define IDM_VIEW_SORT_RECENT      2514   /* View > Game List > Show Recently Played */
 #define IDM_INPUT_HOTKEYS          2523   /* Input > Hotkeys... */
 #define IDD_HOTKEYS               940
 #define IDD_HOTKEYS_LARGE         941
@@ -317,7 +329,7 @@
 #define IDC_HK_HINT                1504
 #define IDM_FILE_LOADSLOT_BASE    2540   /* .. 2549: Load State > Load State from Slot */
 #define IDM_FILE_SAVESLOT_BASE    2550   /* .. 2559: Save State > Save State to Slot */
-#define IDM_VIEW_GRIDLINES        2561   /* View > Show Grid Lines */
+#define IDM_VIEW_GRIDLINES        2561   /* View > Game List > Show Grid Lines */
 #define IDM_INPUT_TURBO_ALL       2564   /* Gamepad hotkey: turbo on / off for every button */
 #define IDM_VIEW_SCANSUB          2562   /* Settings > General > Scan ROM Subfolders (no menu item) */
 #define IDM_EMU_UNDOSAVE          2560   /* Save State > Undo Save State */
@@ -326,6 +338,7 @@
 #define IDC_INPUT_PROFSAVE        1642
 #define IDC_INPUT_PROFDELETE      1645
 #define IDC_INPUT_PROFLOAD        1646   /* Load: the profile named in the drop-down */
+#define IDC_INPUT_DEVICELABEL     1648   /* Controls: the Input Devices label */
 #define IDC_INPUT_PROFNEW         1647   /* New: a new profile from the window, named in the box */
 #define IDC_INPUT_PADHK           1097   /* Controls: Gamepad Hotkeys... */
 #define IDD_PADHK                  944
@@ -350,6 +363,16 @@
 #define IDC_CC_CONVERT             1722
 #define IDC_CC_ADD                 1723
 #define IDC_CC_HELP                1724
+#define IDC_CC_LIST                1725
+#define IDC_PADJ_CONTRAST          1800   /* Picture Adjustments: a slider and its readout for each, 1800 - 1807 */
+#define IDC_PADJ_CONTRAST_TEXT     1801
+#define IDC_PADJ_SAT               1802
+#define IDC_PADJ_SAT_TEXT          1803
+#define IDC_PADJ_GAMMA             1804
+#define IDC_PADJ_GAMMA_TEXT        1805
+#define IDC_PADJ_HUE               1806
+#define IDC_PADJ_HUE_TEXT          1807
+#define IDC_PADJ_DEFAULTS          1808
 #define IDD_ROMFOLDERS             966
 #define IDD_ROMFOLDERS_LARGE       967
 #define IDC_RF_LIST                1750
@@ -367,9 +390,11 @@
 #define IDC_SP_RESET               1783
 #define IDC_SP_RESETALL            1784
 #define IDM_VIDEO_SHADERPARAMS     2695
-#define IDM_VIDEO_SHADERNOFILTER   2836   /* the Render Filter is skipped while a GPU shader runs */
+#define IDM_VIDEO_SHADERNOFILTER   2836   /* the Render Filter is skipped while a shader runs */
 #define IDD_CHEATCONV              964
 #define IDD_CHEATCONV_LARGE        965
+#define IDD_PICTUREADJ             974   /* Video > Picture Adjustments */
+#define IDD_PICTUREADJ_LARGE       975
 #define IDC_PH_LIST               1521
 #define IDC_PH_HINT               1522
 #define IDC_PH_ASSIGN             1523
@@ -387,11 +412,12 @@
 #define IDM_SET_COVERSIZE_BASE     3680   /* 7: grid cover size, 48 to 256 pixels (View > View Mode > Grid Size) */
 #define IDM_SET_TBSIZE_BASE        3690   /* 3: toolbar icon size (small, normal, large) */
 #define IDM_OPT_TBLABELS           3693   /* View > Toolbars > Show Toolbar Labels: names under the toolbar icons */
-#define IDM_SET_ACCENT_BASE        3700   /* 8: accent colour of the selection in the program's own lists and buttons */
+#define IDM_OPT_COLORICONS         3720   /* color in the menu icons, the toolbar and the star of the game list */
+#define IDM_SET_ACCENT_BASE        3700   /* 20: accent color of the selection in the program's own lists and buttons */
 #define IDM_OPT_SINGLEINSTANCE     3670   /* Settings: only one copy of the program at a time (no menu item) */
 #define IDM_OPT_MUTEUNFOCUSED      2604   /* Settings: mute while another window has focus (no menu item) */
 #define IDM_VIEW_DENSITY_BASE      2605   /* .. 2607: compact, normal, roomy list rows */
-#define IDM_EMU_INSERTDISC         2608   /* Emulation > Insert Disc... (Mega CD) */
+#define IDM_EMU_INSERTDISC         2608   /* File > Insert Disc... (Mega CD) */
 #define IDM_EMU_SPEEDUP            2611   /* Emulation > Game Speed > Faster */
 #define IDM_EMU_SPEEDDOWN          2612   /* Emulation > Game Speed > Slower */
 #define IDM_EMU_SPEEDRESET         2613   /* Emulation > Game Speed > Normal */
@@ -405,12 +431,11 @@
 #define IDM_VIDEO_DITHER           2671
 #define IDM_VIDEO_BEZEL            2673   /* pick a bezel image */
 #define IDM_VIDEO_BEZEL_OFF        2674
-#define IDM_OPT_RUNINDIALOGS       2666   /* keep the game running while Settings and other windows are open */
 #define IDM_FILE_APPLYPATCH        2664   /* File > Apply Patch... */
 #define IDM_INPUT_PAUSEMENU        2665   /* in-game pause menu */
-#define IDM_VIEW_GROUPCONSOLE      2631   /* View > Group by Console */
-#define IDM_VIEW_AZSTRIP           2632   /* View > Show A-Z Strip */
-#define IDM_FILE_ROMFOLDERS        2633   /* File > ROM Folders... */
+#define IDM_VIEW_GROUPCONSOLE      2631   /* View > Game List > Group by Console */
+#define IDM_VIEW_AZSTRIP           2632   /* View > Game List > Show A-Z Strip */
+#define IDM_FILE_ROMFOLDERS        2633   /* File > ROM Directory... */
 #define IDM_SET_COVERSHAPE_BASE    2840   /* 3: grid cover frame shape */
 #define IDM_VIEW_STATUSBAR         2829   /* View > Toolbars > Show Status Bar */
 #define IDM_OPT_COVERCAP           2828   /* grid covers: show the game name under each cover */
@@ -425,11 +450,11 @@
 #define IDM_SET_SATUR_BASE         2760   /* 7 */
 #define IDM_SET_GAMMA_BASE         2770   /* 7 */
 #define IDM_SET_HUE_BASE           2780   /* 7 */
-#define IDM_SET_BARCOLOR_BASE      2790   /* 7: colour of the bars around the picture */
+#define IDM_SET_BARCOLOR_BASE      2790   /* 7: color of the bars around the picture */
 #define IDM_SET_FSMODE_BASE        2810   /* 2: borderless window / exclusive */
 #define IDM_OPT_CONFINE            2820   /* confine the mouse to the picture */
 #define IDM_AUDIO_DEVICE           2821   /* pick the sound output device */
-#define IDM_VIDEO_ADJ_RESET        2826   /* picture adjustments back to normal */
+#define IDM_VIDEO_PICTUREADJ       2826   /* Video > Picture Adjustments... */
 #define IDM_EMU_REWINDNOW          2597   /* Emulation > Rewind (the key, Backspace, is held; the menu item latches it) */
 #define IDM_EMU_FASTFWD            2598   /* Emulation > Fast Forward (Tab) */
 
@@ -441,7 +466,7 @@
 #define IDM_OPT_PAUSEPAD           3531   /* pause when Player 1's pad disconnects */
 #define IDM_OPT_NORMALIZE          3533   /* even out loud and quiet games */
 #define IDM_SET_AUTOSAVE_BASE      3540   /* 5: save a state every: off, 1, 2, 5, 10 minutes */
-#define IDM_SET_SKIPLEN_BASE       3600   /* 7: Skip Intro When a Game Starts: off, 5, 10, 15, 20, 25, 30 s */
+#define IDM_SET_SKIPLEN_BASE       3600   /* 7: Skip Intro on Launch: off, 5, 10, 15, 20, 25, 30 s */
 #define IDM_FILE_LOADBACKUP_BASE   3560   /* 3: Load State > Load Backup State (the rolling backups) */
 #define IDM_OPT_OVERDRIVE          3556   /* Audio: push the sound into a soft limiter */
 #define IDM_SET_OSDPOS_BASE        3570   /* 4: where messages appear: top left, top right, bottom left, bottom right */
@@ -450,11 +475,12 @@
 #define IDM_SET_FPSPOS_BASE        3585   /* 4: where the frame rate appears */
 #define IDM_SET_MODEL_BASE         2860   /* Audio menu > Console Model: 3: Default, Genesis Model 1 (duller), Model 2 (cleaner) */
 #define IDM_SET_BACKEND_BASE       3610   /* 4: sound output: Windows Classic (waveOut), XAudio2, WASAPI shared, WASAPI exclusive */
-#define IDM_SET_OSDCOLOR_BASE      3620   /* 8: colour of on-screen text */
+#define IDM_SET_OSDCOLOR_BASE      3620   /* 8: color of on-screen text */
 #define IDM_SET_OSDLINES_BASE      3630   /* 7: how many messages show at once, 1 - 7 */
 #define IDM_AUDIO_EQ               3655   /* 3-Band EQ on / off (Settings only; the bands are in Levels and Latency) */
 #define IDM_SET_STYLE_BASE         3662   /* 2: look of the windows: Classic, Modern */
-#define IDM_SET_UISIZE_BASE        3660   /* 2: interface size (Settings only): Normal, Large; Large is what View > Larger UI was */
+#define IDM_SET_REWINDSPEED_BASE   3760   /* 4: how fast a rewind runs backwards (Settings only): slow, normal, fast, very fast */
+#define IDM_SET_UISIZE_BASE        3660   /* 2: interface size (Settings only): Normal, Large */
 #define IDM_AUDIO_HQFM             3640   /* High-Quality FM Synthesis (Settings only) */
 #define IDM_SET_FMUNIT_BASE        3645   /* 3: Master System FM unit: auto, off, on */
 #define IDM_SET_OPLL_BASE          3650   /* 2: Master System FM chip: Nuked, MAME */

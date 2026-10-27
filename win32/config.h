@@ -62,7 +62,6 @@ typedef struct
   uint8 render;
   uint8 enhanced_vscroll;
   uint8 enhanced_vscroll_limit;
-  uint8 h40_extra_columns;   /* widescreen: extra 8px tile columns to draw beyond the normal 320px H40 width, 0 = off (see Genesis-Plus-GX-Wide) */
   t_input_config input[MAX_INPUTS];
 } t_config;
 
@@ -122,7 +121,11 @@ typedef struct
   int smooth;             /* 1 = smooth scaling (HALFTONE), 0 = nearest */
   int scanline_pct;       /* 0/25/50/75/100 -- darkens alternating output rows */
   int nuked_ym2612;       /* Nuked FM core: 1 = behave as a YM2612, 0 = as a YM3438 */
-  int shot_mode;          /* screenshot output: 0 final, 1 corrected (640x480), 2 raw */
+  int shot_size;          /* screenshot size: 0..3 = 1x..4x of the output's own size */
+  int rec_scale;          /* video recording size: 0..3 = 1x..4x of the picture's own size */
+  int rec_quality;        /* video recording quality: 0 = chosen from the size, 1..4 = 4, 8, 16, 32 megabits a second */
+  int rec_tv;             /* video recording shape: 0 = the picture's own, 1 = stretched to 4:3, 2 = stretched to 16:9 */
+  int shot_mode;          /* screenshot output: 0 final, 1 corrected (640x480, the default), 2 raw */
   int frameskip;          /* 0 off, 1 auto, 2-5 manual (25/33/50/75% audio buffer) */
   int sms_show_border;    /* 1 = show the Master System's 8-pixel side borders (0 crops them) */
   int background_input;   /* 1 = controller input keeps working while the window is not focused */
@@ -151,18 +154,18 @@ typedef struct
   int ui_style;            /* 0 = Classic, 1 = Modern (rounded window frame, Segoe UI Variable text; more of it in later versions) */
   int large_ui;            /* 0 = normal size, 1 = ~15-20% larger throughout */
   int cheats_enabled;      /* master toggle -- 0 disables every cheat regardless of each one's own checkbox */
-  int cursor_idle, frame_cap, bass, log_on, pause_pad, keep_aspect, normalize, autosave_min, skip_len, np_upnp, overdrive, osd_opts, osd_pos, osd_time, osd_size, fps_pos, osd_color, osd_lines;   /* see settings.c */
+  int cursor_idle, frame_cap, bass, log_on, pause_pad, keep_aspect, normalize, autosave_min, skip_len, np_upnp, overdrive, osd_opts, osd_pos, osd_time, osd_size, fps_pos, osd_color, osd_lines, rewind_speed;   /* see settings.c (rewind_speed: 0 slow, 1 normal, 2 fast, 3 very fast) */
   int hide_toolbar;        /* the ROM browser's toolbar / search bar / filter bar are hidden */
   int hide_searchbar;
   int hide_filterbar;
-  int shader_nofilter;     /* the CPU Render Filter is skipped while a GPU shader runs (the shader gets the game's own picture) */
+  int shader_nofilter;     /* the CPU Render Filter is skipped while a shader runs (the shader gets the game's own picture) */
   int hide_statusbar;      /* View > Toolbars > Show Status Bar is off */
   int browser_grid_view;   /* 0 = report/list view, 1 = icon/grid view with cover art */
   int browser_grid_size;   /* icon size in pixels, adjustable via Ctrl+wheel while in grid view */
   int fullscreen_on_load;  /* persists across runs, unlike fullscreen itself --
                                enters fullscreen automatically whenever a ROM loads */
   int show_fps;
-  int turbo_rate;          /* 0-3: how fast Turbo buttons fire (Controls) */
+  int turbo_rate;          /* 0-4: how fast Turbo buttons fire (Controls): 7.5, 10, 15, 22.5 or 30 presses a second */
   int confirm_exit;        /* ask before exiting while a game is running */
   int single_instance;     /* a second launch hands its game to the copy already running */
   int keep_awake;          /* no sleep, screen saver or screen off while a game runs */
@@ -176,7 +179,6 @@ typedef struct
   char shader_params_for[GUI_PATH_LEN];    /* the preset they belong to */
   int padhk_hold_on;       /* gamepad hotkeys only work while the Hold Button is held */
   int padhk_hold[2];       /* that button: [0] XInput pad, [1] DirectInput joystick */
-  int run_in_dialogs;      /* the game keeps running while Settings, Controls and the like are open */
   int group_console;       /* 1 = the list is grouped into collapsible sections, one per console */
   int az_strip;            /* 1 = a letter strip beside the list jumps to games starting with that letter */
   int cover_shape;         /* grid covers: 0 square, 1 box (portrait), 2 wide */
@@ -184,8 +186,9 @@ typedef struct
   int toolbar_labels;      /* 1 = the name of each toolbar button is written under its icon */
   int cover_cache;         /* keep finished cover thumbnails on disk (covers\thumbs.dat) so they load fast the next time */
   int cover_card;          /* grid covers: a frame around the cover and its name */
+  int color_icons;         /* 1: the menu icons, the toolbar and the star are in color, 0: in the color of the text */
   int crash_report;        /* write genesis-plus-ex-crash.txt and .dmp after a crash */
-  int accent;              /* accent colour: 0 default (blue in the dark theme, the Windows colour in the light one), 1-7 a colour */
+  int accent;              /* accent color: 0 default (blue in the dark theme, the Windows color in the light one), 1 to 13 a color, 14 a hidden one */
   int cover_round;         /* grid covers: 0 square corners, 1 rounded */
   int cover_caption;       /* grid covers: 0 name below the cover, 1 no name */
   char rom_extra[6][GUI_PATH_LEN];   /* more ROM folders */
@@ -196,14 +199,14 @@ typedef struct
   int mouse_sens;          /* mouse / light gun speed: 0..4 = 50, 75, 100, 150, 200 % */
   int gun_ox, gun_oy;      /* light gun aim offset, 0..6 = -12, -8, -4, 0, 4, 8, 12 pixels */
   int adj_contrast, adj_sat, adj_gamma, adj_hue;   /* picture adjustments: contrast 50-150 %, saturation 0-200 %, gamma 50-150 (/100), hue -30 to 30 degrees; 100, 100, 100, 0 = unchanged */
-  int bar_color;           /* colour of the bars around the picture (index into video.c's list) */
+  int bar_color;           /* color of the bars around the picture (index into video.c's list) */
   int fs_res_w, fs_res_h;  /* exclusive fullscreen resolution; 0 = the desktop's own */
   int fs_exclusive;        /* 1 = fullscreen changes the display mode instead of a borderless window */
   int confine_mouse;       /* keep the pointer inside the picture while a mouse / light gun game runs */
   char audio_device[96];   /* name of the sound output device ("" = the Windows default) */
   int row_density;         /* 0 compact, 1 normal, 2 roomy rows in the game list */
   int browser_gridlines;   /* lines between the columns of the game list */
-  int scan_subfolders;     /* the ROMs directory is searched including its subfolders */
+  int scan_subfolders;     /* the ROM directory is searched including its subfolders */
   char filter_console[40]; /* the filter bar choices, kept between runs ("" = all) */
   char filter_genre[28];
   int  filter_genre_on;    /* filter_genre is "" for an unknown genre, so it needs its own flag */
@@ -217,6 +220,8 @@ typedef struct
   int integer_scale;       /* the picture is enlarged by whole multiples only (sharp pixels) */
   int mute_fm;             /* silence the FM chip alone */
   int mute_psg;            /* silence the PSG chip alone */
+  int mute_pwm;            /* silence the 32X PWM sound alone */
+  int pwm_level;           /* the level of the 32X PWM sound in percent (100: as the library makes it) */
   int resume_choice;       /* the Auto Resume question: 0 = ask, 1 = always resume, 2 = never (set by "Do not ask again") */
   int autosave;            /* save the game when it is closed and offer to resume it next time */
   int osd;                 /* messages over the picture (saved, slot, screenshot ...) */
@@ -239,7 +244,7 @@ typedef struct
   int audio_backend;      /* 0 Windows Classic (waveOut), 1 XAudio2, 2 WASAPI shared (default), 3 WASAPI exclusive */
   int latency;            /* number of queued frame buffers, 2-8 */
 
-  /* behaviour */
+  /* behavior */
   int rewind_memory;      /* 0..3: how much memory the Rewind history may use (128, 256, 512, 768 MB) */
   int rewind;             /* 1 = keep the history Backspace rewinds through (uses ~200 MB) */
   int pause_on_focus_loss;
@@ -259,7 +264,7 @@ typedef struct
   /* paths */
   char rom_dir[GUI_PATH_LEN];
   char recent[GUI_RECENT_MAX][GUI_PATH_LEN];
-  char shader_preset_path[GUI_PATH_LEN];   /* .slangp GPU shader (D3D11 only); "" = none */
+  char shader_preset_path[GUI_PATH_LEN];   /* .slangp shader (D3D11 only); "" = none */
 } t_gui_config;
 
 /* Global variables */

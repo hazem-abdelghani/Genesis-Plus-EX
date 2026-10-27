@@ -25,12 +25,14 @@ static const char *log_file(void)
   {
     char tmp[MAX_PATH], *slash;
     DWORD n = GetModuleFileNameA(NULL, tmp, sizeof(tmp) - 16);
-    if (n == 0 || n >= sizeof(tmp) - 16) lstrcpyA(tmp, "genesis-plus-ex.log");
+    if (n == 0 || n >= sizeof(tmp) - 16) lstrcpyA(tmp, "Logs\\genesis-plus-ex.log");
     else
     {
       slash = strrchr(tmp, '\\');
       if (slash) slash[1] = 0;
-      lstrcatA(tmp, "genesis-plus-ex.log");
+      lstrcatA(tmp, "Logs");
+      CreateDirectoryA(tmp, NULL);                    /* the log, the crash report and the dump live in a folder of their own */
+      lstrcatA(tmp, "\\genesis-plus-ex.log");
     }
     lstrcpyA(log_path, tmp);
   }

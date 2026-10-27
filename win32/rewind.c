@@ -48,6 +48,7 @@
 #include "shared.h"
 #include "gui.h"
 #include "netplay.h"
+#include "picocore.h"
 
 /* ==========================================================================
  * Combined per-frame blob layout
@@ -76,7 +77,8 @@ typedef struct { int x, y, w, h, ow, oh, changed; } saved_viewport_t;
 #define BLOB_VIEWPORT_OFF  (BLOB_PIXEL_OFF + REWIND_PIXEL_SIZE)
 #define BLOB_AUDCOUNT_OFF  (BLOB_VIEWPORT_OFF + sizeof(saved_viewport_t))
 #define BLOB_AUDIO_OFF     (BLOB_AUDCOUNT_OFF + sizeof(int))
-#define BLOB_SIZE          (BLOB_AUDIO_OFF + REWIND_AUDIO_FRAMES * 2 * sizeof(int16))
+#define BLOB_STATELEN_OFF  (BLOB_AUDIO_OFF + REWIND_AUDIO_FRAMES * 2 * sizeof(int16))     /* a 32X game: how long its state is */
+#define BLOB_SIZE          (BLOB_STATELEN_OFF + sizeof(int))
 
 /* Total ring capacity -- the actual number of frames this holds depends
    entirely on how well a given game's state+picture compress from frame
@@ -298,7 +300,6 @@ static uint8 *ring_head;         /* next record gets written here */
 static uint8 *ring_tail;         /* oldest record still held starts here */
 static size_t ring_maxcompsize;  /* raw_maxsize(BLOB_SIZE) + 2*sizeof(size_t) */
 static unsigned ring_entries;
-static unsigned ring_peak;       /* most entries held since the history was last cleared: what a full timeline means */
 
 static uint8 *block_alloc;       /* single allocation backing both blocks below */
 static uint8 *thisblock;         /* the newest full blob pushed/popped so far */
@@ -467,7 +468,6 @@ static void ring_push_do(void)
   nextblock = swap;
 
   ring_entries++;
-  if (ring_entries > ring_peak) ring_peak = ring_entries;
 }
 
 /* ==========================================================================
@@ -504,7 +504,6 @@ int rewind_set_memory(int mb)
     ring_ok = 0;
     ring_free();
     ring_ok = ring_init();
-    ring_peak = 0;
     suppress_next_capture = 0;
     return ring_ok;
   }
@@ -516,7 +515,6 @@ void rewind_enable(int on)
   if (on && !ring_ok)
   {
     ring_ok = ring_init();
-    ring_peak = 0;
     suppress_next_capture = 0;
   }
   else if (!on && ring_ok)
@@ -538,16 +536,14 @@ void rewind_reset(void)
   ring_head = ring_data + sizeof(size_t);
   ring_tail = ring_data + sizeof(size_t);
   ring_entries = 0;
-  ring_peak = 0;
   thisblock_valid = 0;
   suppress_next_capture = 0;
 }
 
-/* How much history is left and how much there was: entries are one per frame. */
-void rewind_status(int *entries, int *peak)
+/* How much history is left: entries are one per frame. */
+int rewind_status(void)
 {
-  *entries = (int)ring_entries;
-  *peak = (int)ring_peak;
+  return (int)ring_entries;
 }
 
 /* Called once per emulated frame that actually ran forward, whether or not
@@ -571,7 +567,16 @@ void rewind_capture_tick(const int16 *audio_samples, int audio_frames)
 
   blob = ring_push_where();
 
-  state_save(blob + BLOB_STATE_OFF);
+  if (pico_active())
+  {
+    /* A 32X game: PicoDrive's own state (about 680 KB, it fits the slot); not written to the log at every frame. */
+    int n;
+    pico_state_quiet(1);
+    n = pico_state_save(blob + BLOB_STATE_OFF, STATE_SIZE);
+    pico_state_quiet(0);
+    memcpy(blob + BLOB_STATELEN_OFF, &n, sizeof(int));       /* the length of this one: it may differ from a later one (the 32X switched on) */
+  }
+  else state_save(blob + BLOB_STATE_OFF);
   memcpy(blob + BLOB_PIXEL_OFF, bitmap.data, REWIND_PIXEL_SIZE);
   memcpy(blob + BLOB_VIEWPORT_OFF, &bitmap.viewport, sizeof(saved_viewport_t));
 
@@ -601,7 +606,16 @@ int rewind_step(void)
 
   if (!ring_pop(&blob)) return 0;
 
-  if (!state_load(blob + BLOB_STATE_OFF))
+  if (pico_active())
+  {
+    int ok, n;
+    memcpy(&n, blob + BLOB_STATELEN_OFF, sizeof(int));
+    pico_state_quiet(1);
+    ok = n > 0 && pico_state_load(blob + BLOB_STATE_OFF, (size_t)n);
+    pico_state_quiet(0);
+    if (!ok) return 0;
+  }
+  else if (!state_load(blob + BLOB_STATE_OFF))
   {
     /* Shouldn't happen for a state this same session just wrote, but
        don't present a picture whose matching state didn't actually
@@ -617,9 +631,33 @@ int rewind_step(void)
      VDP register state that now differs -- get_source_size() doubles
      the source height when interlaced is set, so a mismatch here shows
      up as the picture looking cropped along one edge. */
-  interlaced = (reg[12] & 0x02) >> 1;
-  im2_flag   = ((reg[12] & 0x06) == 0x06);
-  odd_frame  = interlaced;
+  video_deinterlace_reset();
+  if (!pico_active())            /* (a 32X game has no such state of the core's) */
+  {
+    interlaced = (reg[12] & 0x02) >> 1;
+    im2_flag   = ((reg[12] & 0x06) == 0x06);
+    odd_frame  = interlaced;
+
+    /* The state load wrote the registers while the core was freshly reset (not interlaced), so the drawing functions it chose are
+       the ones of a normal picture. The core only picks them again when the interlacing changes at the start of a frame, which
+       it no longer does now that the flags above are right: a double-resolution picture (Sonic 2's two player mode) would then
+       be drawn with them as garbage until the next mode change. */
+    if (reg[1] & 0x04)
+    {
+      if (im2_flag)
+      {
+        parse_satb = parse_satb_m5_im2;
+        render_bg  = (reg[11] & 0x04) ? render_bg_m5_im2_vs : render_bg_m5_im2;
+        render_obj = (reg[12] & 0x08) ? render_obj_m5_im2_ste : render_obj_m5_im2;
+      }
+      else
+      {
+        parse_satb = parse_satb_m5;
+        render_bg  = (reg[11] & 0x04) ? (config.enhanced_vscroll ? render_bg_m5_vs_enhanced : render_bg_m5_vs) : render_bg_m5;
+        render_obj = (reg[12] & 0x08) ? render_obj_m5_ste : render_obj_m5;
+      }
+    }
+  }
 
   memcpy(&bitmap.viewport, blob + BLOB_VIEWPORT_OFF, sizeof(saved_viewport_t));
 

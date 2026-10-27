@@ -4,7 +4,7 @@
  *  xbrz_glue.cpp -- RGB565 <-> xBRZ pixel conversion. See xbrz_glue.h.
  *
  *  Pixel layout: the xBRZ sources in xbrz/ read red from the LOW byte of each
- *  32-bit pixel (0x00BBGGRR). That matters: its colour-distance table weights
+ *  32-bit pixel (0x00BBGGRR). That matters: its color-distance table weights
  *  red, green and blue differently, so handing it the more usual 0x00RRGGBB
  *  would swap red and blue in that weighting and quietly change which edges
  *  it decides to smooth. Pixels are therefore packed the way it reads them.
@@ -13,9 +13,9 @@
  *   565 -> 888  replicates the top bits into the bottom (0x1F -> 0xFF), so
  *               full-scale stays full-scale.
  *   888 -> 565  rounds to nearest instead of truncating. The two are exact
- *               inverses for unblended colours, so flat areas and untouched
+ *               inverses for unblended colors, so flat areas and untouched
  *               pixels come back bit-for-bit as they went in; only the
- *               colours xBRZ actually blends are quantised.
+ *               colors xBRZ actually blends are quantised.
  ****************************************************************************/
 
 #include "xbrz_glue.h"

@@ -157,11 +157,12 @@ static LRESULT CALLBACK static_text_subclass_proc(HWND hwnd, UINT msg, WPARAM wp
       RECT calc = r;
       TEXTMETRICA tm;
       GetTextMetricsA(hdc, &tm);
-      DrawTextA(hdc, text, -1, &calc, align | DT_WORDBREAK | DT_CALCRECT);
+      UINT hide = (SendMessage(hwnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEACCEL) ? DT_HIDEPREFIX : 0;    /* the underline of a & shows only once Alt is pressed */
+      DrawTextA(hdc, text, -1, &calc, align | hide | DT_WORDBREAK | DT_CALCRECT);
       if (calc.bottom - calc.top > tm.tmHeight * 3 / 2)        /* more than one line: wrapped, from the top, like the control itself */
-        DrawTextA(hdc, text, -1, &r, align | DT_WORDBREAK);
+        DrawTextA(hdc, text, -1, &r, align | hide | DT_WORDBREAK);
       else
-        DrawTextA(hdc, text, -1, &r, align | DT_VCENTER | DT_SINGLELINE);
+        DrawTextA(hdc, text, -1, &r, align | hide | DT_VCENTER | DT_SINGLELINE);
     }
 
     SelectObject(hdc, old_font);
@@ -256,7 +257,7 @@ static LRESULT CALLBACK statusbar_subclass_proc(HWND hwnd, UINT msg, WPARAM wp, 
    does not pass them on to its own parent, so the WM_NOTIFY handlers in the
    main window and in dialogs never see them and could not recolour the header
    text. Subclassing the ListView is what lets us receive them where they
-   actually arrive; the colour itself is still set by theme_header_customdraw(). */
+   actually arrive; the color itself is still set by theme_header_customdraw(). */
 static LRESULT CALLBACK listview_header_subclass_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                                                       UINT_PTR id, DWORD_PTR ref)
 {
@@ -499,7 +500,7 @@ static BOOL CALLBACK apply_to_child(HWND hwnd, LPARAM lparam)
        separate and need setting explicitly. The header is handled in
        its own branch above, not here. */
     RECT r;
-    /* Lines between the columns (always) and rows (View > Show Grid Lines) of every list but the
+    /* Lines between the columns (always) and rows (View > Game List > Show Grid Lines) of every list but the
        game browser, which draws its own: painted over the list by grid_subclass_proc, in both
        themes (the built-in grid is too bright in dark mode). */
     SendMessage(hwnd, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_GRIDLINES, 0);
@@ -632,17 +633,10 @@ static BOOL CALLBACK fit_check_width(HWND c, LPARAM lp)
 #define DWMWA_CAPTION_COLOR            35
 #define DWMWA_TEXT_COLOR               36
 #endif
-#define DWM_COLOR_DEFAULT_VALUE        0xFFFFFFFFu     /* DWMWA_COLOR_DEFAULT: the system's own colour */
+#define DWM_COLOR_DEFAULT_VALUE        0xFFFFFFFFu     /* DWMWA_COLOR_DEFAULT: the system's own color */
 
-static struct { LONG height, weight; BYTE italic; HFONT font; } style_cache[16];     /* by size, weight and slant: a bold label stays bold */
+static struct { LONG height, weight; BYTE italic; HFONT font; } style_cache[32];     /* by size, weight and slant: a bold label stays bold */
 static int style_cache_n;
-
-static int is_style_font(HFONT f)
-{
-  int i;
-  for (i = 0; i < style_cache_n; i++) if (style_cache[i].font == f) return 1;
-  return 0;
-}
 
 /* Segoe UI Variable where the system has it (Windows 11), Segoe UI elsewhere. */
 static const char *modern_face(void)
@@ -674,10 +668,19 @@ static const char *modern_face(void)
   return face;
 }
 
+/* The Modern style's text size: 8.5 pt where the Classic style has the system font (8 pt, which is really 11 pixels, 8.25 pt): 3% more, as
+   fonts are made in whole pixels. */
+static LONG modern_size(LONG height)
+{
+  return (height * 103 + (height < 0 ? -50 : 50)) / 100;
+}
+
+/* A window's font in the chosen style: the Classic style keeps the font it has; Modern has Segoe UI at its own size. */
 HFONT theme_style_font(HFONT base)
 {
   LOGFONTA lf;
   HFONT f;
+  LONG base_h;
   int i;
 
   if (!gui.ui_style || !base || !GetObjectA(base, sizeof(lf), &lf)) return base;
@@ -687,15 +690,48 @@ HFONT theme_style_font(HFONT base)
   for (i = 0; i < style_cache_n; i++)
     if (style_cache[i].height == lf.lfHeight && style_cache[i].weight == lf.lfWeight && style_cache[i].italic == lf.lfItalic) return style_cache[i].font;
 
-  if (style_cache_n >= 16) return base;                    /* (every font made is kept: none is made once the table is full) */
+  if (style_cache_n >= 32) return base;                    /* (every font made is kept: none is made once the table is full) */
+  base_h = lf.lfHeight;
   lf.lfQuality = CLEARTYPE_QUALITY;
   lf.lfCharSet = DEFAULT_CHARSET;
   lstrcpynA(lf.lfFaceName, modern_face(), LF_FACESIZE);
+  lf.lfHeight = modern_size(lf.lfHeight);
   f = CreateFontIndirectA(&lf);
   if (!f) return base;
-  style_cache[style_cache_n].height = lf.lfHeight; style_cache[style_cache_n].weight = lf.lfWeight; style_cache[style_cache_n].italic = lf.lfItalic;
+  style_cache[style_cache_n].height = base_h;                    /* (the table is looked up by the height of the font it was made from) */
+  style_cache[style_cache_n].weight = lf.lfWeight; style_cache[style_cache_n].italic = lf.lfItalic;
   style_cache[style_cache_n].font = f; style_cache_n++;
   return f;
+}
+
+/* The font of the menus the program draws: the Large interface uses its own big font; otherwise the system menu font's size and weight (the
+   Modern style changes the face and makes it 8.5 pt, as in the windows). */
+HFONT theme_menu_font(void)
+{
+  static HFONT f;
+  static int for_style = -1;
+
+  if (gui.large_ui) return gui_get_ui_font();
+  if (!f || for_style != gui.ui_style)
+  {
+    NONCLIENTMETRICSA ncm;
+
+    memset(&ncm, 0, sizeof(ncm));
+    ncm.cbSize = sizeof(ncm);
+    if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+    {
+      if (gui.ui_style)
+      {
+        ncm.lfMenuFont.lfQuality = CLEARTYPE_QUALITY;
+        lstrcpynA(ncm.lfMenuFont.lfFaceName, modern_face(), LF_FACESIZE);
+        ncm.lfMenuFont.lfHeight = (ncm.lfMenuFont.lfHeight * 17 + (ncm.lfMenuFont.lfHeight < 0 ? -9 : 9)) / 18;      /* (the system's 9 pt menu font) */
+      }
+      if (f) DeleteObject(f);
+      f = CreateFontIndirectA(&ncm.lfMenuFont);
+      for_style = gui.ui_style;
+    }
+  }
+  return f ? f : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 }
 
 /****************************************************************************
@@ -705,10 +741,15 @@ HFONT theme_style_font(HFONT base)
  * the style is applied). Owner-drawn buttons, picture buttons, group boxes and push-like check boxes keep their own drawing.
  ****************************************************************************/
 
+static COLORREF modern_blue(void)      /* the Modern style's color when no accent color is chosen */
+{
+  return theme_is_dark() ? RGB(0x4C, 0x9A, 0xFF) : RGB(0x00, 0x67, 0xC0);
+}
+
 static COLORREF mod_accent(void)
 {
   if (gui.accent > 0) return theme_accent_bg();
-  return theme_is_dark() ? RGB(0x4C, 0x9A, 0xFF) : RGB(0x00, 0x67, 0xC0);
+  return modern_blue();
 }
 
 COLORREF theme_modern_accent(void) { return mod_accent(); }
@@ -818,7 +859,7 @@ static void mod_ss_round(mod_ss *s, double x, double y, double w, double h, doub
   if (line != CLR_INVALID) DeleteObject(pen);
 }
 
-/* The colours of a Modern push button: fill, text and the thin line round it. */
+/* The colors of a Modern push button: fill, text and the thin line round it. */
 static void mod_push_colors(int dark, int hot, int pushed, int dis, int def, COLORREF *fill, COLORREF *text, COLORREF *edge)
 {
   if (def && !dis)
@@ -964,6 +1005,36 @@ static void mod_paint_check(HWND h, HDC dc, const RECT *rc)
 
 }
 
+/* A tick box in the look of the Modern check boxes (rounded, smooth edges), drawn at x, y, sz pixels square on a background of
+   the color bg; the Cheats window uses it for the rows and the header. */
+void theme_draw_tickbox(HDC dc, int x, int y, int sz, int checked, COLORREF bg)
+{
+  int dark = theme_is_dark();
+  COLORREF accent = mod_accent(), edge = dark ? RGB(140, 144, 155) : RGB(105, 105, 112);
+  double lw = 1.5 * sz / 16.0, rad = sz * 0.25;
+  mod_ss ss;
+
+  if (!mod_ss_begin(&ss, dc, sz, sz, bg)) return;
+  if (checked)
+  {
+    LOGBRUSH lb;
+    HPEN pen;
+    HGDIOBJ op;
+
+    mod_ss_round(&ss, 0, 0, sz, sz, rad, accent, CLR_INVALID, 0);
+    lb.lbStyle = BS_SOLID; lb.lbColor = RGB(255, 255, 255); lb.lbHatch = 0;
+    pen = ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_ROUND | PS_JOIN_ROUND, (DWORD)(sz * 0.14 * MOD_SS + 0.5), &lb, 0, NULL);
+    op = SelectObject(ss.dc, pen);
+    MoveToEx(ss.dc, (int)(sz * 0.27 * MOD_SS), (int)(sz * 0.53 * MOD_SS), NULL);
+    LineTo(ss.dc, (int)(sz * 0.44 * MOD_SS), (int)(sz * 0.69 * MOD_SS));
+    LineTo(ss.dc, (int)(sz * 0.74 * MOD_SS), (int)(sz * 0.33 * MOD_SS));
+    SelectObject(ss.dc, op);
+    DeleteObject(pen);
+  }
+  else mod_ss_round(&ss, 0, 0, sz, sz, rad, CLR_INVALID, edge, lw);
+  mod_ss_end(&ss, dc, x, y);
+}
+
 static LRESULT CALLBACK modern_button_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR ref)
 {
   (void)id; (void)ref;
@@ -1051,7 +1122,8 @@ static void modern_button_hook(HWND hwnd)
              !(st & (BS_PUSHLIKE | BS_BITMAP | BS_ICON | BS_LEFTTEXT));      /* (text on the left of the box: left to the system) */
   DWORD_PTR dummy;
 
-  if (gui.ui_style && ours) SetWindowSubclass(hwnd, modern_button_proc, 7, 0);
+  /* Classic: the check boxes and radio buttons are drawn here too, flat and in the accent color (the system's cannot take it). */
+  if (ours && (gui.ui_style || (type != BS_PUSHBUTTON && type != BS_DEFPUSHBUTTON))) SetWindowSubclass(hwnd, modern_button_proc, 7, 0);
   else if (GetWindowSubclass(hwnd, modern_button_proc, 7, &dummy)) { RemoveWindowSubclass(hwnd, modern_button_proc, 7); InvalidateRect(hwnd, NULL, TRUE); }
 }
 
@@ -1112,7 +1184,7 @@ static LRESULT CALLBACK modern_combo_proc(HWND h, UINT m, WPARAM w, LPARAM l, UI
       text = mod_text(dark, dis);
       if (editable && have_ci && ci.hwndItem && !dis)
       {
-        /* A box you can type in is filled with the colour of its own edit box, so the two are one. */
+        /* A box you can type in is filled with the color of its own edit box, so the two are one. */
         HBRUSH eb = (HBRUSH)SendMessage(GetParent(h), WM_CTLCOLOREDIT, (WPARAM)to, (LPARAM)ci.hwndItem);
         LOGBRUSH elb;
         if (eb && GetObject(eb, sizeof(elb), &elb) && elb.lbStyle == BS_SOLID) fill = elb.lbColor;
@@ -1157,7 +1229,7 @@ static LRESULT CALLBACK modern_combo_proc(HWND h, UINT m, WPARAM w, LPARAM l, UI
         SetTextColor(to, text);
         if (cst & (CBS_OWNERDRAWFIXED | CBS_OWNERDRAWVARIABLE))
         {
-          /* A list that draws its own rows (the colour lists): the chosen one is drawn by its window, on the box. */
+          /* A list that draws its own rows (the color lists): the chosen one is drawn by its window, on the box. */
           DRAWITEMSTRUCT di;
           memset(&di, 0, sizeof(di));
           di.CtlType = ODT_COMBOBOX;
@@ -1362,52 +1434,214 @@ static void modern_combo_hook(HWND hwnd)
 }
 
 
-/* Modern: every control gets the style's font (its first font is kept in a property); Classic: it gets its own font back. */
+/* Every control gets the style's font (its first font is kept in a property, so the other style can start from it again). */
 static BOOL CALLBACK style_font_child(HWND c, LPARAM unused)
 {
   HFONT cur = (HFONT)SendMessage(c, WM_GETFONT, 0, 0);
   HFONT base = (HFONT)GetPropA(c, "gpx_basefont");
+  HFONT want;
   (void)unused;
 
-  if (gui.ui_style)
+  if (!cur) return TRUE;
+  want = theme_style_font(base ? base : cur);
+  if (want != cur)
   {
-    HFONT want;
-    if (!cur) return TRUE;
-    want = theme_style_font(base ? base : cur);
-    if (want != cur)
-    {
-      if (!base) SetPropA(c, "gpx_basefont", (HANDLE)cur);
-      SendMessage(c, WM_SETFONT, (WPARAM)want, FALSE);
-    }
+    if (!base) SetPropA(c, "gpx_basefont", (HANDLE)cur);
+    SendMessage(c, WM_SETFONT, (WPARAM)want, FALSE);
   }
-  else if (base)
-  {
-    SendMessage(c, WM_SETFONT, (WPARAM)base, FALSE);
-    RemovePropA(c, "gpx_basefont");
-  }
-  else if (cur && is_style_font(cur))       /* made with the Modern style on (no earlier font kept): the program's own font */
-    SendMessage(c, WM_SETFONT, (WPARAM)gui_get_ui_font(), FALSE);
   return TRUE;
 }
 
-/* The Modern style's window frame: rounded corners, and a title bar and border in the colours of the theme (Windows 11;
+/* The Modern style's window frame: rounded corners (square in fullscreen), a title bar in the colors of the theme and no border line (Windows 11;
    older Windows ignores the attributes). The Classic style gives the system's own values back. */
 static void apply_frame_style(HWND hwnd, int dark)
 {
   DWORD corner = gui.ui_style ? 2 : 0;                                   /* DWMWCP_ROUND, DWMWCP_DEFAULT */
   COLORREF caption = gui.ui_style ? (dark ? THEME_DARK_BG : RGB(0xF3, 0xF3, 0xF3)) : (COLORREF)DWM_COLOR_DEFAULT_VALUE;
   COLORREF text    = gui.ui_style ? (dark ? THEME_DARK_TEXT : RGB(0x1B, 0x1B, 0x1B)) : (COLORREF)DWM_COLOR_DEFAULT_VALUE;
-  COLORREF border  = gui.ui_style ? (dark ? RGB(0x3A, 0x3D, 0x45) : RGB(0xD0, 0xD0, 0xD0)) : (COLORREF)DWM_COLOR_DEFAULT_VALUE;
+  COLORREF border  = gui.ui_style ? 0xFFFFFFFEu /* DWMWA_COLOR_NONE: no frame line around a window */ : (COLORREF)DWM_COLOR_DEFAULT_VALUE;
 
+  if (hwnd == g_hwnd && gui.fullscreen)
+  {
+    corner = 1;                                                          /* DWMWCP_DONOTROUND: the picture fills the whole screen */
+  }
   DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
   DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &caption, sizeof(caption));
   DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &text, sizeof(text));
   DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
 }
 
+void theme_refresh_frame(HWND hwnd)
+{
+  apply_frame_style(hwnd, theme_is_dark());
+}
+
+/* The rows of a drop-down list that draws its own rows (every drop-down of the program does, so that the chosen row takes the accent color):
+   called with the owner-draw messages; 0 when the message is not about a combo box. */
+int theme_combo_measure(MEASUREITEMSTRUCT *mi)
+{
+  if (mi->CtlType != ODT_COMBOBOX) return 0;
+  mi->itemHeight = (UINT)TBS(18);
+  return 1;
+}
+
+int theme_combo_draw(const DRAWITEMSTRUCT *di)
+{
+  int dark, sel, off;
+  COLORREF bg, fg;
+  HBRUSH br;
+  RECT r;
+  char text[256] = "", *t = text;
+  int len;
+
+  if (di->CtlType != ODT_COMBOBOX) return 0;
+  if (di->itemID == (UINT)-1) return 1;
+  dark = theme_is_dark();
+  sel = (di->itemState & ODS_SELECTED) && !(di->itemState & ODS_COMBOBOXEDIT);
+  off = (di->itemState & ODS_DISABLED) != 0;
+  bg = sel ? theme_accent_bg() : (dark ? RGB(0x2D, 0x2D, 0x2D) : GetSysColor(COLOR_WINDOW));
+  fg = off ? GetSysColor(COLOR_GRAYTEXT) : (sel ? (dark || gui.ui_style ? RGB(255, 255, 255) : GetSysColor(COLOR_HIGHLIGHTTEXT)) : (dark ? RGB(0xE0, 0xE0, 0xE0) : GetSysColor(COLOR_WINDOWTEXT)));
+  r = di->rcItem;
+  if (!(gui.ui_style && (di->itemState & ODS_COMBOBOXEDIT)))      /* (Modern: the rounded box behind the chosen one is already drawn) */
+  {
+    br = CreateSolidBrush(bg);
+    FillRect(di->hDC, &r, br);
+    DeleteObject(br);
+  }
+  len = (int)SendMessageA(di->hwndItem, CB_GETLBTEXTLEN, di->itemID, 0);       /* (CB_GETLBTEXT copies the whole text: the buffer must hold it) */
+  if (len >= (int)sizeof(text)) t = (char *)malloc((size_t)len + 1);
+  if (!t) t = text;
+  else if (len >= 0) SendMessageA(di->hwndItem, CB_GETLBTEXT, di->itemID, (LPARAM)t);
+  if (t == text && len >= (int)sizeof(text)) text[0] = '\0';                   /* (no memory: nothing is drawn) */
+  SetBkMode(di->hDC, TRANSPARENT);
+  SetTextColor(di->hDC, fg);
+  r.left += TBS(6);
+  DrawTextA(di->hDC, t, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+  if (t != text) free(t);
+  if ((di->itemState & ODS_FOCUS) && !(di->itemState & ODS_COMBOBOXEDIT) && !sel) { RECT fr = di->rcItem; DrawFocusRect(di->hDC, &fr); }
+  return 1;
+}
+
+static int is_trackbar(HWND h)
+{
+  char cls[32];
+  return GetClassNameA(h, cls, sizeof(cls)) && !lstrcmpiA(cls, "msctls_trackbar32");
+}
+
+/* A color a part lighter (pct > 0) or darker (pct < 0). */
+static COLORREF shade_color(COLORREF c, int pct)
+{
+  int r = GetRValue(c), g = GetGValue(c), b = GetBValue(c);
+
+  if (pct >= 0) { r += (255 - r) * pct / 100; g += (255 - g) * pct / 100; b += (255 - b) * pct / 100; }
+  else          { r += r * pct / 100; g += g * pct / 100; b += b * pct / 100; }
+  return RGB(r, g, b);
+}
+
+/* The slider's knob in the accent color (Windows' own is its own blue, and black while it is held down): lighter in the dark theme and
+   darker in the light one while the pointer is on it or it is held. `prev` is what was asked for so far. Returns what the window's
+   answer to the custom-draw message is. */
+LRESULT theme_trackbar_customdraw(NMHDR *hdr, LRESULT prev)
+{
+  NMCUSTOMDRAW *nm = (NMCUSTOMDRAW *)hdr;
+  int off = !IsWindowEnabled(hdr->hwndFrom);
+
+  if (nm->dwDrawStage == CDDS_PREPAINT) return prev | CDRF_NOTIFYITEMDRAW;
+  if (nm->dwDrawStage == CDDS_ITEMPREPAINT && nm->dwItemSpec == TBCD_CHANNEL && off)
+  {
+    HBRUSH cb = CreateSolidBrush(theme_is_dark() ? RGB(0x44, 0x44, 0x44) : RGB(0xD0, 0xD0, 0xD0));      /* a slider that is switched off: a dim rail */
+    FillRect(nm->hdc, &nm->rc, cb);
+    DeleteObject(cb);
+    return CDRF_SKIPDEFAULT;
+  }
+  if (nm->dwDrawStage == CDDS_ITEMPREPAINT && nm->dwItemSpec == TBCD_THUMB)
+  {
+    LONG st = GetWindowLong(hdr->hwndFrom, GWL_STYLE);
+    int held = (nm->uItemState & CDIS_SELECTED) != 0, hot = (nm->uItemState & CDIS_HOT) != 0, dark = theme_is_dark();
+    COLORREF base = mod_accent(), fill = off ? (dark ? RGB(0x5A, 0x5A, 0x5A) : RGB(0xB8, 0xB8, 0xB8))      /* (a slider that is switched off has a gray knob) */
+                                             : held ? shade_color(base, dark ? 40 : -30) : hot ? shade_color(base, dark ? 20 : -12) : base;
+    RECT rc = nm->rc;
+    POINT pts[5];
+    int mid = (rc.left + rc.right) / 2, tip = (rc.right - rc.left) / 2;
+    HBRUSH br = CreateSolidBrush(fill);
+    HPEN pen = CreatePen(PS_SOLID, 1, fill);
+    HGDIOBJ ob = SelectObject(nm->hdc, br), op = SelectObject(nm->hdc, pen);
+
+    rc.right--; rc.bottom--;
+    if (st & TBS_TOP) { pts[0].x = rc.left; pts[0].y = rc.bottom; pts[1].x = rc.right; pts[1].y = rc.bottom; pts[2].x = rc.right; pts[2].y = rc.top + tip; pts[3].x = mid; pts[3].y = rc.top; pts[4].x = rc.left; pts[4].y = rc.top + tip; }
+    else { pts[0].x = rc.left; pts[0].y = rc.top; pts[1].x = rc.right; pts[1].y = rc.top; pts[2].x = rc.right; pts[2].y = rc.bottom - tip; pts[3].x = mid; pts[3].y = rc.bottom; pts[4].x = rc.left; pts[4].y = rc.bottom - tip; }
+    Polygon(nm->hdc, pts, 5);
+    SelectObject(nm->hdc, ob); SelectObject(nm->hdc, op);
+    DeleteObject(br); DeleteObject(pen);
+    return CDRF_SKIPDEFAULT;
+  }
+  return prev;
+}
+
+/* A window with drop-downs or lists: the window's own code gets the owner-draw messages first (a list with pictures draws itself); the
+   rows of the others are drawn here. */
+static LRESULT CALLBACK combo_rows_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR ref)
+{
+  (void)id; (void)ref;
+  if (m == WM_NCDESTROY) RemoveWindowSubclass(h, combo_rows_proc, 12);
+  else if (m == WM_DRAWITEM && ((const DRAWITEMSTRUCT *)l)->CtlType == ODT_COMBOBOX)
+  {
+    LRESULT r = DefSubclassProc(h, m, w, l);
+    return r ? r : (theme_combo_draw((const DRAWITEMSTRUCT *)l) ? TRUE : FALSE);
+  }
+  else if (m == WM_MEASUREITEM && ((const MEASUREITEMSTRUCT *)l)->CtlType == ODT_COMBOBOX)
+  {
+    LRESULT r = DefSubclassProc(h, m, w, l);
+    return r ? r : (theme_combo_measure((MEASUREITEMSTRUCT *)l) ? TRUE : FALSE);
+  }
+  else if (m == WM_NOTIFY && ((const NMHDR *)l)->code == NM_CUSTOMDRAW && ((const NMHDR *)l)->idFrom != IDC_BROWSER_LIST &&
+           ((gui.accent || gui.ui_style) || is_trackbar(((const NMHDR *)l)->hwndFrom)))
+  {
+    /* The lists of the other windows: the chosen row is drawn in the accent color, as in the game list (Windows would use its own
+       color). The window's own code goes first (the Cheats list draws its boxes), and what it asks for is kept. */
+    NMLVCUSTOMDRAW *cd = (NMLVCUSTOMDRAW *)l;
+    char cls[32];
+    LRESULT r;
+
+    GetClassNameA(cd->nmcd.hdr.hwndFrom, cls, sizeof(cls));
+    r = DefSubclassProc(h, m, w, l);
+    if (!lstrcmpiA(cls, "msctls_trackbar32")) return theme_trackbar_customdraw(&cd->nmcd.hdr, r);
+    if (lstrcmpiA(cls, "SysListView32") != 0) return r;
+    if (!(gui.accent || gui.ui_style)) return r;
+    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return r | CDRF_NOTIFYITEMDRAW;
+    if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return r | CDRF_NOTIFYSUBITEMDRAW;
+    if (cd->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM) &&
+        (ListView_GetItemState(cd->nmcd.hdr.hwndFrom, (int)cd->nmcd.dwItemSpec, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+      HWND list = cd->nmcd.hdr.hwndFrom;
+      RECT cell, client;
+      HBRUSH br;
+      int last = (int)SendMessage(ListView_GetHeader(list), HDM_GETITEMCOUNT, 0, 0) - 1;
+
+      cell.top = cd->iSubItem; cell.left = LVIR_BOUNDS;
+      if (SendMessageA(list, LVM_GETSUBITEMRECT, cd->nmcd.dwItemSpec, (LPARAM)&cell))
+      {
+        if (cd->iSubItem == 0) cell.right = cell.left + ListView_GetColumnWidth(list, 0);     /* (the first cell's rectangle is the whole row's) */
+        if (cd->iSubItem >= last) { GetClientRect(list, &client); if (client.right > cell.right) cell.right = client.right; }
+        br = CreateSolidBrush(theme_accent_bg());
+        FillRect(cd->nmcd.hdc, &cell, br);
+        DeleteObject(br);
+      }
+      cd->clrTextBk = theme_accent_bg();
+      cd->clrText = RGB(255, 255, 255);
+      cd->nmcd.uItemState &= ~(UINT)(CDIS_SELECTED | CDIS_FOCUS);
+      return r | CDRF_NEWFONT;
+    }
+    return r;
+  }
+  return DefSubclassProc(h, m, w, l);
+}
+
 void theme_apply_to_window(HWND hwnd)
 {
   int dark = theme_is_dark();
+
+  SetWindowSubclass(hwnd, combo_rows_proc, 12, 0);
   BOOL dark_bool = dark ? TRUE : FALSE;
 
   if (pSetPreferredAppMode)
@@ -1540,18 +1774,29 @@ static void draw_header_cell(HDC dc, HWND header, int idx, const RECT *prc)
     DeleteObject(br);
 
     /* A column that is switched off is a header cell of no width: nothing of it is drawn (its
-       truncated text used to leave a stray coloured speck at the end of the header row). */
+       truncated text used to leave a stray colored speck at the end of the header row). */
     if (r.right - r.left < 14) return;
 
     memset(&hi, 0, sizeof(hi));
     text[0] = '\0';
-    hi.mask = HDI_TEXT | HDI_FORMAT;
+    hi.mask = HDI_TEXT | HDI_FORMAT | HDI_IMAGE;
     hi.pszText = text;
     hi.cchTextMax = (int)sizeof(text);
     SendMessageA(header, HDM_GETITEMA, (WPARAM)idx, (LPARAM)&hi);
 
     tr = r;
     tr.left += 6;
+    if (hi.fmt & HDF_IMAGE)                            /* a picture at the left of the title (the tick box of the Cheats window) */
+    {
+      HIMAGELIST il = (HIMAGELIST)SendMessageA(header, HDM_GETIMAGELIST, 0, 0);
+      int iw = 0, ih = 0;
+
+      if (il && ImageList_GetIconSize(il, &iw, &ih))
+      {
+        ImageList_Draw(il, hi.iImage, dc, tr.left, r.top + ((r.bottom - r.top) - ih) / 2, ILD_TRANSPARENT);
+        tr.left += iw + 6;
+      }
+    }
     tr.right -= 6;
     if (hi.fmt & (HDF_SORTUP | HDF_SORTDOWN)) tr.right -= 14;
     fmt = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS;
@@ -1583,7 +1828,7 @@ static void draw_header_cell(HDC dc, HWND header, int idx, const RECT *prc)
 }
 
 /* The whole header row painted here in dark mode (rather than relying on the control's own
-   themed painting, which kept its colour): background, every cell, and the empty part at the end. */
+   themed painting, which kept its color): background, every cell, and the empty part at the end. */
 static LRESULT CALLBACK header_paint_subclass_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                                                    UINT_PTR id, DWORD_PTR ref)
 {
@@ -1653,7 +1898,7 @@ LRESULT theme_header_customdraw(NMHDR *hdr)
   {
     SetTextColor(cd->hdc, THEME_DARK_TEXT);
 
-    /* CDRF_NEWFONT, not CDRF_DODEFAULT: it tells the control that the colours
+    /* CDRF_NEWFONT, not CDRF_DODEFAULT: it tells the control that the colors
        set on the DC are meant to be used. With DODEFAULT, a header themed with
        "ItemsView" (set above) drew its own black text instead. */
     return CDRF_NEWFONT;
@@ -1723,7 +1968,7 @@ int theme_draw_menu_bar(HWND hwnd, LPARAM lp)
 
   SelectClipRgn(menu->hdc, NULL);   /* ensure nothing restricts the fill below to less than rect */
 
-  br = CreateSolidBrush(THEME_DARK_BG);
+  br = CreateSolidBrush(THEME_DARK_MENUBAR);
   FillRect(menu->hdc, &rect, br);
   DeleteObject(br);
   theme_paint_menu_line(hwnd, menu->hdc);
@@ -1732,7 +1977,7 @@ int theme_draw_menu_bar(HWND hwnd, LPARAM lp)
 }
 
 /* The 1-pixel line Windows draws between the menu bar and the window's client area is white
-   whatever the theme; painted grey here (in window coordinates, so with a window DC). */
+   whatever the theme; painted gray here (in window coordinates, so with a window DC). */
 void theme_paint_menu_line(HWND hwnd, HDC dc)
 {
   RECT rc_client, rc_window, line;
@@ -1750,10 +1995,19 @@ void theme_paint_menu_line(HWND hwnd, HDC dc)
   line = rc_client;
   line.bottom = line.top;
   line.top--;
-  br = CreateSolidBrush(RGB(0x55, 0x55, 0x55));       /* a grey line, not white and not gone */
+  br = CreateSolidBrush(RGB(0x55, 0x55, 0x55));       /* a gray line, not white and not gone */
   FillRect(dc, &line, br);
   DeleteObject(br);
   if (own) ReleaseDC(hwnd, own);
+}
+
+static int bar_forced_hot = -2;       /* set while theme_paint_menubar_selected() paints */
+
+void theme_paint_menubar_selected(HWND hwnd, int sel)
+{
+  bar_forced_hot = sel;
+  theme_paint_menubar(hwnd, 1);
+  bar_forced_hot = -2;
 }
 
 void theme_paint_menubar(HWND hwnd, int force)
@@ -1783,6 +2037,7 @@ void theme_paint_menubar(HWND hwnd, int force)
     RECT ir;
     if (GetMenuItemRect(hwnd, menu, (UINT)i, &ir) && PtInRect(&ir, pt)) { hot = i; break; }
   }
+  if (bar_forced_hot != -2) hot = bar_forced_hot;
   if (!force && hot == last_hot) return;
   last_hot = hot;
 
@@ -1792,11 +2047,11 @@ void theme_paint_menubar(HWND hwnd, int force)
   rect = mbi.rcBar;
   OffsetRect(&rect, -wr.left, -wr.top);
   rect.right = wr.right - wr.left;
-  br = CreateSolidBrush(THEME_DARK_BG);
+  br = CreateSolidBrush(THEME_DARK_MENUBAR);
   FillRect(dc, &rect, br);
   DeleteObject(br);
 
-  if (gui.large_ui) font = gui_get_ui_font();
+  if (theme_menus_owner()) font = theme_menu_font();
   else
   {
     static HFONT menu_font;
@@ -1832,7 +2087,7 @@ void theme_paint_menubar(HWND hwnd, int force)
     GetMenuItemInfoA(menu, (UINT)i, TRUE, &mii);
     if ((mii.fType & MFT_OWNERDRAW) && mii.dwItemData) lstrcpynA(text, (const char *)mii.dwItemData, sizeof(text));
 
-    br = CreateSolidBrush(i == hot ? THEME_DARK_HOT : THEME_DARK_BG);
+    br = CreateSolidBrush(i == hot ? THEME_DARK_HOT : THEME_DARK_MENUBAR);
     FillRect(dc, &ir, br);
     DeleteObject(br);
     SetTextColor(dc, (st != (UINT)-1 && (st & (MF_GRAYED | MF_DISABLED))) ? THEME_DARK_MUTED : THEME_DARK_TEXT);
@@ -1867,7 +2122,7 @@ int theme_draw_menu_item(LPARAM lp)
   text[0] = 0;
   GetMenuItemInfoA(item->um.hmenu, item->umi.iPosition, TRUE, &mii);
 
-  /* With Larger UI the bar titles are owner-drawn: an owner-drawn item has no
+  /* With the Large interface the bar titles are owner-drawn: an owner-drawn item has no
      text of its own to ask for (that read comes back empty, which painted the
      titles as blanks until the mouse was over them). Its text is the copy kept
      in itemData, drawn here in the larger font. */
@@ -1889,15 +2144,15 @@ int theme_draw_menu_item(LPARAM lp)
   selected = (item->dis.itemState & (ODS_HOTLIGHT | ODS_SELECTED)) != 0;
   disabled = (item->dis.itemState & ODS_DISABLED) != 0;
 
-  br = CreateSolidBrush(selected ? THEME_DARK_HOT : THEME_DARK_BG);
+  br = CreateSolidBrush(selected ? (gui.ui_style ? theme_accent_bg() : THEME_DARK_HOT) : THEME_DARK_MENUBAR);
   FillRect(item->um.hdc, &rect, br);
   DeleteObject(br);
 
   old_mode = SetBkMode(item->um.hdc, TRANSPARENT);
   old_text = SetTextColor(item->um.hdc, disabled ? THEME_DARK_MUTED : THEME_DARK_TEXT);
 
-  if (use_big_font) old_font = SelectObject(item->um.hdc, gui_get_ui_font());
-  DrawTextA(item->um.hdc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+  if (use_big_font) old_font = SelectObject(item->um.hdc, theme_menu_font());
+  DrawTextA(item->um.hdc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | ((item->dis.itemState & ODS_NOACCEL) ? DT_HIDEPREFIX : 0));
   if (use_big_font) SelectObject(item->um.hdc, old_font);
 
   SetTextColor(item->um.hdc, old_text);
@@ -1922,11 +2177,21 @@ int theme_draw_menu_item(LPARAM lp)
  ****************************************************************************/
 
 /* Item text is stored here at conversion time (not re-queried at
-   measure/draw time) because popup items -- "Save Slot", "Theme", and
+   measure/draw time) because popup items -- "Select State Slot", "Theme", and
    so on -- have no usable command ID to look themselves up by; only
    leaf command items do. Storing the string once, up front, works
    uniformly for both. Never freed -- one-time setup for the app's
    lifetime, same as the cached large font. */
+/* The Style the menu bar in use was made for: a Style changed while a menu is open takes effect when the bar is made again, and what
+   is open is still drawn the way it was made. -1 until the first bar is made. */
+static int menus_made_style = -1;
+
+/* The menus are drawn by the program (and so use its font) with the Large interface or the Modern style; otherwise the system draws them. */
+int theme_menus_owner(void)
+{
+  return gui.large_ui || (menus_made_style < 0 ? gui.ui_style : menus_made_style);
+}
+
 static void convert_item_to_ownerdraw(HMENU menu, int pos)
 {
   MENUITEMINFOA mii;
@@ -1941,6 +2206,7 @@ static void convert_item_to_ownerdraw(HMENU menu, int pos)
   text[0] = '\0';
 
   if (!GetMenuItemInfoA(menu, (UINT)pos, TRUE, &mii)) return;
+  if (mii.fType & MFT_OWNERDRAW) return;                 /* already done */
 
   if (mii.fType & MFT_SEPARATOR)
   {
@@ -1955,20 +2221,24 @@ static void convert_item_to_ownerdraw(HMENU menu, int pos)
   if (!stored) return;
   lstrcpyA(stored, text);
 
-  mii.fMask = MIIM_FTYPE | MIIM_DATA;
+  mii.fMask = MIIM_FTYPE | MIIM_DATA | MIIM_BITMAP;      /* (a picture in the menu's own bitmap slot would make Windows size the menu to it) */
   mii.fType |= MFT_OWNERDRAW;
   mii.dwItemData = (ULONG_PTR)stored;
+  mii.hbmpItem = NULL;
   SetMenuItemInfoA(menu, (UINT)pos, TRUE, &mii);
 }
 
-/* Recurses into every submenu (Save Slot, Theme, Aspect Ratio, and so
+/* Recurses into every submenu (Select State Slot, Theme, Aspect Ratio, and so
    on) so the whole menu tree is owner-drawn consistently, not just the
    top level. Call once, at startup, only when large_ui is on. */
+static void menu_frame_hook_install(void);
+
 void theme_ownerdraw_menu(HMENU menu)
 {
   int count, i;
 
   if (!menu) return;
+  menu_frame_hook_install();
   count = GetMenuItemCount(menu);
   if (count < 0) return;
 
@@ -1982,6 +2252,57 @@ void theme_ownerdraw_menu(HMENU menu)
   }
 }
 
+static int menu_item_position(HMENU menu, ULONG_PTR item_data);
+
+static HMENU bar_menu;                  /* the menu bar, known before it is attached to the window */
+
+void theme_set_menu_bar(HMENU menu) { bar_menu = menu; menus_made_style = gui.ui_style; }
+
+static void own_icon_set(ULONG_PTR key, HBITMAP b);
+
+/* Gives the system back its own drawing of a menu (the Modern font in the menus was switched off). */
+void theme_menu_forget(ULONG_PTR key)
+{
+  if (key) own_icon_set(key, NULL);
+}
+
+void theme_unconvert_menu(HMENU menu)
+{
+  int count, i;
+
+  if (!menu) return;
+  count = GetMenuItemCount(menu);
+  for (i = 0; i < count; i++)
+  {
+    HMENU sub = GetSubMenu(menu, i);
+    MENUITEMINFOA mii;
+
+    if (sub) theme_unconvert_menu(sub);
+    memset(&mii, 0, sizeof(mii));
+    mii.cbSize = sizeof(mii);
+    mii.fMask = MIIM_FTYPE | MIIM_DATA;
+    if (!GetMenuItemInfoA(menu, (UINT)i, TRUE, &mii) || !(mii.fType & MFT_OWNERDRAW)) continue;
+    if (!mii.dwItemData)
+    {
+      mii.fMask = MIIM_FTYPE;
+      mii.fType = (mii.fType & ~MFT_OWNERDRAW) | MFT_SEPARATOR;
+    }
+    else
+    {
+      char *text = (char *)mii.dwItemData;
+      mii.fMask = MIIM_FTYPE | MIIM_STRING | MIIM_DATA;
+      mii.fType &= ~MFT_OWNERDRAW;
+      mii.dwTypeData = text;
+      mii.dwItemData = 0;
+      SetMenuItemInfoA(menu, (UINT)i, TRUE, &mii);
+      own_icon_set((ULONG_PTR)text, NULL);
+      free(text);
+      continue;
+    }
+    SetMenuItemInfoA(menu, (UINT)i, TRUE, &mii);
+  }
+}
+
 int theme_measure_menu_ownerdraw(LPARAM lp)
 {
   MEASUREITEMSTRUCT *mis = (MEASUREITEMSTRUCT *)lp;
@@ -1989,8 +2310,9 @@ int theme_measure_menu_ownerdraw(LPARAM lp)
   HFONT font, old_font;
   SIZE sz;
   char *text;
+  int dpi;
 
-  if (!gui.large_ui) return 0;
+  if (!theme_menus_owner()) return 0;
   if (!mis || mis->CtlType != ODT_MENU) return 0;
 
   text = (char *)mis->itemData;
@@ -2004,17 +2326,56 @@ int theme_measure_menu_ownerdraw(LPARAM lp)
   }
 
   hdc = GetDC(NULL);
-  font = gui_get_ui_font();
+  font = theme_menu_font();
   old_font = (HFONT)SelectObject(hdc, font);
-  GetTextExtentPoint32A(hdc, text, lstrlenA(text), &sz);
+  {
+    char plain[256], *o = plain;
+    const char *p;
+
+    for (p = text; *p && o < plain + sizeof(plain) - 1; p++)       /* the "&" of a mnemonic is not drawn: it is not part of the width */
+    {
+      if (*p == '&' && p[1]) { p++; if (*p != '&' ) { *o++ = *p; continue; } }
+      *o++ = *p;
+    }
+    *o = '\0';
+    GetTextExtentPoint32A(hdc, plain, lstrlenA(plain), &sz);
+    if (!strncmp(plain, "Slot ", 5))                  /* a state slot: wide enough for a date too (the menu is measured before its dates are filled in) */
+    {
+      char wide[128] = "Slot 0 - 00:00:00  00/00/0000";
+      const char *tab = strchr(plain, '\t');
+      SIZE ws;
+
+      if (tab) lstrcpynA(wide + lstrlenA(wide), tab, (int)sizeof(wide) - lstrlenA(wide));
+      GetTextExtentPoint32A(hdc, wide, lstrlenA(wide), &ws);
+      if (ws.cx > sz.cx) sz.cx = ws.cx;
+    }
+  }
   SelectObject(hdc, old_font);
+  dpi = GetDeviceCaps(hdc, LOGPIXELSX);
   ReleaseDC(NULL, hdc);
 
   /* Margin beyond the raw text size for the selection highlight and
      checkmark/submenu-arrow gutter, the same way Windows' own default
      menu metrics include room beyond the text itself. */
-  mis->itemWidth  = (UINT)sz.cx + 20;
-  mis->itemHeight = (UINT)(sz.cy * 1.5);
+  {
+    int on_bar = menu_item_position(bar_menu ? bar_menu : GetMenu(g_hwnd), (ULONG_PTR)text) >= 0;
+
+    if (gui.large_ui)
+    {
+      /* The Large interface: the same idea, with roomier rows; Windows adds about 15 pixels (at 100 %) of its own to a title on the bar. */
+      mis->itemWidth  = on_bar ? (UINT)(sz.cx + 4 * dpi / 96) : (UINT)sz.cx + 36;     /* a dropdown item: room for the picture gutter and the arrow */
+      mis->itemHeight = on_bar ? (UINT)(sz.cy + 12) : (UINT)(sz.cy * 1.25);                 /* (a title on the bar has room for the tails of g, p and y) */
+    }
+    else
+    {
+      /* Normal size (the Modern font in the menus): the spacing the system gives its own menus -- a few pixels around a title on the
+         bar, and a dropdown row about as high as its text plus 5. */
+      /* (On the bar Windows adds about 15 pixels of its own to an owner-drawn title -- seen in Windows 11 at 100 % -- so the title is
+         made narrower by 2, which leaves the 13 pixels between two titles that the system menu has.) */
+      mis->itemWidth  = on_bar ? (UINT)(sz.cx - 2 * dpi / 96 > 4 ? sz.cx - 2 * dpi / 96 : 4) : (UINT)sz.cx + 32;
+      mis->itemHeight = (UINT)(sz.cy + 5);
+    }
+  }
 
   return 1;
 }
@@ -2073,20 +2434,20 @@ static int menu_item_has_submenu(HMENU menu, ULONG_PTR item_data)
 
 /* Windows draws a submenu's arrow itself, in black, right after an
    owner-drawn item has been painted -- which vanishes against a dark item.
-   So in dark mode the arrow is drawn here in the text colour, and its area is
+   So in dark mode the arrow is drawn here in the text color, and its area is
    then clipped out of the DC so the system's black one cannot go on top.
 
    It is drawn to match the system's own arrow, measured from a light-mode
    screenshot at a 30 px item height: a staircase triangle 4 px wide and 7 px
    tall (column 0 spans 7 rows, then 5, 3 and 1), its tip 8 px in from the
-   item's right edge and its middle about 2 px above the item's centre. The
+   item's right edge and its middle about 2 px above the item's center. The
    size scales with the item height so it stays in proportion. */
 static void draw_dark_submenu_arrow(HDC hdc, const RECT *r, int disabled)
 {
   int h    = r->bottom - r->top;
   int half = (3 * h + 15) / 30;                     /* 3 at a 30 px item */
   int tip  = r->right - 8;                          /* x of the tip's column */
-  int cy   = (r->top + r->bottom) / 2 - (h + 7) / 15;   /* 2 px above centre at 30 px */
+  int cy   = (r->top + r->bottom) / 2 - (h + 7) / 15;   /* 2 px above center at 30 px */
   int zone = (h > 24) ? h : 24;
   COLORREF color = disabled ? THEME_DARK_MUTED : THEME_DARK_TEXT;
   HBRUSH br = CreateSolidBrush(color);
@@ -2111,6 +2472,68 @@ static void draw_dark_submenu_arrow(HDC hdc, const RECT *r, int disabled)
   ExcludeClipRect(hdc, r->right - zone, r->top, r->right, r->bottom);
 }
 
+/* The pictures of the owner-drawn (Large interface) menu items, by the item's data: the menu's own bitmap slot makes Windows size the
+   whole menu to the picture, so the items keep them here and paint them themselves. */
+static struct { ULONG_PTR key; HBITMAP bmp; } own_icons[8192];
+static int own_icon_n;
+
+static HBITMAP own_icon_get(ULONG_PTR key)
+{
+  int i;
+  for (i = 0; i < own_icon_n; i++) if (own_icons[i].key == key) return own_icons[i].bmp;
+  return NULL;
+}
+
+/* An item's text was replaced (main.c, menu_set_text): its picture follows the new pointer. */
+void theme_menu_text_moved(ULONG_PTR old_key, ULONG_PTR new_key)
+{
+  int i;
+  for (i = 0; i < own_icon_n; i++) if (own_icons[i].key == old_key) { own_icons[i].key = new_key; return; }
+}
+
+static void own_icon_set(ULONG_PTR key, HBITMAP b)
+{
+  int i;
+  for (i = 0; i < own_icon_n; i++) if (own_icons[i].key == key) { own_icons[i].bmp = b; return; }
+  if (own_icon_n < (int)(sizeof(own_icons) / sizeof(own_icons[0]))) { own_icons[own_icon_n].key = key; own_icons[own_icon_n].bmp = b; own_icon_n++; }
+}
+
+/* The background of the menus the program draws in the light theme: what the system menus have on Windows 11 (white for the bar; a drop-down
+   #F3F3F3, a little grayer than the system's #F9F9F9, as chosen), the system colors on an older Windows. */
+static COLORREF menu_light_bg(int bar)
+{
+  static int win11 = -1;
+
+  if (win11 < 0)
+  {
+    typedef LONG (WINAPI *rtl_t)(OSVERSIONINFOW *);
+    OSVERSIONINFOW vi;
+    rtl_t fn = (rtl_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlGetVersion");
+
+    memset(&vi, 0, sizeof(vi));
+    vi.dwOSVersionInfoSize = sizeof(vi);
+    win11 = fn && fn(&vi) == 0 && vi.dwBuildNumber >= 22000;
+  }
+  if (win11) return bar ? RGB(0xFF, 0xFF, 0xFF) : RGB(0xF3, 0xF3, 0xF3);
+  return GetSysColor(bar ? COLOR_MENUBAR : COLOR_MENU);
+}
+
+/* The icon font at a size, kept (one at a time): the check marks of the owner-drawn menus. NULL when no icon font is installed. */
+static HFONT menu_check_font(int px)
+{
+  static HFONT f;
+  static int for_px;
+
+  if (px < 10) px = 10;
+  if (f && for_px == px) return f;
+  if (f) { DeleteObject(f); f = NULL; }
+  /* Segoe UI Symbol has the heavy check mark (U+2714): it stays clear at menu size, unlike the thin one of the icon font. */
+  f = CreateFontW(-px, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Symbol");
+  for_px = px;
+  return f;
+}
+
 int theme_draw_menu_ownerdraw(LPARAM lp)
 {
   DRAWITEMSTRUCT *dis = (DRAWITEMSTRUCT *)lp;
@@ -2119,7 +2542,7 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
   HBRUSH br;
   RECT r;
 
-  if (!gui.large_ui) return 0;
+  if (!theme_menus_owner()) return 0;
   if (!dis || dis->CtlType != ODT_MENU) return 0;
 
   text     = (char *)dis->itemData;
@@ -2129,11 +2552,32 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
   dark     = theme_is_dark();
   r        = dis->rcItem;
 
-  br = CreateSolidBrush(dark ? (selected ? THEME_DARK_HOT : THEME_DARK_BG)
-                              : GetSysColor(selected ? COLOR_HIGHLIGHT : COLOR_MENU));
-  FillRect(dis->hDC, &r, br);
+  {
+    int on_bar = (HMENU)dis->hwndItem == GetMenu(g_hwnd);
+    COLORREF bgc = dark ? (on_bar ? THEME_DARK_MENUBAR : THEME_DARK_MENU) : menu_light_bg(on_bar);        /* (the same with the Large interface or not) */
+    COLORREF fillc = !selected ? bgc
+                   : (gui.ui_style && !disabled) ? theme_accent_bg()                                  /* the Modern style: the accent color (not on a grayed item: its text would not read) */
+                   : dark ? THEME_DARK_HOT : (disabled ? RGB(0xE5, 0xE5, 0xE5) : GetSysColor(COLOR_HIGHLIGHT));
 
-  if (dark && (HMENU)dis->hwndItem == GetMenu(g_hwnd))
+    br = CreateSolidBrush(fillc);
+    if (selected && gui.ui_style && !on_bar)
+    {
+      /* The Modern style: the chosen item of a drop-down is a rounded patch (a title on the bar stays a plain rectangle), with a little room round it, drawn smooth. */
+      mod_ss ss;
+      int w = r.right - r.left, h = r.bottom - r.top;
+      int ix = mod_dpi_px(dis->hDC, 4), iy = mod_dpi_px(dis->hDC, 2);
+
+      if (mod_ss_begin(&ss, dis->hDC, w, h, bgc))
+      {
+        mod_ss_round(&ss, ix, iy, w - 2 * ix, h - 2 * iy, (double)mod_dpi_px(dis->hDC, 4), fillc, CLR_INVALID, 0);
+        mod_ss_end(&ss, dis->hDC, r.left, r.top);
+      }
+      else FillRect(dis->hDC, &r, br);
+    }
+    else FillRect(dis->hDC, &r, br);
+  }
+
+  if ((HMENU)dis->hwndItem == GetMenu(g_hwnd))
   {
     /* Fill from this item's right edge to the window's right edge, but only
        when this item is the last one on its own row -- either the very last
@@ -2142,7 +2586,7 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
        only the item whose state actually changed (e.g. just "Emulation" when
        its dropdown opens), not the whole bar, so filling rightward from any
        item that has another item sitting to its right would erase that
-       neighbour, which is not due to repaint at this moment.
+       neighbor, which is not due to repaint at this moment.
 
        This used to be decided by comparing GetMenuStringA()'s text for the
        last position against this item's own text -- but GetMenuStringA()
@@ -2178,7 +2622,7 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
     if (is_last_on_row)
     {
       RECT rc_window;
-      HBRUSH bg_br = CreateSolidBrush(THEME_DARK_BG);   /* always the plain background, never the highlight color */
+      HBRUSH bg_br = CreateSolidBrush(dark ? THEME_DARK_MENUBAR : menu_light_bg(1));   /* always the plain background, never the highlight color (with the Modern font in the menus the bar is one color to its end) */
       GetWindowRect(g_hwnd, &rc_window);
       {
         int full_width = rc_window.right - rc_window.left;
@@ -2214,19 +2658,33 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
   }
 
   {
-    HFONT font = gui_get_ui_font();
+    HFONT font = theme_menu_font();
     HFONT old_font = (HFONT)SelectObject(dis->hDC, font);
     RECT text_rect = r;
+    UINT hide_prefix = (dis->itemState & ODS_NOACCEL) ? DT_HIDEPREFIX : 0;      /* the mnemonic underlines show only when the system asks (Alt pressed) */
 
     SetBkMode(dis->hDC, TRANSPARENT);
     SetTextColor(dis->hDC, dark
         ? (disabled ? THEME_DARK_MUTED : THEME_DARK_TEXT)
         : GetSysColor(disabled ? COLOR_GRAYTEXT : (selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT)));
+    if (selected && gui.ui_style && !disabled) SetTextColor(dis->hDC, RGB(255, 255, 255));        /* (on the accent color) */
 
     /* Room for the checkmark gutter in a dropdown; the menu bar's own titles have
-       none and are centred, or the text would be pushed out of its box. */
+       none and are centered, or the text would be pushed out of its box. */
     if ((HMENU)dis->hwndItem == GetMenu(g_hwnd))
-      DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | DT_CENTER);
+    {
+      /* The system clips an owner-drawn title to its row; the tails of g, p and y are let out a little below it. */
+      HRGN rg = CreateRectRgn(r.left, r.top, r.right, r.bottom + 6);
+      SelectClipRgn(dis->hDC, rg);
+      DeleteObject(rg);
+      if (gui.large_ui)                      /* (the row the system gives a title is shorter than the big font: the text sits a little higher, so the tails of g, p and y fit) */
+      {
+        text_rect.top -= 2;
+        text_rect.bottom -= 2;
+      }
+      DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | DT_CENTER | DT_NOCLIP | hide_prefix);
+      SelectClipRgn(dis->hDC, NULL);
+    }
     else
       text_rect.left += 24;
 
@@ -2237,7 +2695,7 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
       {
         RECT shortcut_rect = text_rect;
         *tab = '\0';
-        DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | DT_LEFT);
+        DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | DT_LEFT | hide_prefix);
         shortcut_rect.right -= 8;
         /* A shortcut hint reads as a secondary detail next to the item's own
            label, not something that should compete with it for attention --
@@ -2246,13 +2704,41 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
            looked like the two were equally important. Disabled rows keep
            their single, already-dim color throughout; this only affects
            enabled ones. */
-        if (!disabled) SetTextColor(dis->hDC, dark ? RGB(150, 150, 150) : GetSysColor(COLOR_GRAYTEXT));
+        if (!disabled && !selected) SetTextColor(dis->hDC, dark ? RGB(150, 150, 150) : GetSysColor(COLOR_GRAYTEXT));       /* (the chosen item's own text color reads on its highlight: the dim one did not) */
         DrawTextA(dis->hDC, tab + 1, -1, &shortcut_rect, DT_VCENTER | DT_SINGLELINE | DT_RIGHT);
         *tab = '\t';   /* restore -- this string is reused every time the item repaints */
       }
       else
       {
-        DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | DT_LEFT);
+        DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | DT_LEFT | hide_prefix);
+      }
+    }
+
+    if ((HMENU)dis->hwndItem != GetMenu(g_hwnd))
+    {
+      /* The picture of the item (the same ones the other menus show, set as the item's bitmap), in the gutter before the text;
+         with a picture the item's check mark is the box the picture is drawn on, so no tick is drawn. */
+      HBITMAP pic = own_icon_get((ULONG_PTR)text);
+
+      {
+        {
+          BITMAP bm;
+
+          if (pic && GetObject(pic, sizeof(bm), &bm) && bm.bmWidth > 0 && bm.bmHeight > 0)
+          {
+            HDC mem = CreateCompatibleDC(dis->hDC);
+            HGDIOBJ oldb = SelectObject(mem, pic);
+            BLENDFUNCTION bf;
+            int x = r.left + (24 - bm.bmWidth) / 2, y = r.top + ((r.bottom - r.top) - bm.bmHeight) / 2;
+
+            if (x < r.left + 1) x = r.left + 1;
+            bf.BlendOp = AC_SRC_OVER; bf.BlendFlags = 0; bf.SourceConstantAlpha = disabled ? 110 : 255; bf.AlphaFormat = AC_SRC_ALPHA;
+            AlphaBlend(dis->hDC, x, y, bm.bmWidth, bm.bmHeight, mem, 0, 0, bm.bmWidth, bm.bmHeight, bf);
+            SelectObject(mem, oldb);
+            DeleteDC(mem);
+            checked = 0;
+          }
+        }
       }
     }
 
@@ -2263,17 +2749,55 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
          theme, which stood out against a dark item background. This
          way nothing is drawn but the checkmark itself, in a color that
          matches the surrounding text. */
-      HPEN pen = CreatePen(PS_SOLID, 2, dark ? THEME_DARK_TEXT : RGB(0, 0, 0));
-      HPEN old_pen = (HPEN)SelectObject(dis->hDC, pen);
-      int cx = r.left + 12;
-      int cy = (r.top + r.bottom) / 2;
+      int px = (r.bottom - r.top) * 5 / 8;                       /* the size of the tick follows the row */
+      HFONT icons = menu_check_font(px);
+      COLORREF tick = dark ? THEME_DARK_TEXT : GetSysColor(COLOR_MENUTEXT);
 
-      MoveToEx(dis->hDC, cx - 5, cy, NULL);
-      LineTo(dis->hDC, cx - 2, cy + 4);
-      LineTo(dis->hDC, cx + 5, cy - 5);
+      MENUITEMINFOA rmi;
+      int radio;
 
-      SelectObject(dis->hDC, old_pen);
-      DeleteObject(pen);
+      if (selected && gui.ui_style) tick = RGB(255, 255, 255);
+      ZeroMemory(&rmi, sizeof(rmi));
+      rmi.cbSize = sizeof(rmi);
+      rmi.fMask = MIIM_FTYPE;
+      radio = GetMenuItemInfoA((HMENU)dis->hwndItem, dis->itemID, FALSE, &rmi) && (rmi.fType & MFT_RADIOCHECK);
+      if (radio)
+      {
+        /* One choice of several (a radio item): a dot, not a check mark. */
+        int rad = (r.bottom - r.top) / 7 + 1, cx = r.left + 12, cy = (r.top + r.bottom) / 2;
+        HBRUSH dot = CreateSolidBrush(tick);
+        HPEN dpen = CreatePen(PS_SOLID, 1, tick);
+        HGDIOBJ ob = SelectObject(dis->hDC, dot), op = SelectObject(dis->hDC, dpen);
+
+        Ellipse(dis->hDC, cx - rad, cy - rad, cx + rad + 1, cy + rad + 1);
+        SelectObject(dis->hDC, ob); SelectObject(dis->hDC, op);
+        DeleteObject(dot); DeleteObject(dpen);
+      }
+      else if (icons)
+      {
+        /* The heavy check mark of Segoe UI Symbol, drawn with smoothing (a pen draws it jagged). */
+        RECT box = r;
+        HGDIOBJ of = SelectObject(dis->hDC, icons);
+
+        box.right = box.left + 24;
+        SetTextColor(dis->hDC, tick);
+        DrawTextW(dis->hDC, L"\x2714", 1, &box, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(dis->hDC, of);
+      }
+      else
+      {
+        HPEN pen = CreatePen(PS_SOLID, 2, tick);
+        HPEN old_pen = (HPEN)SelectObject(dis->hDC, pen);
+        int cx = r.left + 12;
+        int cy = (r.top + r.bottom) / 2;
+
+        MoveToEx(dis->hDC, cx - 5, cy, NULL);
+        LineTo(dis->hDC, cx - 2, cy + 4);
+        LineTo(dis->hDC, cx + 5, cy - 5);
+
+        SelectObject(dis->hDC, old_pen);
+        DeleteObject(pen);
+      }
     }
 
     /* Submenu arrow, dark mode only (the system's black one is right on a
@@ -2295,8 +2819,8 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
  *
  * A small picture beside the text of each action in the menus, drawn from the icon font Windows ships (Segoe Fluent Icons
  * on Windows 11, Segoe MDL2 Assets on Windows 10). Each glyph is rendered once into a bitmap with its own alpha, in the
- * text colour of the theme, and handed to the menu item (MIIM_BITMAP); the system lays the menu out around it. Choices that
- * carry a check mark or a radio dot have none: the mark and a picture would share one place. Not used with Larger UI,
+ * color of its kind of action (menu_icon_color), and handed to the menu item (MIIM_BITMAP); the system lays the menu out around it. Choices that
+ * carry a check mark or a radio dot have none: the mark and a picture would share one place. Not used with the Large interface,
  * whose owner-drawn menus have no room for it, nor when neither font is installed.
  ****************************************************************************/
 
@@ -2325,7 +2849,7 @@ static const menu_icon_id menu_icon_ids[] =
   { IDM_TOOLS_MOVIE_REC, 0xE7FC }, { IDM_TOOLS_MOVIE_PLAY, 0xE768 }, { IDM_TOOLS_MOVIE_STOP, 0xE71A },
   { IDM_FILE_SCREENSHOT, 0xE722 },
   { IDM_OPTIONS_SETTINGS, 0xE713 },
-  { IDM_VIDEO_FULLSCREEN_START, 0xE92D }, { IDM_INPUT_BACKGROUND, 0xE80C }, { IDM_EMU_PAUSE_UNFOCUSED, 0xF2D9 }, { IDM_EMU_AUTOSAVE, 0xF470 }, { IDM_VIDEO_ALWAYS_ON_TOP, 0xE718 }, { IDM_VIDEO_VSYNC, 0xEABB },
+  { IDM_VIDEO_FULLSCREEN_START, 0xE92D }, { IDM_VIDEO_PICTUREADJ, 0xE790 }, { IDM_INPUT_BACKGROUND, 0xE80C }, { IDM_EMU_PAUSE_UNFOCUSED, 0xF2D9 }, { IDM_EMU_AUTOSAVE, 0xF470 }, { IDM_VIDEO_ALWAYS_ON_TOP, 0xE718 }, { IDM_VIDEO_VSYNC, 0xEABB },
   { IDM_HELP_SHORTCUTS, 0xE765 }, { IDM_HELP_MENUGUIDE, 0xE897 }, { IDM_HELP_ABOUT, 0xE946 },
 };
 
@@ -2346,7 +2870,7 @@ static const menu_icon_title menu_icon_titles[] =
 };
 
 static HBITMAP menu_icon_bmp[96];
-static HBITMAP menu_icon_bmp_on[96];        /* the same picture on a coloured box, for a choice that is switched on */
+static HBITMAP menu_icon_bmp_on[96];        /* the same picture on a colored box, for a choice that is switched on */
 static unsigned short menu_icon_glyph[96];
 static int menu_icon_n;
 
@@ -2451,19 +2975,76 @@ static HBITMAP menu_icon_make_toolbar(int icon, int sz, COLORREF fg)
   return bmp;
 }
 
+/* The color of a menu picture: one per kind of action, a bright shade on the dark theme and a deeper one on the light theme, so
+   the pictures read as a set and each kind is told apart at a glance. */
+static COLORREF menu_icon_color(unsigned short glyph, int dark)
+{
+  static const struct { unsigned short g; unsigned char d[3], l[3]; } tab[] =
+  {
+    /* files and folders: amber */
+    { 0xE8E5, {0xF5,0xB8,0x3D}, {0xB9,0x78,0x00} }, { 0xE838, {0xF5,0xB8,0x3D}, {0xB9,0x78,0x00} }, { 0xE8B7, {0xF5,0xB8,0x3D}, {0xB9,0x78,0x00} },
+    { 0xE8B9, {0xF5,0xB8,0x3D}, {0xB9,0x78,0x00} },
+    /* states: save blue, load teal, history and slots indigo, undo orange */
+    { 0xE74E, {0x4D,0xA3,0xFF}, {0x0B,0x62,0xC4} }, { 0xE792, {0x4D,0xA3,0xFF}, {0x0B,0x62,0xC4} },
+    { 0xE896, {0x2E,0xC4,0xB6}, {0x0F,0x8F,0x85} },
+    { 0xE71D, {0x7C,0x8C,0xFF}, {0x3F,0x4F,0xB8} }, { 0xE81C, {0x7C,0x8C,0xFF}, {0x3F,0x4F,0xB8} },
+    { 0xE7A7, {0xFF,0x9F,0x43}, {0xC2,0x5E,0x00} },
+    /* close, stop, power, delete: red */
+    { 0xE711, {0xFF,0x6B,0x6B}, {0xC6,0x28,0x28} }, { 0xE71A, {0xFF,0x6B,0x6B}, {0xC6,0x28,0x28} }, { 0xE7E8, {0xFF,0x6B,0x6B}, {0xC6,0x28,0x28} },
+    { 0xE74D, {0xFF,0x6B,0x6B}, {0xC6,0x28,0x28} }, { 0xE75C, {0xFF,0x6B,0x6B}, {0xC6,0x28,0x28} },
+    /* pause, reset, slower: orange; play, add, refresh: green */
+    { 0xE769, {0xFF,0xA9,0x4D}, {0xC4,0x6A,0x00} }, { MENU_ICON_TOOLBAR_RESET, {0xFF,0xA9,0x4D}, {0xC4,0x6A,0x00} }, { 0xE738, {0xFF,0xA9,0x4D}, {0xC4,0x6A,0x00} },
+    { 0xE768, {0x4C,0xC7,0x64}, {0x1E,0x8A,0x3A} }, { 0xE710, {0x4C,0xC7,0x64}, {0x1E,0x8A,0x3A} }, { MENU_ICON_TOOLBAR_REFRESH, {0x4C,0xC7,0x64}, {0x1E,0x8A,0x3A} },
+    { 0xE72C, {0x4C,0xC7,0x64}, {0x1E,0x8A,0x3A} },
+    /* speed: purple */
+    { 0xEB9D, {0xB3,0x88,0xFF}, {0x6A,0x3F,0xC4} }, { 0xEB9E, {0xB3,0x88,0xFF}, {0x6A,0x3F,0xC4} }, { 0xE916, {0xB3,0x88,0xFF}, {0x6A,0x3F,0xC4} },
+    /* picture: sky blue */
+    { 0xE740, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} }, { 0xE73F, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} }, { 0xE71C, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} },
+    { 0xEA99, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} }, { 0xE794, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} }, { 0xE700, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} },
+    { 0xE7F4, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} }, { 0xE799, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} }, { 0xE739, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} },
+    { 0xE8CB, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} }, { 0xE84F, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} }, { 0xF1BA, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} },
+    { 0xE8A9, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} }, { 0xE923, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} }, { 0xE737, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} },
+    { 0xE8FD, {0x38,0xBD,0xF8}, {0x03,0x69,0xA1} },
+    /* look of the program: violet */
+    { 0xE790, {0xD1,0x8B,0xFF}, {0x8A,0x3F,0xC4} }, { 0xE771, {0xD1,0x8B,0xFF}, {0x8A,0x3F,0xC4} },
+    /* sound: pink */
+    { 0xEA41, {0xF4,0x72,0xB6}, {0xB0,0x30,0x6E} }, { 0xE74F, {0xF4,0x72,0xB6}, {0xB0,0x30,0x6E} }, { 0xE767, {0xF4,0x72,0xB6}, {0xB0,0x30,0x6E} },
+    /* controls: lime */
+    { 0xE7FC, {0xA3,0xE6,0x35}, {0x5C,0x8A,0x00} }, { 0xE765, {0xA3,0xE6,0x35}, {0x5C,0x8A,0x00} }, { 0xE80C, {0xA3,0xE6,0x35}, {0x5C,0x8A,0x00} },
+    /* cheats and favorites: gold */
+    { 0xE8EC, {0xFA,0xCC,0x15}, {0xA1,0x62,0x07} }, { 0xE721, {0xFA,0xCC,0x15}, {0xA1,0x62,0x07} }, { 0xE734, {0xFA,0xCC,0x15}, {0xA1,0x62,0x07} },
+    /* network, region, info, help: blue */
+    { 0xE968, {0x4D,0xA3,0xFF}, {0x0B,0x62,0xC4} }, { 0xE774, {0x4D,0xA3,0xFF}, {0x0B,0x62,0xC4} }, { 0xE946, {0x4D,0xA3,0xFF}, {0x0B,0x62,0xC4} },
+    { 0xE897, {0x4D,0xA3,0xFF}, {0x0B,0x62,0xC4} }, { 0xE71B, {0x4D,0xA3,0xFF}, {0x0B,0x62,0xC4} },
+    { 0xE967, {0x7C,0x8C,0xFF}, {0x3F,0x4F,0xB8} },
+    /* recording: rose */
+    { 0xE722, {0xFF,0x5C,0x7A}, {0xC0,0x26,0x4A} }, { 0xE714, {0xFF,0x5C,0x7A}, {0xC0,0x26,0x4A} }, { 0xE720, {0xFF,0x5C,0x7A}, {0xC0,0x26,0x4A} },
+    { 0xE8D6, {0xFF,0x5C,0x7A}, {0xC0,0x26,0x4A} },
+    /* settings: teal (not a gray, which would look like a disabled item) */
+    { 0xE713, {0x2D,0xD4,0xBF}, {0x0F,0x76,0x6E} },
+  };
+  int i;
+
+  for (i = 0; i < (int)(sizeof(tab) / sizeof(tab[0])); i++)
+    if (tab[i].g == glyph)
+      return dark ? RGB(tab[i].d[0], tab[i].d[1], tab[i].d[2]) : RGB(tab[i].l[0], tab[i].l[1], tab[i].l[2]);
+  return dark ? RGB(0x7A, 0xA2, 0xF7) : RGB(0x3B, 0x63, 0xC9);          /* the rest: a soft blue */
+}
+
 static HBITMAP menu_icon_get(HFONT font, unsigned short glyph, int sz, COLORREF fg)
 {
   int i;
   for (i = 0; i < menu_icon_n; i++) if (menu_icon_glyph[i] == glyph) return menu_icon_bmp[i];
   if (!font) return NULL;          /* only what is made already */
   if (menu_icon_n >= (int)(sizeof(menu_icon_bmp) / sizeof(menu_icon_bmp[0]))) return NULL;
+  if (gui.color_icons) fg = menu_icon_color(glyph, theme_is_dark());          /* else the color of the text, as passed */
   menu_icon_bmp[menu_icon_n] = glyph == MENU_ICON_TOOLBAR_RESET ? menu_icon_make_toolbar(TI_RESET, sz, fg) :
                                              glyph == MENU_ICON_TOOLBAR_REFRESH ? menu_icon_make_toolbar(TI_REFRESH, sz, fg) : menu_icon_make(font, glyph, sz, fg);
   menu_icon_glyph[menu_icon_n] = glyph;
   return menu_icon_bmp[menu_icon_n++];
 }
 
-/* The picture of a choice that is switched on: the same picture on a box in the accent colour (the check mark of the menu
+/* The picture of a choice that is switched on: the same picture on a box in the accent color (the check mark of the menu
    itself does not show beside a picture). Made from the plain one and kept with it. */
 static HBITMAP menu_icon_checked(HBITMAP plain, int slot)
 {
@@ -2525,6 +3106,8 @@ static int menu_icon_slot(unsigned short glyph)
   return -1;
 }
 
+static int walk_no_icons;                  /* inside Render Filter, a list of state slots or Recent Files: its sub-menus and their items have no pictures */
+
 static void menu_icons_walk(HMENU menu, HFONT font, int sz, COLORREF fg)
 {
   int n = GetMenuItemCount(menu), i, k;
@@ -2534,22 +3117,45 @@ static void menu_icons_walk(HMENU menu, HFONT font, int sz, COLORREF fg)
     HMENU sub = GetSubMenu(menu, i);
     unsigned short glyph = 0;
     MENUITEMINFOA mii;
+    ULONG_PTR own = 0;                                        /* The Large interface: the item's data, the key of its picture */
+
+    ZeroMemory(&mii, sizeof(mii));
+    mii.cbSize = sizeof(mii);
+    mii.fMask = MIIM_FTYPE | MIIM_DATA;
+    GetMenuItemInfoA(menu, (UINT)i, TRUE, &mii);
+    if ((mii.fType & MFT_OWNERDRAW) && mii.dwItemData) own = mii.dwItemData;
 
     if (sub)
     {
       char title[96], *a, *o;
       ZeroMemory(&mii, sizeof(mii));
       mii.cbSize = sizeof(mii);
-      mii.fMask = MIIM_STRING;
-      mii.dwTypeData = title;
-      mii.cch = sizeof(title) - 1;
+      mii.fMask = MIIM_FTYPE | MIIM_DATA;
       title[0] = 0;
       GetMenuItemInfoA(menu, (UINT)i, TRUE, &mii);
+      if ((mii.fType & MFT_OWNERDRAW) && mii.dwItemData)             /* The Large interface: the text was kept as the item's data */
+        lstrcpynA(title, (const char *)mii.dwItemData, sizeof(title));
+      else
+      {
+        ZeroMemory(&mii, sizeof(mii));
+        mii.cbSize = sizeof(mii);
+        mii.fMask = MIIM_STRING;
+        mii.dwTypeData = title;
+        mii.cch = sizeof(title) - 1;
+        GetMenuItemInfoA(menu, (UINT)i, TRUE, &mii);
+      }
       for (a = o = title; *a; a++) if (*a != '&') *o++ = *a;        /* "&Load State" -> "Load State" */
       *o = 0;
-      for (k = 0; k < (int)(sizeof(menu_icon_titles) / sizeof(menu_icon_titles[0])); k++)
-        if (!lstrcmpiA(title, menu_icon_titles[k].title)) { glyph = menu_icon_titles[k].glyph; break; }
-      menu_icons_walk(sub, font, sz, fg);
+      if (GetMenuItemID(menu, 0) != (UINT)IDM_VIDEO_FILTER_NONE)      /* the sub-menus of Render Filter (CRT, Scanlines ...) have no picture */
+        for (k = 0; k < (int)(sizeof(menu_icon_titles) / sizeof(menu_icon_titles[0])); k++)
+          if (!lstrcmpiA(title, menu_icon_titles[k].title)) { glyph = menu_icon_titles[k].glyph; break; }
+      {
+        int nf = !lstrcmpiA(title, "Render Filter") || (n > 0 && GetMenuItemID(menu, 0) == (UINT)IDM_VIDEO_FILTER_NONE) ||
+                 !lstrcmpiA(title, "Select State Slot") || !lstrcmpiA(title, "Load State from Slot") || !lstrcmpiA(title, "Save State to Slot") || !lstrcmpiA(title, "Load Backup State") || !lstrcmpiA(title, "Recent Files");
+        walk_no_icons += nf;
+        menu_icons_walk(sub, font, sz, fg);
+        walk_no_icons -= nf;
+      }
     }
     else
     {
@@ -2558,11 +3164,32 @@ static void menu_icons_walk(HMENU menu, HFONT font, int sz, COLORREF fg)
         if (menu_icon_ids[k].id == id) { glyph = menu_icon_ids[k].glyph; break; }
     }
 
+    if (walk_no_icons)
+    {
+      glyph = 0;
+      if (own) own_icon_set(own, NULL);
+      else
+      {
+        MENUITEMINFOA bi;
+        ZeroMemory(&bi, sizeof(bi));
+        bi.cbSize = sizeof(bi);
+        bi.fMask = MIIM_BITMAP;
+        if (GetMenuItemInfoA(menu, (UINT)i, TRUE, &bi) && bi.hbmpItem)
+        {
+          bi.hbmpItem = NULL;
+          SetMenuItemInfoA(menu, (UINT)i, TRUE, &bi);
+        }
+      }
+    }
     if (glyph)
     {
       HBITMAP b = menu_icon_get(font, glyph, sz, fg);
       if (b && !sub && (GetMenuState(menu, (UINT)i, MF_BYPOSITION) & MF_CHECKED)) b = menu_icon_checked(b, menu_icon_slot(glyph));
-      if (b)
+      if (b && own)
+      {
+        if (menu != GetMenu(g_hwnd)) own_icon_set(own, b);
+      }
+      else if (b)
       {
         HBITMAP cur;
         ZeroMemory(&mii, sizeof(mii));
@@ -2580,7 +3207,111 @@ static void menu_icons_walk(HMENU menu, HFONT font, int sz, COLORREF fg)
   }
 }
 
-/* Gives the menus their icons, or renews them after the theme changed (the colour of the pictures follows the text). */
+/* Gives the menus their icons, or renews them after the theme changed (the pictures change to the shade that suits it). */
+/* The frame of an open menu (the window class #32768) is drawn by Windows in white; in the dark theme with the Large interface it is painted
+   over in the menu color. */
+/* Paints the border of a menu window (the whole window's device context) in the menu color. */
+static void menu_frame_fill(HWND hwnd, HDC dc)
+{
+  RECT wr, cr, e[4];
+  HBRUSH br = CreateSolidBrush(THEME_DARK_MENU);
+  int n, k;
+
+  GetWindowRect(hwnd, &wr);
+  OffsetRect(&wr, -wr.left, -wr.top);
+  GetClientRect(hwnd, &cr);
+  n = (wr.right - cr.right) / 2;
+  if (n < 1) n = 1;
+  e[0] = wr; e[0].bottom = n;
+  e[1] = wr; e[1].top = wr.bottom - n;
+  e[2] = wr; e[2].right = n;
+  e[3] = wr; e[3].left = wr.right - n;
+  for (k = 0; k < 4; k++) FillRect(dc, &e[k], br);
+  DeleteObject(br);
+}
+
+/* A menu window whose items the program draws (a system-drawn one, such as the window menu or an edit box's, keeps its own look). */
+static int popup_is_ownerdraw(HWND hwnd)
+{
+  HMENU m = (HMENU)SendMessage(hwnd, 0x01E1 /* MN_GETHMENU */, 0, 0);
+  MENUITEMINFOA mii;
+
+  if (!m || GetMenuItemCount(m) <= 0) return 0;
+  memset(&mii, 0, sizeof(mii));
+  mii.cbSize = sizeof(mii);
+  mii.fMask = MIIM_FTYPE;
+  return GetMenuItemInfoA(m, 0, TRUE, &mii) && (mii.fType & MFT_OWNERDRAW) != 0;
+}
+
+static LRESULT CALLBACK menu_frame_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
+{
+  (void)ref;
+  if (msg == WM_NCDESTROY)
+    RemoveWindowSubclass(hwnd, menu_frame_proc, id);
+  else if (msg == WM_ERASEBKGND && theme_menus_owner() && !theme_is_dark() && popup_is_ownerdraw(hwnd))
+  {
+    RECT cr;                                          /* whatever the items do not cover is the same color as they are */
+    HBRUSH bb = CreateSolidBrush(menu_light_bg(0));
+    GetClientRect(hwnd, &cr);
+    FillRect((HDC)wp, &cr, bb);
+    DeleteObject(bb);
+    return 1;
+  }
+  else if (msg == WM_WINDOWPOSCHANGED)
+  {
+    LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+    int corner = 2;                                   /* the system's own rounding again after every size change (a window region would round with jagged edges and shadow) */
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+    return r;
+  }
+  else if (msg == WM_SHOWWINDOW && wp)
+  {
+    int corner = 2;                                   /* (again once it is shown: the system may set its own when the window appears) */
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+  }
+  else if (msg == WM_NCPAINT && theme_menus_owner() && theme_is_dark())
+  {
+    HDC dc = GetWindowDC(hwnd);
+    DefSubclassProc(hwnd, msg, wp, lp);
+    menu_frame_fill(hwnd, dc);
+    ReleaseDC(hwnd, dc);
+    return 0;
+  }
+  else if (msg == WM_PRINT && (lp & PRF_NONCLIENT) && theme_menus_owner() && theme_is_dark())     /* the opening animation draws the menu this way */
+  {
+    LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+    menu_frame_fill(hwnd, (HDC)wp);
+    return r;
+  }
+  return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+void theme_menu_frame(HWND popup)
+{
+  int corner = 2;                                     /* DWMWCP_ROUND: the menus have rounded corners, as the system's own do (Windows 11) */
+
+  SetWindowSubclass(popup, menu_frame_proc, 1, 0);
+  DwmSetWindowAttribute(popup, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+}
+
+/* Every menu window (the class #32768) gets the frame painter as it is created, so the context menus have it too. */
+static HHOOK menu_cbt_hook;
+
+static LRESULT CALLBACK menu_cbt_proc(int code, WPARAM wp, LPARAM lp)
+{
+  if (code == HCBT_CREATEWND)
+  {
+    char cls[16];
+    if (GetClassNameA((HWND)wp, cls, sizeof(cls)) && !lstrcmpA(cls, "#32768")) theme_menu_frame((HWND)wp);
+  }
+  return CallNextHookEx(menu_cbt_hook, code, wp, lp);
+}
+
+static void menu_frame_hook_install(void)
+{
+  if (!menu_cbt_hook) menu_cbt_hook = SetWindowsHookExA(WH_CBT, menu_cbt_proc, NULL, GetCurrentThreadId());
+}
+
 void theme_menu_icons(HMENU menu)
 {
   HBITMAP old_bmp[96], old_on[96];
@@ -2588,7 +3319,7 @@ void theme_menu_icons(HMENU menu)
   HDC sdc;
   HFONT font;
 
-  if (!menu || gui.large_ui) return;
+  if (!menu) return;
   sdc = GetDC(NULL);
   dpi = sdc ? GetDeviceCaps(sdc, LOGPIXELSX) : 96;
   if (sdc) ReleaseDC(NULL, sdc);
@@ -2599,7 +3330,7 @@ void theme_menu_icons(HMENU menu)
   if (!font) return;
 
   for (i = 0; i < old_n; i++) { old_bmp[i] = menu_icon_bmp[i]; old_on[i] = menu_icon_bmp_on[i]; menu_icon_bmp_on[i] = NULL; }
-  menu_icon_n = 0;                                          /* new pictures, in the colour of the theme that is on now */
+  menu_icon_n = 0;                                          /* new pictures, in the color of the theme that is on now */
   menu_icons_walk(menu, font, sz, theme_is_dark() ? RGB(0xF0, 0xF0, 0xF0) : RGB(0x30, 0x30, 0x30));
   for (i = 0; i < old_n; i++) { if (old_bmp[i]) DeleteObject(old_bmp[i]); if (old_on[i]) DeleteObject(old_on[i]); }    /* the menu items no longer use these */
   DeleteObject(font);
@@ -2609,11 +3340,11 @@ void theme_menu_icons(HMENU menu)
    whenever the check marks were set. Uses only the pictures that exist already. */
 void theme_menu_icon_marks(HMENU menu)
 {
-  if (!menu || gui.large_ui || menu_icon_n == 0) return;
+  if (!menu || menu_icon_n == 0) return;
   menu_icons_walk(menu, NULL, 16, 0);
 }
 
-/* A picture for one item of a menu built on the spot (the right-click menu of a game): the glyph in the colour of the theme.
+/* A picture for one item of a menu built on the spot (the right-click menu of a game): the glyph in the color of the theme.
    The bitmaps are kept in the same list as the menu bar's and live as long as the program (or until the theme changes). */
 void theme_menu_icon(HMENU menu, UINT id, unsigned short glyph)
 {
@@ -2623,7 +3354,7 @@ void theme_menu_icon(HMENU menu, UINT id, unsigned short glyph)
   HBITMAP b;
   MENUITEMINFOA mii;
 
-  if (!menu || gui.large_ui) return;
+  if (!menu) return;
   sdc = GetDC(NULL);
   dpi = sdc ? GetDeviceCaps(sdc, LOGPIXELSX) : 96;
   if (sdc) ReleaseDC(NULL, sdc);
@@ -2636,19 +3367,36 @@ void theme_menu_icon(HMENU menu, UINT id, unsigned short glyph)
   if (!b) return;
   ZeroMemory(&mii, sizeof(mii));
   mii.cbSize = sizeof(mii);
+  mii.fMask = MIIM_FTYPE | MIIM_DATA;
+  GetMenuItemInfoA(menu, id, FALSE, &mii);
+  if ((mii.fType & MFT_OWNERDRAW) && mii.dwItemData)       /* The Large interface: the item paints the picture itself */
+  {
+    own_icon_set(mii.dwItemData, b);
+    return;
+  }
+  ZeroMemory(&mii, sizeof(mii));
+  mii.cbSize = sizeof(mii);
   mii.fMask = MIIM_BITMAP;
   mii.hbmpItem = b;
   SetMenuItemInfoA(menu, id, FALSE, &mii);
 }
 
-/* The accent colour (Settings > General): the selected row of the program's own lists and the button that waits for a key.
-   0 is the default (a blue in the dark theme, the colour Windows uses in the light one); the others are fixed colours that
+/* The accent color (Settings > General): the selected row of the program's own lists and the button that waits for a key.
+   0 is the default (a blue in the dark theme, the color Windows uses in the light one); the others are fixed colors that
    read with white text in both themes. */
-static const COLORREF accent_bg[9]   = { 0, RGB(0x2A, 0x7A, 0x7A), RGB(0x3A, 0x76, 0x3E), RGB(0x62, 0x4A, 0x92), RGB(0x92, 0x45, 0x78), RGB(0x90, 0x40, 0x40), RGB(0x94, 0x62, 0x30), RGB(0x55, 0x55, 0x55), RGB(0x0E, 0x8F, 0x3F) };
-static const COLORREF accent_edge[9] = { 0, RGB(0x55, 0xA8, 0xA8), RGB(0x68, 0xA8, 0x6C), RGB(0x90, 0x78, 0xC0), RGB(0xC0, 0x72, 0xA5), RGB(0xC0, 0x70, 0x70), RGB(0xC4, 0x90, 0x58), RGB(0x80, 0x80, 0x80), RGB(0x58, 0xE8, 0x98) };
+static const COLORREF accent_bg[GUI_ACCENT_HIDDEN + 1]   = { 0, RGB(0x7A, 0x52, 0x33), RGB(0xA8, 0x1F, 0x3A), RGB(0xA6, 0x7C, 0x00),
+                                                          RGB(0x55, 0x55, 0x55), RGB(0x3A, 0x76, 0x3E), RGB(0x3F, 0x4F, 0xA8), RGB(0x6B, 0x8E, 0x23),
+                                                          RGB(0xA0, 0x2F, 0x8F), RGB(0x1F, 0x3F, 0x8F), RGB(0x6B, 0x6B, 0x1F), RGB(0x94, 0x62, 0x30),
+                                                          RGB(0x92, 0x45, 0x78), RGB(0x62, 0x4A, 0x92), RGB(0x90, 0x40, 0x40), RGB(0x1F, 0x7F, 0xB5),
+                                                          RGB(0x2A, 0x7A, 0x7A), RGB(0x7B, 0x2F, 0xB8), RGB(0xB8, 0x98, 0x00), RGB(0x0E, 0x8F, 0x3F) };
+static const COLORREF accent_edge[GUI_ACCENT_HIDDEN + 1] = { 0, RGB(0xB0, 0x84, 0x60), RGB(0xE0, 0x60, 0x78), RGB(0xE0, 0xB8, 0x3A),
+                                                          RGB(0x80, 0x80, 0x80), RGB(0x68, 0xA8, 0x6C), RGB(0x7C, 0x8A, 0xD8), RGB(0xA4, 0xCC, 0x5A),
+                                                          RGB(0xD8, 0x70, 0xC8), RGB(0x60, 0x80, 0xD8), RGB(0xB8, 0xB8, 0x58), RGB(0xC4, 0x90, 0x58),
+                                                          RGB(0xC0, 0x72, 0xA5), RGB(0x90, 0x78, 0xC0), RGB(0xC0, 0x70, 0x70), RGB(0x5C, 0xB8, 0xE8),
+                                                          RGB(0x55, 0xA8, 0xA8), RGB(0xB0, 0x80, 0xE8), RGB(0xF0, 0xD8, 0x40), RGB(0x58, 0xE8, 0x98) };
 
 /* A push button that opens a list: its text and a down arrow after it, drawn here so the arrow is whole and big enough in any font
-   (a glyph in the text came out cut off). Owner-drawn: the colours of the two themes are used. */
+   (a glyph in the text came out cut off). Owner-drawn: the colors of the two themes are used. */
 void theme_draw_dropdown_button(const DRAWITEMSTRUCT *di)
 {
   int dark = theme_is_dark(), down = (di->itemState & ODS_SELECTED) != 0, dis = (di->itemState & ODS_DISABLED) != 0;
@@ -2742,21 +3490,23 @@ void theme_draw_dropdown_button(const DRAWITEMSTRUCT *di)
 
 COLORREF theme_accent_bg(void)
 {
-  int a = gui.accent < 0 || gui.accent > 8 ? 0 : gui.accent;
+  int a = gui.accent < 0 || gui.accent > GUI_ACCENT_HIDDEN ? 0 : gui.accent;
   if (a) return accent_bg[a];
+  if (gui.ui_style) return modern_blue();          /* every chosen row of every list: the same color as the Modern style's other highlights */
   return theme_is_dark() ? RGB(0x40, 0x60, 0x90) : GetSysColor(COLOR_HIGHLIGHT);
 }
 
-/* The colour shown beside a name in the Accent Color list. */
+/* The color shown beside a name in the Accent Color list. */
 COLORREF theme_accent_swatch(int i)
 {
-  if (i <= 0 || i > 8) return theme_is_dark() ? RGB(0x40, 0x60, 0x90) : GetSysColor(COLOR_HIGHLIGHT);
+  if (i <= 0 || i > GUI_ACCENT_HIDDEN) return gui.ui_style ? modern_blue() : (theme_is_dark() ? RGB(0x40, 0x60, 0x90) : GetSysColor(COLOR_HIGHLIGHT));
   return accent_bg[i];
 }
 
 COLORREF theme_accent_edge(void)
 {
-  int a = gui.accent < 0 || gui.accent > 8 ? 0 : gui.accent;
+  int a = gui.accent < 0 || gui.accent > GUI_ACCENT_HIDDEN ? 0 : gui.accent;
   if (a) return accent_edge[a];
+  if (gui.ui_style) return modern_blue();
   return theme_is_dark() ? RGB(0x70, 0x90, 0xC0) : GetSysColor(COLOR_HIGHLIGHT);
 }

@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <commctrl.h>
+#include <richedit.h>
 #include <shellapi.h>
 #include <commdlg.h>
 #define COBJMACROS
@@ -21,6 +22,7 @@
 
 #include "shared.h"
 #include "gui.h"
+#include "picocore.h"
 #include "resource.h"
 #include "theme.h"
 #include "netplay.h"
@@ -75,6 +77,7 @@ void gui_dialog_tips(HWND dlg, const GuiTip *defs, int n)
         GetClassNameA(c, cls, sizeof(cls));
         if (lstrcmpiA(cls, "Static") != 0) continue;
         GetWindowTextA(c, txt, sizeof(txt));
+        { char *a, *o; for (a = o = txt; *a; a++) if (*a != '&') *o++ = *a; *o = 0; }       /* ("&Name:" is "Name:" here) */
         if (lstrcmpA(txt, defs[i].label) != 0) continue;
         SetWindowLongPtr(c, GWL_STYLE, GetWindowLongPtr(c, GWL_STYLE) | SS_NOTIFY);   /* so it gets the mouse */
         dlg_add_tip(tt, dlg, c, defs[i].tip);
@@ -119,7 +122,7 @@ static struct
   int       dev_shadow;     /* the saved device is not in the list: the list shows Keyboard Only, the saved one is kept until another is picked */
   int       auto_advance;   /* set by Auto Assign only; Assign/double-click leave it off */
   HWND      dlg;
-  int       ports;          /* the Advanced tab is showing */
+  int       ports;          /* the Extras tab is showing */
   int       port_open[2];   /* the port devices when the window opened: Cancel puts them back, they apply at once */
 } inp;
 
@@ -134,7 +137,13 @@ static void audio_set_slider(HWND dlg, int id, int text_id, int lo, int hi,
   char buf[32];
 
   SendMessage(bar, TBM_SETRANGE, TRUE, MAKELPARAM(lo, hi));
-  SendMessage(bar, TBM_SETTICFREQ, (WPARAM)((hi - lo) / 8 ? (hi - lo) / 8 : 1), 0);
+  {
+    /* About eight ticks, spaced so that the last one is the end of the range (a step that does not divide it leaves two ticks side by side there). */
+    int step = (hi - lo) / 8;
+    if (step < 1) step = 1;
+    while (step > 1 && (hi - lo) % step) step--;
+    SendMessage(bar, TBM_SETTICFREQ, (WPARAM)step, 0);
+  }
   SendMessage(bar, TBM_SETPOS, TRUE, (LPARAM)value);
 
   wsprintfA(buf, "%d%s", value, suffix);
@@ -151,8 +160,14 @@ static const char *input_list_entry_name(int sel)
   return input_button_label(sel);
 }
 
-/* Larger UI draws this window 21% bigger than the other dialogs; the normal UI draws it at the dialogs' own size. */
-#define IS(v) (gui.large_ui ? TBS(v) * 121 / 100 : (v))     /* larger UI keeps the old size; the normal one is smaller */
+/* The Large interface draws this window 21% bigger than the other dialogs; the normal UI draws it at the dialogs' own size. */
+#define IS(v) (gui.large_ui ? TBS(v) * 121 / 100 : DPIS(v))     /* larger UI keeps the old size; the normal one is smaller */
+
+/* The credits, as the About window and the first page of the User Guide show them. */
+#define CREDITS_TEXT "2026 - Genesis Plus EX by Hazem Abdelghani\r\n" \
+                     "2007-2026 - Genesis Plus GX by Eke-Eke\r\n" \
+                     "1998-2003 - Genesis Plus by Charles MacDonald\r\n" \
+                     "2004-2026 - PicoDrive (32X) by Dave, notaz, irixxxx and others\r\n"
 
 #define INPUT_HINT_BASE ""     /* (the explanation is in the tooltips; this line shows messages: profiles, assigning keys, test mode) */
 #define INPUT_HINT_TEST "Test mode: press any key or pad button and its spot lights. Keys do nothing else here. Click Test Keys again to leave."
@@ -282,7 +297,7 @@ static RECT cb_frame[2];
 static const char *const cb_frame_title[2] = { "Combos", "Controller Ports" };
 static RECT pad_frame[3];                  /* the pad tabs' frames */
 static const char *const pad_frame_title[3] = { "D-Pad", "System", "Buttons" };
-static RECT hint_rc[2];                    /* where the message line sits: [0] on the pad tabs, [1] on the Advanced tab */
+static RECT hint_rc[2];                    /* where the message line sits: [0] on the pad tabs, [1] on the Extras tab */
 
 /* The ring pictures: ring_gif.gif (an animation, shown on the button being assigned) and ring_png.png (a button
    held down), decoded from the program once and scaled to the ring's height; kept until the size changes. */
@@ -461,7 +476,7 @@ static void input_paint(HWND dlg)
     else { DeleteDC(bdc); bdc = NULL; }
   }
 
-  if (inp.ports)       /* the Advanced tab: titled frames, no picture */
+  if (inp.ports)       /* the Extras tab: titled frames, no picture */
   {
     int k;
     for (k = 0; k < 2; k++) settings_draw_frame(dc, dlg, &cb_frame[k], cb_frame_title[k]);
@@ -576,7 +591,7 @@ static void input_set_listening(HWND dlg, int on)
     RedrawWindow(ctl, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
   }
 
-  /* The button that waits is drawn in the colour of a selected row (see WM_DRAWITEM), then back to a normal button. */
+  /* The button that waits is drawn in the color of a selected row (see WM_DRAWITEM), then back to a normal button. */
   for (i = 0; i < input_list_count(); i++)
   {
     HWND b = GetDlgItem(dlg, IDC_INPUT_LABEL_BASE + i);
@@ -983,7 +998,7 @@ static const int cb_holds[]  = { 250, 500, 1000, 1500, 2000, 3000, 5000, 10000 }
 static const int cb_pauses[] = { 70, 150, 250, 500, 1000, 2000 };                        /* the Pause menu, after "None" */
 #define CB_NHOLDS  ((int)(sizeof(cb_holds) / sizeof(cb_holds[0])))
 #define CB_NPAUSES ((int)(sizeof(cb_pauses) / sizeof(cb_pauses[0])))
-/* The Combos tab's controls outside the 1620-1639 run: Hold, Pause, and the list's column titles (IDs 1649 to 1652). */
+/* The Combos tab's controls outside the 1620-1639 run: Hold, Pause and How It Works (IDs 1649 to 1653). */
 #define CB_EXTRA_ID(id) ((id) >= IDC_CB_HOLDTIME && (id) <= IDC_CB_HELP)
 static int input_start_page;                 /* which tab Controls opens on: 3 = Combos */
 static COMBOITEM cb_items[12];
@@ -1159,34 +1174,45 @@ static int cb_serialize(char *out, int len)
   return 1;
 }
 
-/* The widths of the list's columns: the row number, the trigger, then the actions. */
-#define CB_COL_NUM  IS(28)
+/* The widths of the list's first two columns: the row number and the trigger (the actions take the rest). */
+#define CB_COL_NUM  IS(32)
 #define CB_COL_TRIG IS(104)
+
+static int cb_filling;          /* the list is being changed by the code: its selection messages are not the user's */
 
 static void cb_fill_list(HWND dlg, int select)
 {
   HWND l = GetDlgItem(dlg, IDC_CB_LIST);
-  int i, wide = 0;
+  int i;
 
-  SendMessage(l, LB_RESETCONTENT, 0, 0);
-  for (i = 0; i < cb_n; i++)
+  cb_filling = 1;
+  if ((int)SendMessage(l, LVM_GETITEMCOUNT, 0, 0) != cb_n)
   {
-    char lab[40], m[640], line[700];
-    if (cb_items[i].trig[0]) cb_label(cb_items[i].trig, lab); else lab[0] = '\0';      /* an empty row has only its number */
-    cb_steps_text(&cb_items[i], 1, m, sizeof(m));
-    wsprintfA(line, "%d\t%s\t%s", i + 1, lab, m);               /* the number, the trigger and the actions: drawn as three columns */
-    SendMessageA(l, LB_ADDSTRING, 0, (LPARAM)line);
+    SendMessage(l, LVM_DELETEALLITEMS, 0, 0);
+    for (i = 0; i < cb_n; i++)
     {
-      HDC dc = GetDC(l);
-      HGDIOBJ of = SelectObject(dc, (HFONT)SendMessage(l, WM_GETFONT, 0, 0));
-      SIZE sz;
-      if (GetTextExtentPoint32A(dc, m, lstrlenA(m), &sz) && CB_COL_NUM + CB_COL_TRIG + sz.cx + IS(16) > wide) wide = CB_COL_NUM + CB_COL_TRIG + sz.cx + IS(16);
-      SelectObject(dc, of);
-      ReleaseDC(l, dc);
+      LVITEMA it;
+      char num[8];
+
+      wsprintfA(num, "%d", i + 1);
+      ZeroMemory(&it, sizeof(it));
+      it.mask = LVIF_TEXT;
+      it.iItem = i;
+      it.pszText = num;
+      SendMessageA(l, LVM_INSERTITEMA, 0, (LPARAM)&it);
     }
   }
-  SendMessage(l, LB_SETHORIZONTALEXTENT, (WPARAM)wide, 0);      /* a scroll bar only if a line is still wider than the list */
-  if (select >= 0 && select < cb_n) SendMessage(l, LB_SETCURSEL, (WPARAM)select, 0);
+  for (i = 0; i < cb_n; i++)
+  {
+    char lab[40], m[640];
+
+    if (cb_items[i].trig[0]) cb_label(cb_items[i].trig, lab); else lab[0] = '\0';      /* an empty row has only its number */
+    cb_steps_text(&cb_items[i], 1, m, sizeof(m));
+    ListView_SetItemText(l, i, 1, lab);
+    ListView_SetItemText(l, i, 2, m);
+  }
+  if (select >= 0 && select < cb_n) ListView_SetItemState(l, select, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+  cb_filling = 0;
 }
 
 /* The combo being made or changed, or -1. */
@@ -1196,7 +1222,7 @@ static int cb_work(void)
 }
 
 /* With a row picked the Trigger button works, and with a trigger the action buttons; Hold, Pause and Remove Last need an
-   action in the combo; Delete Combo needs a row. */
+   action in the combo; Delete Combo needs a row with something in it. */
 static void cb_update_buttons(HWND dlg)
 {
   int i, at = cb_work(), acts = (at >= 0) ? cb_actions(&cb_items[at]) : 0;
@@ -1206,7 +1232,7 @@ static void cb_update_buttons(HWND dlg)
   EnableWindow(GetDlgItem(dlg, IDC_CB_HOLDTIME), acts > 0);
   EnableWindow(GetDlgItem(dlg, IDC_CB_PAUSE), acts > 0);
   EnableWindow(GetDlgItem(dlg, IDC_CB_UNDO), acts > 0);
-  EnableWindow(GetDlgItem(dlg, IDC_CB_DEL), at >= 0);
+  EnableWindow(GetDlgItem(dlg, IDC_CB_DEL), at >= 0 && (cb_items[at].trig[0] != 0 || acts > 0));          /* a blank row has nothing to delete */
 }
 
 static void cb_update_bind(HWND dlg)
@@ -1366,7 +1392,7 @@ static void cb_hold_menu(HWND dlg)
     for (i = 0; i < CB_NHOLDS; i++) if (cb_items[at].s[last].hold && cb_items[at].s[last].ms == cb_holds[i]) cur = 10 + i;
     if (cur) CheckMenuRadioItem(m, 1, 10 + CB_NHOLDS, (UINT)cur, MF_BYCOMMAND); }
   GetWindowRect(GetDlgItem(dlg, IDC_CB_HOLDTIME), &br);
-  cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, br.left, br.bottom, 0, dlg, NULL);
+  cmd = (int)gui_popup(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, br.left, br.bottom);
   DestroyMenu(m);
   if (cmd == 1) { cb_items[at].s[last].hold = 0; cb_items[at].s[last].ms = 0; }
   else if (cmd == 2) { cb_items[at].s[last].hold = 1; cb_items[at].s[last].ms = 0; }
@@ -1394,7 +1420,7 @@ static void cb_pause_menu(HWND dlg)
     for (i = 0; i < CB_NPAUSES; i++) if (cb_items[at].s[n - 1].ms == cb_pauses[i]) cur = 10 + i;
   CheckMenuRadioItem(m, 1, 10 + CB_NPAUSES, (UINT)cur, MF_BYCOMMAND);
   GetWindowRect(GetDlgItem(dlg, IDC_CB_PAUSE), &br);
-  cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, br.left, br.bottom, 0, dlg, NULL);
+  cmd = (int)gui_popup(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, br.left, br.bottom);
   DestroyMenu(m);
   if (cmd == 1) { if (cb_items[at].s[n - 1].pause) cb_items[at].n--; }
   else if (cmd >= 10 && cmd < 10 + CB_NPAUSES)
@@ -1429,9 +1455,6 @@ static int cb_command(HWND dlg, int id, int code)
           "Gamepad Y -> Down(Hold 1.0s)+A\n"
           "Pressing Y holds Down for a second and taps A a moment after it.",
           "Combos - How It Works", MB_OK | MB_ICONINFORMATION);
-      return 1;
-    case IDC_CB_LIST:
-      if (code == LBN_SELCHANGE) cb_show(dlg, (int)SendDlgItemMessage(dlg, IDC_CB_LIST, LB_GETCURSEL, 0, 0));
       return 1;
     case IDC_CB_BIND:
       if (code == BN_CLICKED) cb_listen(dlg, !cbl.listen);
@@ -1474,7 +1497,7 @@ static int cb_command(HWND dlg, int id, int code)
   return 0;
 }
 
-/* The Advanced tab's Combos frame: the trigger and the action buttons on the left, Hold / Pause / Remove Last / Delete in the
+/* The Extras tab's Combos frame: the trigger and the action buttons on the left, Hold / Pause / Remove Last / Delete in the
    middle, the saved combos (number, trigger, actions) on the right (cy: where the frame starts, cw: the window's width). Hidden
    until that tab is chosen. */
 static void cb_build(HWND dlg, int M, int cy, int cw)
@@ -1513,15 +1536,27 @@ static void cb_build(HWND dlg, int M, int cy, int cw)
   ShowWindow(h, SW_HIDE);
   h = input_make(dlg, "BUTTON", "Delete Combo", WS_TABSTOP | BS_PUSHBUTTON, mx, cy + IS(114), midw, IS(26), IDC_CB_DEL);
   ShowWindow(h, SW_HIDE);
-  h = input_make(dlg, "STATIC", "#", SS_LEFT, rx + IS(4), cy + IS(20), CB_COL_NUM, IS(16), IDC_CB_LISTLBL);
-  ShowWindow(h, SW_HIDE);
-  h = input_make(dlg, "STATIC", "Trigger", SS_LEFT, rx + IS(4) + CB_COL_NUM, cy + IS(20), CB_COL_TRIG, IS(16), IDC_CB_COL1);
-  ShowWindow(h, SW_HIDE);
-  h = input_make(dlg, "STATIC", "Actions", SS_LEFT, rx + IS(4) + CB_COL_NUM + CB_COL_TRIG, cy + IS(20), rw - CB_COL_NUM - CB_COL_TRIG - IS(100), IS(16), IDC_CB_COL2);
-  ShowWindow(h, SW_HIDE);
   h = input_make(dlg, "BUTTON", "How It Works", WS_TABSTOP | BS_PUSHBUTTON, rx + rw - IS(96), cy + IS(9), IS(96), IS(22), IDC_CB_HELP);
   ShowWindow(h, SW_HIDE);
-  h = input_make(dlg, "LISTBOX", "", LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_BORDER | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP, rx, cy + IS(38), rw, IS(140), IDC_CB_LIST);
+  h = input_make(dlg, "SysListView32", "", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, rx, cy + IS(38), rw, IS(140), IDC_CB_LIST);
+  SendMessage(h, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_FULLROWSELECT, LVS_EX_FULLROWSELECT);
+  {
+    static const char *const titles[3] = { "#", "Trigger", "Actions" };
+    int widths[3], c;
+
+    widths[0] = CB_COL_NUM; widths[1] = CB_COL_TRIG; widths[2] = rw - CB_COL_NUM - CB_COL_TRIG - GetSystemMetrics(SM_CXVSCROLL) - 4;
+    for (c = 0; c < 3; c++)
+    {
+      LVCOLUMNA col;
+
+      ZeroMemory(&col, sizeof(col));
+      col.mask = LVCF_TEXT | LVCF_WIDTH;
+      col.pszText = (char *)titles[c];
+      col.cx = widths[c];
+      SendMessageA(h, LVM_INSERTCOLUMNA, c, (LPARAM)&col);
+    }
+  }
+  gui_list_header_menu(h);
   ShowWindow(h, SW_HIDE);
   cb_update_bind(dlg);
 }
@@ -1561,7 +1596,7 @@ static void input_ports_fill(HWND dlg)
 }
 
 /* Shows the Ports tab (on) or brings the pad pages back (off): every other control is hidden and remembered. */
-static void input_ports_view(HWND dlg, int page)     /* 0 the pad, 1 Advanced (the ports and the combos) */
+static void input_ports_view(HWND dlg, int page)     /* 0 the pad, 1 Extras (the ports and the combos) */
 {
   static HWND saved[160];
   static unsigned char vis[160];
@@ -1595,7 +1630,7 @@ static void input_ports_view(HWND dlg, int page)     /* 0 the pad, 1 Advanced (t
   inp.ports = page;
   SetDlgItemTextA(dlg, IDC_INPUT_HINT, page ? "" : INPUT_HINT_IDLE);
   {
-    /* the message line: under the Profile row on the pad tabs, beside the OK button on the Advanced one */
+    /* the message line: under the Profile row on the pad tabs, beside the OK button on the Extras one */
     const RECT *r = &hint_rc[page ? 1 : 0];
     MoveWindow(GetDlgItem(dlg, IDC_INPUT_HINT), r->left, r->top, r->right - r->left, r->bottom - r->top, TRUE);
   }
@@ -1623,7 +1658,7 @@ static void input_ports_view(HWND dlg, int page)     /* 0 the pad, 1 Advanced (t
 
 static void prof_dir(char *out)
 {
-  lstrcpynA(out, osd_path("profiles"), GUI_PATH_LEN);
+  lstrcpynA(out, osd_path("Profiles"), GUI_PATH_LEN);
   CreateDirectoryA(out, NULL);
 }
 
@@ -1681,7 +1716,7 @@ static void prof_build(HWND dlg, char *out, int len)
   inp.other[inp.player].deadzone = inp.deadzone;
 
   lstrcpyA(out, "# Genesis Plus EX controls profile\n");
-  wsprintfA(t, "turbo_rate=%d\n", (int)SendDlgItemMessage(dlg, IDC_INPUT_TURBORATE, CB_GETCURSEL, 0, 0) & 3);
+  wsprintfA(t, "turbo_speed=%d\n", (int)SendDlgItemMessage(dlg, IDC_INPUT_TURBORATE, CB_GETCURSEL, 0, 0));
   lstrcatA(out, t);
   for (p = 0; p < 2; p++)
   {
@@ -1806,7 +1841,8 @@ static int prof_load(HWND dlg, const char *name)
     if (line[0] == '#' || !v) continue;
     *v++ = '\0';
     for (e = v + lstrlenA(v); e > v && (e[-1] == '\n' || e[-1] == '\r'); ) *--e = '\0';
-    if (!lstrcmpA(line, "turbo_rate")) SendDlgItemMessage(dlg, IDC_INPUT_TURBORATE, CB_SETCURSEL, (WPARAM)(atoi(v) & 3), 0);
+    if (!lstrcmpA(line, "turbo_speed")) SendDlgItemMessage(dlg, IDC_INPUT_TURBORATE, CB_SETCURSEL, (WPARAM)(atoi(v) < 0 || atoi(v) > 4 ? 2 : atoi(v)), 0);
+    else if (!lstrcmpA(line, "turbo_rate")) SendDlgItemMessage(dlg, IDC_INPUT_TURBORATE, CB_SETCURSEL, (WPARAM)(atoi(v) == 3 ? 4 : atoi(v) & 3), 0);      /* (a profile saved with four speeds) */
     else if (!lstrcmpA(line, "combos")) { lstrcpynA(combos, v, sizeof(combos)); have_combos = 1; }
     else if (line[0] == 'p' && (line[1] == '0' || line[1] == '1') && line[2] == '.')
     {
@@ -1851,8 +1887,7 @@ static void input_restore_combos(HWND dlg)
   ZeroMemory(cb_items, sizeof(cb_items));
   cb_n = 12;
   cb_sel = -1;
-  cb_fill_list(dlg, -1);
-  cb_update_bind(dlg);
+  cb_show(dlg, 0);              /* the first row is picked again, as when the tab opens (with none picked the buttons would be grayed) */
 }
 
 /* Puts the keys, buttons, pad types, deadzones, turbo rate and combos back to their defaults: of both players (and the turbo
@@ -1903,7 +1938,7 @@ static void input_restore_defaults(HWND dlg, int which)      /* which: -1 both p
     input_load_controls(dlg);
     input_fill_list(dlg);
   }
-  SendDlgItemMessage(dlg, IDC_INPUT_TURBORATE, CB_SETCURSEL, 2, 0);   /* Turbo Rate back to Normal (it is on the tab of each player) */
+  SendDlgItemMessage(dlg, IDC_INPUT_TURBORATE, CB_SETCURSEL, 2, 0);   /* Turbo Rate back to Medium (it is on the tab of each player) */
   if (which < 0) input_restore_combos(dlg);
 }
 
@@ -2036,19 +2071,19 @@ static LRESULT CALLBACK prof_edit_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_
 /* One mapping: its name (painted) to the left of the button that shows what it is set to. */
 static void input_cell(HWND dlg, int id, int x, int y, int lw, int bw, int bh)
 {
-  input_add_label(input_label_text(id), x, y + (bh - IS(16)) / 2, lw - IS(5), IS(16), DT_RIGHT);
+  input_add_label(input_label_text(id), x - IS(10), y + (bh - IS(16)) / 2, lw - IS(5) + IS(10), IS(16), DT_RIGHT);       /* (room to the left too: "Down:" must not be cut) */
   input_make(dlg, "BUTTON", "", WS_TABSTOP | BS_PUSHBUTTON | BS_MULTILINE, x + lw, y, bw, bh, IDC_INPUT_LABEL_BASE + id);
 }
 
 /* The whole window is built here: a Mega Drive pad laid out in titled frames (the D-pad with its deadzone, Start and Mode,
-   the six buttons with their Turbo ticks) around the controller picture, and an Advanced tab for the ports and the combos. */
+   the six buttons with their Turbo ticks) around the controller picture, and an Extras tab for the ports and the combos. */
 static void input_build(HWND dlg)
 {
-  static const char *const player_tabs[] = { "Player 1", "Player 2", "Advanced" };
+  static const char *const player_tabs[] = { "Player 1", "Player 2", "Extras" };
   int M = IS(14), th = settings_tab_height() * (gui.large_ui ? 121 : 100) / 100;
-  int LW = IS(256), PW = gui.large_ui ? IS(250) : 360, RW = IS(330), gap = IS(10), FH = IS(238);
+  int LW = IS(264), PW = gui.large_ui ? IS(250) : 360, RW = IS(330), gap = IS(10), FH = IS(252);
   int cw = M + LW + gap + PW + gap + RW + M;
-  int bh = IS(28), pitch = IS(34);
+  int bh = IS(28);
   int y0 = th + M, yT = y0 + IS(42), y, picw, pich, picx, picy, rx;
   RECT rc, wr;
   HWND tab;
@@ -2059,7 +2094,7 @@ static void input_build(HWND dlg)
     LOGFONTA lf;
     if (GetObjectA((HFONT)SendMessage(dlg, WM_GETFONT, 0, 0), sizeof(lf), &lf))
     {
-      /* Larger UI already makes the dialog font bigger; scaling it again looked heavy, so it is used as is. */
+      /* The Large interface already makes the dialog font bigger; scaling it again looked heavy, so it is used as is. */
       if (!gui.large_ui) lf.lfHeight = lf.lfHeight * 110 / 100;
       lf.lfWeight = FW_NORMAL;
       inp.font = CreateFontIndirectA(&lf);
@@ -2072,21 +2107,21 @@ static void input_build(HWND dlg)
   settings_set_tabs(tab, player_tabs, 3);
   SetWindowLongPtr(tab, GWLP_USERDATA, inp.player);
 
-  /* The Advanced tab: the ports (here) and the combos (cb_build); shown only on that tab. */
+  /* The Extras tab: the ports (here) and the combos (cb_build); shown only on that tab. */
   {
     HWND h;
     SetRect(&cb_frame[1], M, y0 + IS(8), M + LW + gap + PW, y0 + IS(84));
     h = input_make(dlg, "STATIC", "Port A Device:", SS_LEFT, M + IS(14), y0 + IS(30), IS(98), IS(16), IDC_INPUT_PORTA_LABEL);        ShowWindow(h, SW_HIDE);
-    h = input_make(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, M + IS(114), y0 + IS(26), IS(250), IS(240), IDC_INPUT_PORTA); ShowWindow(h, SW_HIDE);
+    h = input_make(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP, M + IS(114), y0 + IS(26), IS(250), IS(240), IDC_INPUT_PORTA); ShowWindow(h, SW_HIDE);
     h = input_make(dlg, "STATIC", "Port B Device:", SS_LEFT, M + IS(14), y0 + IS(58), IS(98), IS(16), IDC_INPUT_PORTB_LABEL);       ShowWindow(h, SW_HIDE);
-    h = input_make(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, M + IS(114), y0 + IS(54), IS(250), IS(240), IDC_INPUT_PORTB); ShowWindow(h, SW_HIDE);
+    h = input_make(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP, M + IS(114), y0 + IS(54), IS(250), IS(240), IDC_INPUT_PORTB); ShowWindow(h, SW_HIDE);
     h = input_make(dlg, "STATIC", "", SS_LEFT, 0, 0, 0, 0, IDC_INPUT_PORTS_HINT);
     ShowWindow(h, SW_HIDE);
   }
   cb_build(dlg, M, y0 + IS(92), cw);
 
-  input_make(dlg, "STATIC", "Input Devices:", SS_LEFT, M, y0 + IS(4), IS(88), IS(16), IDC_STATIC);
-  input_make(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+  input_make(dlg, "STATIC", "Input Devices:", SS_LEFT, M, y0 + IS(4), IS(88), IS(16), IDC_INPUT_DEVICELABEL);
+  input_make(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
              M + IS(92), y0, IS(230), IS(220), IDC_INPUT_DEVICE);
   {
     /* A refresh arrow instead of a word. */
@@ -2110,17 +2145,17 @@ static void input_build(HWND dlg)
   }
   /* The right column starts with the Controller Model and the Profile (box and buttons), as wide as the frame under them. */
   rx = M + LW + gap + PW + gap;
-  input_make(dlg, "STATIC", "Controller Model:", SS_LEFT, rx, y0 + IS(4), IS(112), IS(16), IDC_STATIC);
-  input_make(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+  input_make(dlg, "STATIC", "Controller Model:", SS_LEFT, rx, y0 + IS(4), IS(112), IS(16), IDC_INPUT_PADTYPE_LABEL);
+  input_make(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
              rx + IS(114), y0, RW - IS(114), IS(160), IDC_INPUT_PADTYPE);
   {
     int pbw = (RW - 3 * IS(6)) / 4, pgap = IS(6);
     input_make(dlg, "STATIC", "Profile:", SS_LEFT, rx, y0 + IS(34), IS(52), IS(18), IDC_INPUT_PROFLABEL);
-    input_make(dlg, "COMBOBOX", "", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, rx + IS(56), y0 + IS(30), RW - IS(56), IS(220), IDC_INPUT_PROFILES);
-    input_make(dlg, "BUTTON", "Load", WS_TABSTOP | BS_PUSHBUTTON, rx, y0 + IS(60), pbw, IS(24), IDC_INPUT_PROFLOAD);
-    input_make(dlg, "BUTTON", "New", WS_TABSTOP | BS_PUSHBUTTON, rx + pbw + pgap, y0 + IS(60), pbw, IS(24), IDC_INPUT_PROFNEW);
-    input_make(dlg, "BUTTON", "Save", WS_TABSTOP | BS_PUSHBUTTON, rx + 2 * (pbw + pgap), y0 + IS(60), pbw, IS(24), IDC_INPUT_PROFSAVE);
-    input_make(dlg, "BUTTON", "Delete", WS_TABSTOP | BS_PUSHBUTTON, rx + 3 * (pbw + pgap), y0 + IS(60), pbw, IS(24), IDC_INPUT_PROFDELETE);
+    input_make(dlg, "COMBOBOX", "", CBS_DROPDOWN | CBS_AUTOHSCROLL | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP, rx + IS(56), y0 + IS(30), RW - IS(56), IS(220), IDC_INPUT_PROFILES);
+    input_make(dlg, "BUTTON", "&Load", WS_TABSTOP | BS_PUSHBUTTON, rx, y0 + IS(60), pbw, IS(24), IDC_INPUT_PROFLOAD);
+    input_make(dlg, "BUTTON", "&New", WS_TABSTOP | BS_PUSHBUTTON, rx + pbw + pgap, y0 + IS(60), pbw, IS(24), IDC_INPUT_PROFNEW);
+    input_make(dlg, "BUTTON", "&Save", WS_TABSTOP | BS_PUSHBUTTON, rx + 2 * (pbw + pgap), y0 + IS(60), pbw, IS(24), IDC_INPUT_PROFSAVE);
+    input_make(dlg, "BUTTON", "&Delete", WS_TABSTOP | BS_PUSHBUTTON, rx + 3 * (pbw + pgap), y0 + IS(60), pbw, IS(24), IDC_INPUT_PROFDELETE);
     prof_refresh(dlg, NULL);
     {
       COMBOBOXINFO cbi;
@@ -2131,21 +2166,23 @@ static void input_build(HWND dlg)
   }
 
   /* Left: the D-pad (a diamond) with the stick's deadzone, and Start and Mode. */
-  SetRect(&pad_frame[0], M, yT, M + LW, yT + IS(166));
-  SetRect(&pad_frame[1], M, yT + IS(174), M + LW, yT + FH);
+  SetRect(&pad_frame[0], M, yT, M + LW, yT + IS(182));
+  SetRect(&pad_frame[1], M, yT + IS(190), M + LW, yT + FH);
   {
-    int cwid = IS(36) + IS(78), mid = M + (LW - cwid) / 2, ty = yT + IS(26);
-    input_cell(dlg, PAD_UP,    mid, ty, IS(36), IS(78), bh);
-    input_cell(dlg, PAD_LEFT,  M + IS(12), ty + pitch, IS(36), IS(78), bh);
-    input_cell(dlg, PAD_RIGHT, M + LW - IS(12) - cwid, ty + pitch, IS(36), IS(78), bh);
-    input_cell(dlg, PAD_DOWN,  mid, ty + 2 * pitch, IS(36), IS(78), bh);
+    int dlw = IS(34), dbw = IS(86), cwid = dlw + dbw, ty = yT + IS(26);       /* the four buttons are alike; wide enough for "D-Pad Down /" on the first of two lines */
+    int dbh = IS(40), dpitch = IS(42);      /* these four are a little taller: "D-Pad Right / LS Right" is two lines */
+    int midud = M + (LW - cwid) / 2;        /* Up and Down in the middle, over each other */
+    input_cell(dlg, PAD_UP,    midud, ty, dlw, dbw, dbh);
+    input_cell(dlg, PAD_LEFT,  M + IS(8), ty + dpitch, dlw, dbw, dbh);
+    input_cell(dlg, PAD_RIGHT, M + LW - IS(8) - cwid, ty + dpitch, dlw, dbw, dbh);
+    input_cell(dlg, PAD_DOWN,  midud, ty + 2 * dpitch, dlw, dbw, dbh);
 
-    y = ty + 3 * pitch + IS(2);
-    input_make(dlg, "STATIC", "Deadzone:", SS_LEFT, M + IS(12), y + IS(4), IS(60), IS(16), IDC_INPUT_DEADZONE_LABEL);
-    input_make(dlg, "msctls_trackbar32", "", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, M + IS(72), y, IS(130), IS(24), IDC_INPUT_DEADZONE);
+    y = ty + 2 * dpitch + dbh + IS(4);
+    input_make(dlg, "STATIC", "Deadzone:", SS_LEFT, M + IS(12), y + IS(4), IS(68), IS(16), IDC_INPUT_DEADZONE_LABEL);
+    input_make(dlg, "msctls_trackbar32", "", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, M + IS(80), y, IS(122), IS(24), IDC_INPUT_DEADZONE);
     input_make(dlg, "STATIC", "", SS_LEFT, M + IS(206), y + IS(4), IS(42), IS(16), IDC_INPUT_DEADZONE_TEXT);
 
-    ty = yT + IS(174) + IS(26);
+    ty = yT + IS(190) + IS(26);
     input_cell(dlg, PAD_START, M + IS(12), ty, IS(40), IS(76), bh);
     input_cell(dlg, PAD_MODE,  M + LW - IS(12) - IS(116), ty, IS(40), IS(76), bh);
   }
@@ -2160,18 +2197,19 @@ static void input_build(HWND dlg)
       {
         int id = face[r][c], x = rx + IS(12) + c * IS(104), by = y0 + IS(92) + IS(26) + r * IS(62);
         input_cell(dlg, id, x, by, IS(16), IS(80), bh);
-        input_make(dlg, "BUTTON", "Turbo", WS_TABSTOP | BS_AUTOCHECKBOX, x + IS(16), by + bh + IS(4), IS(62), IS(20), IDC_INPUT_TURBO_BASE + id);
+        input_make(dlg, "BUTTON", "Turbo", WS_TABSTOP | BS_AUTOCHECKBOX, x + IS(16) + (IS(80) - IS(68)) / 2, by + bh + IS(4), IS(68), IS(20), IDC_INPUT_TURBO_BASE + id);   /* centered under its button */
       }
     y = y0 + IS(92) + IS(26) + 2 * IS(62) + IS(4);
     input_make(dlg, "STATIC", "Turbo Rate:", SS_LEFT, rx + IS(12), y + IS(4), IS(72), IS(16), IDC_INPUT_TURBORATE_LABEL);
-    input_make(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, rx + IS(88), y, IS(110), IS(160), IDC_INPUT_TURBORATE);
+    input_make(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP, rx + IS(88), y, IS(110), IS(160), IDC_INPUT_TURBORATE);
     {
       HWND tr = GetDlgItem(dlg, IDC_INPUT_TURBORATE);
+      SendMessageA(tr, CB_ADDSTRING, 0, (LPARAM)"Slower");
       SendMessageA(tr, CB_ADDSTRING, 0, (LPARAM)"Slow");
       SendMessageA(tr, CB_ADDSTRING, 0, (LPARAM)"Medium");
-      SendMessageA(tr, CB_ADDSTRING, 0, (LPARAM)"Normal");
       SendMessageA(tr, CB_ADDSTRING, 0, (LPARAM)"Fast");
-      SendMessage(tr, CB_SETCURSEL, (WPARAM)(gui.turbo_rate & 3), 0);
+      SendMessageA(tr, CB_ADDSTRING, 0, (LPARAM)"Faster");
+      SendMessage(tr, CB_SETCURSEL, (WPARAM)(gui.turbo_rate < 0 || gui.turbo_rate > 4 ? 2 : gui.turbo_rate), 0);
     }
   }
 
@@ -2187,7 +2225,7 @@ static void input_build(HWND dlg)
   y = yT + FH + IS(12);
 
   /* The message line (profile messages, "press a key for ...", test mode): under the Profile row on the pad tabs, in the
-     row of the OK button on the Advanced tab, where the pad tabs' buttons are not. */
+     row of the OK button on the Extras tab, where the pad tabs' buttons are not. */
   SetRect(&hint_rc[0], M, y, cw - M, y + IS(18));
   input_make(dlg, "STATIC", INPUT_HINT_IDLE, SS_LEFT | SS_ENDELLIPSIS, M, y, cw - 2 * M, IS(18), IDC_INPUT_HINT);
 
@@ -2196,9 +2234,9 @@ static void input_build(HWND dlg)
   {
     input_make(dlg, "BUTTON", "Restore Defaults", WS_TABSTOP | BS_OWNERDRAW, M, y, IS(140), IS(24), IDC_INPUT_DEFAULTS);        /* drawn with an arrow: a list opens */
   }
-  input_make(dlg, "BUTTON", "Auto Assign...", WS_TABSTOP | BS_PUSHBUTTON, M + IS(164), y, IS(120), IS(24), IDC_INPUT_AUTOASSIGN);
-  input_make(dlg, "BUTTON", "Test Keys", WS_TABSTOP | BS_AUTOCHECKBOX, M + IS(164) + IS(298), y + IS(2), IS(100), IS(20), IDC_INPUT_TEST);
-  input_make(dlg, "BUTTON", "Gamepad Hotkeys...", WS_TABSTOP | BS_PUSHBUTTON, M + IS(164) + IS(128), y, IS(160), IS(24), IDC_INPUT_PADHK);
+  input_make(dlg, "BUTTON", "A&uto Assign...", WS_TABSTOP | BS_PUSHBUTTON, M + IS(164), y, IS(120), IS(24), IDC_INPUT_AUTOASSIGN);
+  input_make(dlg, "BUTTON", "&Test Keys", WS_TABSTOP | BS_AUTOCHECKBOX, M + IS(164) + IS(298), y + IS(2), IS(100), IS(20), IDC_INPUT_TEST);
+  input_make(dlg, "BUTTON", "Gamepad &Hotkeys...", WS_TABSTOP | BS_PUSHBUTTON, M + IS(164) + IS(128), y, IS(160), IS(24), IDC_INPUT_PADHK);
   input_make(dlg, "BUTTON", "OK", WS_TABSTOP | BS_DEFPUSHBUTTON, cw - M - IS(168), y, IS(80), IS(24), IDOK);
   input_make(dlg, "BUTTON", "Cancel", WS_TABSTOP | BS_PUSHBUTTON, cw - M - IS(80), y, IS(80), IS(24), IDCANCEL);
 
@@ -2218,15 +2256,15 @@ static void input_build(HWND dlg)
       { IDC_INPUT_PADTYPE,  "Controller Model:", "Which Mega Drive pad the game sees for this player: Match the Game (the default), or force a 3-Button, 6-Button (adds X, Y, Z and Mode) or 2-Button pad. Only change it if a game misbehaves with the default." },
       { IDC_INPUT_DEADZONE, "Deadzone:", "How far a thumbstick has to move off-center before it registers at all." },
       { IDC_INPUT_REFRESH, NULL, "Refresh: look for gamepads and joysticks again (after plugging one in or out)." },
-      { IDC_INPUT_TURBORATE, "Turbo Rate:", "How fast a Turbo button fires while it is held (set for A, B, C, X, Y or Z with a right-click). Slow: 7.5 presses a second. Medium: 10. Normal: 15. Fast: 30." },
-      { IDC_INPUT_DEFAULTS, NULL, "Choose Player 1, Player 2 or Advanced Tab: only that one goes back to its defaults (OK keeps the change)." },
+      { IDC_INPUT_TURBORATE, "Turbo Rate:", "How fast a Turbo button fires while it is held (set for A, B, C, X, Y or Z with a right-click). Slower presses it 7.5 times a second, Slow 10, Medium 15 (the default), Fast 22.5 and Faster 30 (the most a game can see at 60 frames a second)." },
+      { IDC_INPUT_DEFAULTS, NULL, "Choose Player 1, Player 2 or Extras Tab: only that one goes back to its defaults (OK keeps the change)." },
       { IDC_INPUT_AUTOASSIGN, NULL, "Go through the pad buttons one after another, pressing a key or button for each." },
       { IDC_INPUT_TEST, NULL, "Try your keys: while ticked, the keyboard no longer moves around or presses buttons in this window, so you can press Enter, Tab, Esc and the arrows and see the pad spots light." },
       { IDC_INPUT_PADHK, NULL, "Choose which gamepad button runs each shortcut: fast forward, rewind, save and load state, previous and next slot." },
       { IDC_INPUT_PORTA, "Port A Device:", "What is plugged into the console's first controller port: a pad, mouse, light gun, Team Player and so on. Netplay needs a plain Control Pad on both ports." },
       { IDC_INPUT_PORTB, "Port B Device:", "What is plugged into the console's second controller port: a pad, mouse, light gun, Team Player and so on. Netplay needs a plain Control Pad on both ports." },
       { IDC_INPUT_PROFILES, "Profile:", "A saved set of controls: both players' keys and buttons, pad types, deadzones, turbo buttons and rate, and the combos (not the ports). Pick a saved profile from the list, or type a name for a new one. Restore Defaults puts the program's own controls back." },
-      { IDC_INPUT_PROFLOAD, NULL, "Load the profile named in the box into this window (OK keeps it). Greyed when no profile is saved." },
+      { IDC_INPUT_PROFLOAD, NULL, "Load the profile named in the box into this window (OK keeps it). Grayed when no profile is saved." },
       { IDC_INPUT_PROFNEW, NULL, "Make a new profile from this window's controls, under the name typed in the box." },
       { IDC_INPUT_PROFSAVE, NULL, "Save this window's controls into the loaded profile. If you typed another name in the box, it renames the loaded profile to it (it asks)." },
       { IDC_INPUT_PROFDELETE, NULL, "Delete the profile named in the box (it asks first)." },
@@ -2306,10 +2344,26 @@ static LRESULT CALLBACK input_key_hook(int code, WPARAM wp, LPARAM lp)
 /* The refresh button, level with and as tall as the Input Devices drop-down beside it (measured once the window is fully built and themed). */
 static void input_align_refresh(HWND dlg)
 {
+  static const int pairs[][2] = { { IDC_INPUT_DEVICELABEL, IDC_INPUT_DEVICE }, { IDC_INPUT_PADTYPE_LABEL, IDC_INPUT_PADTYPE }, { IDC_INPUT_PROFLABEL, IDC_INPUT_PROFILES },
+                                  { IDC_INPUT_TURBORATE_LABEL, IDC_INPUT_TURBORATE }, { IDC_INPUT_PORTA_LABEL, IDC_INPUT_PORTA }, { IDC_INPUT_PORTB_LABEL, IDC_INPUT_PORTB } };
   HWND combo = GetDlgItem(dlg, IDC_INPUT_DEVICE), rb = GetDlgItem(dlg, IDC_INPUT_REFRESH);
   RECT cr, br;
   POINT p0;
-  int h, itemh;
+  int h, itemh, k;
+
+  /* Each label is as tall as its drop-down, its text centered in that height (the drop-downs are taller in the Large interface). */
+  for (k = 0; k < (int)(sizeof(pairs) / sizeof(pairs[0])); k++)
+  {
+    HWND lab = GetDlgItem(dlg, pairs[k][0]), box = GetDlgItem(dlg, pairs[k][1]);
+    RECT lr;
+    POINT lp;
+
+    if (!lab || !box || !GetWindowRect(box, &cr) || !GetWindowRect(lab, &lr)) continue;
+    lp.x = lr.left; lp.y = cr.top;
+    ScreenToClient(dlg, &lp);
+    SetWindowLongPtr(lab, GWL_STYLE, GetWindowLongPtr(lab, GWL_STYLE) | SS_CENTERIMAGE);
+    MoveWindow(lab, lp.x, lp.y, lr.right - lr.left, cr.bottom - cr.top, TRUE);
+  }
 
   if (!combo || !rb || !GetWindowRect(combo, &cr) || !GetWindowRect(rb, &br)) return;
   itemh = (int)SendMessage(combo, CB_GETITEMHEIGHT, (WPARAM)-1, 0);
@@ -2326,21 +2380,36 @@ static INT_PTR CALLBACK input_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
   switch (msg)
   {
-    case WM_MEASUREITEM:
+    case WM_NOTIFY:
     {
-      MEASUREITEMSTRUCT *mi = (MEASUREITEMSTRUCT *)lp;
-      if (mi->CtlID == IDC_CB_LIST) { mi->itemHeight = (UINT)IS(17); return TRUE; }
+      const NMHDR *nh = (const NMHDR *)lp;
+
+      if (nh->idFrom == IDC_CB_LIST && !cb_filling)
+      {
+        if (nh->code == LVN_ITEMCHANGED && (((const NMLISTVIEW *)lp)->uChanged & LVIF_STATE) &&
+            (((const NMLISTVIEW *)lp)->uNewState & LVIS_SELECTED) && !(((const NMLISTVIEW *)lp)->uOldState & LVIS_SELECTED))
+          cb_show(dlg, ((const NMLISTVIEW *)lp)->iItem);
+        else if (nh->code == NM_CLICK)
+        {
+          /* A click below the last row would leave nothing chosen while a combo is being worked on. */
+          LVHITTESTINFO hit;
+
+          ZeroMemory(&hit, sizeof(hit));
+          GetCursorPos(&hit.pt);
+          ScreenToClient(nh->hwndFrom, &hit.pt);
+          if (ListView_HitTest(nh->hwndFrom, &hit) < 0 && cb_work() >= 0) cb_fill_list(dlg, cb_work());
+        }
+      }
       return FALSE;
     }
 
     case WM_DRAWITEM:
     {
-      /* The Saved Combos list is drawn here so its selection has the theme's colours (the system one turned white in dark mode). */
       DRAWITEMSTRUCT *di = (DRAWITEMSTRUCT *)lp;
       if (di->CtlType == ODT_BUTTON && (di->CtlID == (UINT)IDC_INPUT_DEFAULTS || di->CtlID == (UINT)IDC_CB_HOLDTIME || di->CtlID == (UINT)IDC_CB_PAUSE)) { theme_draw_dropdown_button(di); return TRUE; }
       if (di->CtlType == ODT_BUTTON && di->CtlID >= (UINT)IDC_INPUT_LABEL_BASE && di->CtlID < (UINT)(IDC_INPUT_LABEL_BASE + PAD_KEYS))
       {
-        /* the button that is waiting for a key: the colour of a selected row, in both themes */
+        /* the button that is waiting for a key: the color of a selected row, in both themes */
         int dark = theme_is_dark();
         COLORREF bg = theme_accent_bg();
         COLORREF fg = dark ? RGB(255, 255, 255) : GetSysColor(COLOR_HIGHLIGHTTEXT);
@@ -2355,35 +2424,6 @@ static INT_PTR CALLBACK input_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         SetTextColor(di->hDC, fg);
         DrawTextA(di->hDC, text, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
         DeleteObject(bb); DeleteObject(eb);
-        return TRUE;
-      }
-      if (di->CtlID == IDC_CB_LIST && di->itemID != (UINT)-1)
-      {
-        int dark = theme_is_dark(), sel = (di->itemState & ODS_SELECTED) != 0;
-        COLORREF bg = sel ? theme_accent_bg() : (dark ? RGB(0x2D, 0x2D, 0x2D) : GetSysColor(COLOR_WINDOW));
-        COLORREF fg = sel ? (dark ? RGB(255, 255, 255) : GetSysColor(COLOR_HIGHLIGHTTEXT)) : (dark ? RGB(0xF0, 0xF0, 0xF0) : GetSysColor(COLOR_WINDOWTEXT));
-        HBRUSH bb = CreateSolidBrush(bg);
-        RECT r = di->rcItem;
-        char text[700] = "", *col[3];
-        int c, x[3], w[3];
-
-        FillRect(di->hDC, &r, bb);
-        DeleteObject(bb);
-        SendMessageA(di->hwndItem, LB_GETTEXT, di->itemID, (LPARAM)text);
-        SetBkMode(di->hDC, TRANSPARENT);
-        SetTextColor(di->hDC, fg);
-        col[0] = text;                                           /* "number<tab>trigger<tab>actions": three columns */
-        col[1] = strchr(col[0], '\t'); if (col[1]) *col[1]++ = '\0'; else col[1] = text + lstrlenA(text);
-        col[2] = strchr(col[1], '\t'); if (col[2]) *col[2]++ = '\0'; else col[2] = col[1] + lstrlenA(col[1]);
-        x[0] = r.left + IS(4); w[0] = CB_COL_NUM;
-        x[1] = x[0] + w[0];    w[1] = CB_COL_TRIG;
-        x[2] = x[1] + w[1];    w[2] = 4000;
-        for (c = 0; c < 3; c++)
-        {
-          RECT cr = r;
-          cr.left = x[c]; cr.right = x[c] + w[c];
-          DrawTextA(di->hDC, col[c], -1, &cr, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | (c == 2 ? DT_NOCLIP : DT_END_ELLIPSIS));
-        }
         return TRUE;
       }
       return FALSE;
@@ -2417,6 +2457,12 @@ static INT_PTR CALLBACK input_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
          risks pumping other pending messages before focus was parked. */
       theme_apply_to_window(dlg);
       input_align_refresh(dlg);
+      if (pico_active())                         /* a 32X game: PicoDrive uses six-button pads on both ports, whatever is chosen here */
+      {
+        static const int ids[] = { IDC_INPUT_PORTA, IDC_INPUT_PORTA_LABEL, IDC_INPUT_PORTB, IDC_INPUT_PORTB_LABEL, IDC_INPUT_PADTYPE, IDC_INPUT_PADTYPE_LABEL };
+        int k;
+        for (k = 0; k < (int)(sizeof(ids) / sizeof(ids[0])); k++) EnableWindow(GetDlgItem(dlg, ids[k]), FALSE);
+      }
       return FALSE;
     }
 
@@ -2500,7 +2546,7 @@ static INT_PTR CALLBACK input_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         if (lp != (LPARAM)-1) { pt.x = (short)LOWORD(lp); pt.y = (short)HIWORD(lp); }
         AppendMenuA(m, MF_STRING, 1, "Set");
         AppendMenuA(m, MF_STRING, 2, "Clear");
-        cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, dlg, NULL);
+        cmd = (int)gui_popup(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y);
         DestroyMenu(m);
         if (cmd == 1)
         {
@@ -2520,9 +2566,7 @@ static INT_PTR CALLBACK input_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
     {
-      /* the combos list has the colour of the drop-down lists of this window */
-      HBRUSH br = (GetDlgCtrlID((HWND)lp) == IDC_CB_LIST) ? theme_ctlcolor_custom((HDC)wp, RGB(0x2D, 0x2D, 0x2D), 2)
-                                                          : theme_ctlcolor((HDC)wp);
+      HBRUSH br = theme_ctlcolor((HDC)wp);
       if (br) return (LRESULT)br;
       break;
     }
@@ -2645,12 +2689,12 @@ static INT_PTR CALLBACK input_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
             AppendMenuA(m, MF_STRING, 1, "Player 1");
             AppendMenuA(m, MF_STRING, 2, "Player 2");
-            AppendMenuA(m, MF_STRING, 3, "Advanced Tab");
+            AppendMenuA(m, MF_STRING, 3, "Extras Tab");
             GetWindowRect(GetDlgItem(dlg, IDC_INPUT_DEFAULTS), &br);
-            cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, br.left, br.bottom, 0, dlg, NULL);      /* below the button */
+            cmd = (int)gui_popup(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, br.left, br.bottom);      /* below the button */
             DestroyMenu(m);
             if (cmd >= 1 && cmd <= 3 &&
-                MessageBoxA(dlg, cmd == 3 ? "Put the Advanced tab back to its defaults: remove all combos and set both controller ports to a Control Pad?"
+                MessageBoxA(dlg, cmd == 3 ? "Put the Extras tab back to its defaults: remove all combos and set both controller ports to a Control Pad?"
                                           : (cmd == 1 ? "Put the keys, buttons, pad type, deadzone, turbo ticks and turbo rate of Player 1 back to their defaults?"
                                                       : "Put the keys, buttons, pad type, deadzone, turbo ticks and turbo rate of Player 2 back to their defaults?"),
                             "Restore Defaults", MB_YESNO | MB_ICONQUESTION) == IDYES)
@@ -2685,7 +2729,7 @@ static INT_PTR CALLBACK input_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           inp.other[inp.player].map = inp.map;
           inp.other[inp.player].padtype = inp.padtype;
           inp.other[inp.player].deadzone = inp.deadzone;
-          gui.turbo_rate = (int)SendDlgItemMessage(dlg, IDC_INPUT_TURBORATE, CB_GETCURSEL, 0, 0) & 3;
+          gui.turbo_rate = (int)SendDlgItemMessage(dlg, IDC_INPUT_TURBORATE, CB_GETCURSEL, 0, 0);
           cb_serialize(gui.combo_text, sizeof(gui.combo_text));
           for (p = 0; p < 2; p++)
           {
@@ -2780,11 +2824,12 @@ static struct
   int fm;
   int psg;
   int cdda;
+  int pwm;                    /* the 32X PWM level: the CD Audio slider is this one while a 32X game runs */
   int latency;
 } aud;
 
 /* The values the window opened with, put back on Cancel (the sliders act at once, so the sound can be judged while sliding). */
-static struct { int volume, fm, psg, cdda, latency; } aud_orig;
+static struct { int volume, fm, psg, cdda, pwm, latency; } aud_orig;
 
 static void audio_apply_live(void)
 {
@@ -2793,6 +2838,7 @@ static void audio_apply_live(void)
   config.fm_preamp = (int16)aud.fm;
   config.psg_preamp = (int16)aud.psg;
   config.cdda_volume = (int16)aud.cdda;
+  gui.pwm_level = aud.pwm;
   gui.latency = aud.latency;
   if (emu_running)      /* the PSG only picks its level up when asked */
     psg_config(0, (unsigned)config.psg_preamp, ((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? 0xff : io_reg[6]);
@@ -2801,7 +2847,7 @@ static void audio_apply_live(void)
 static void audio_revert_live(void)
 {
   aud.volume = aud_orig.volume; aud.fm = aud_orig.fm; aud.psg = aud_orig.psg;
-  aud.cdda = aud_orig.cdda; aud.latency = aud_orig.latency;
+  aud.cdda = aud_orig.cdda; aud.pwm = aud_orig.pwm; aud.latency = aud_orig.latency;
   audio_apply_live();
 }
 
@@ -2817,6 +2863,8 @@ static void audio_refresh_labels(HWND dlg)
   SetDlgItemTextA(dlg, IDC_AUDIO_PSG_TEXT, buf);
   wsprintfA(buf, "%d%%", aud.cdda);
   SetDlgItemTextA(dlg, IDC_AUDIO_CDDA_TEXT, buf);
+  wsprintfA(buf, "%d%%", aud.pwm);
+  SetDlgItemTextA(dlg, IDC_AUDIO_PWM_TEXT, buf);
   wsprintfA(buf, "%d", aud.latency);
   SetDlgItemTextA(dlg, IDC_AUDIO_LATENCY_TEXT, buf);
 }
@@ -2826,7 +2874,8 @@ static void audio_load_controls(HWND dlg)
   audio_set_slider(dlg, IDC_AUDIO_VOLUME,  IDC_AUDIO_VOLUME_TEXT,  0, 100, aud.volume,  "%");
   audio_set_slider(dlg, IDC_AUDIO_FM,      IDC_AUDIO_FM_TEXT,      0, 200, aud.fm,      "%");
   audio_set_slider(dlg, IDC_AUDIO_PSG,     IDC_AUDIO_PSG_TEXT,     0, 200, aud.psg,     "%");
-  audio_set_slider(dlg, IDC_AUDIO_CDDA,    IDC_AUDIO_CDDA_TEXT,    0, 200, aud.cdda,    "%");
+  audio_set_slider(dlg, IDC_AUDIO_CDDA,    IDC_AUDIO_CDDA_TEXT,    0, 200, aud.cdda, "%");
+  audio_set_slider(dlg, IDC_AUDIO_PWM,     IDC_AUDIO_PWM_TEXT,     0, 200, aud.pwm,  "%");
   audio_set_slider(dlg, IDC_AUDIO_LATENCY, IDC_AUDIO_LATENCY_TEXT, 2, 8,   aud.latency, "");
 }
 
@@ -2858,6 +2907,7 @@ static void adv_apply_live(int lowf, int highf)
     config.high_freq = (int16)highf;
   }
   if (emu_running) audio_set_equalizer();
+  if (pico_active()) pico_settings_changed();       /* a 32X game: the library has its own low-pass filter */
 }
 
 static void adv_revert_live(void)
@@ -2933,6 +2983,8 @@ static void adv_current_freqs(HWND dlg, int *lowf, int *highf)
   *highf = (int)GetDlgItemInt(dlg, IDC_ADV_HIGHF, NULL, FALSE);
 }
 
+static int meter_shown_l, meter_shown_r;     /* what the Live Level meter shows now (it falls back slowly) */
+
 static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
   switch (msg)
@@ -2944,7 +2996,6 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         { IDC_AUDIO_VOLUME,  "Master Volume",   "Overall loudness of the sound." },
         { IDC_AUDIO_FM,      "FM Preamp",       "Level of the FM sound channels (the Genesis's main music chip)." },
         { IDC_AUDIO_PSG,     "PSG Preamp",      "Level of the PSG sound channels (the square-wave chip)." },
-        { IDC_AUDIO_CDDA,    "CD Audio",        "Volume of the Sega CD music tracks." },
         { IDC_AUDIO_LATENCY, "Buffered Frames", "How many frames of sound are buffered. Fewer means less delay, but more chance of crackle on a slow PC." },
         { IDC_ADV_FILTER, "Audio Filter:",       "Off, a Low-Pass filter, or a 3-Band equalizer." },
         { IDC_ADV_LP,     "Low-Pass Strength",   "How strongly the high frequencies are rolled off (Low-Pass filter)." },
@@ -2962,8 +3013,33 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       audio_load_controls(dlg);
       adv_load_controls(dlg);
       dlg_add_tips(dlg, tips, (int)(sizeof(tips) / sizeof(tips[0])));
+      {
+        static const GuiTip cd_tip[] =
+        {
+          { IDC_AUDIO_CDDA, "CD Audio", "Volume of the Sega CD music tracks." },
+          { IDC_AUDIO_PWM, "PWM Preamp", "Level of the 32X PWM sound (most of a 32X game's music and effects). Mute PWM Sound is in Audio > Mute." },
+        };
+        dlg_add_tips(dlg, cd_tip, 2);
+      }
+      if (emu_running && !pico_active())                /* only a 32X game has PWM sound: the level does nothing for the others */
+      {
+        EnableWindow(GetDlgItem(dlg, IDC_AUDIO_PWM), FALSE);
+        EnableWindow(GetDlgItem(dlg, IDC_AUDIO_PWM_TEXT), FALSE);
+        EnableWindow(GetDlgItem(dlg, IDC_AUDIO_PWM_LABEL), FALSE);
+      }
+      if (emu_running && (pico_active() || system_hw != SYSTEM_MCD))    /* only a Sega CD game has the CD music and the PCM chip: those two levels do nothing for the others */
+      {
+        EnableWindow(GetDlgItem(dlg, IDC_AUDIO_CDDA), FALSE);
+        EnableWindow(GetDlgItem(dlg, IDC_AUDIO_CDDA_TEXT), FALSE);
+        EnableWindow(GetDlgItem(dlg, IDC_AUDIO_CDDA_LABEL), FALSE);
+        EnableWindow(GetDlgItem(dlg, IDC_ADV_PCM), FALSE);
+        EnableWindow(GetDlgItem(dlg, IDC_ADV_PCM_TEXT), FALSE);
+        EnableWindow(GetDlgItem(dlg, IDC_ADV_PCM_LABEL), FALSE);
+      }
       SendDlgItemMessage(dlg, IDC_AUDIO_METER_L, PBM_SETRANGE32, 0, 100);
       SendDlgItemMessage(dlg, IDC_AUDIO_METER_R, PBM_SETRANGE32, 0, 100);
+      meter_shown_l = meter_shown_r = 0;
+      { int l, r; waveout_meter(&l, &r); }          /* what was heard before the window opened is not shown */
       SetTimer(dlg, 61, 50, NULL);
       return TRUE;
     }
@@ -2971,15 +3047,17 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
       if (wp == 61)
       {
-        static int shown_l, shown_r;
         int l, r;
+        int shown_l = meter_shown_l, shown_r = meter_shown_r;
         waveout_meter(&l, &r);
+        if (!emu_running) l = r = 0;                      /* no game: nothing is playing */
         l = (int)(sqrt((double)l / 32767.0) * 100.0);     /* a ear-friendly scale: quiet sound still shows */
         r = (int)(sqrt((double)r / 32767.0) * 100.0);
         shown_l = l > shown_l ? l : (shown_l > 4 ? shown_l - 4 : 0);   /* falls back slowly */
         shown_r = r > shown_r ? r : (shown_r > 4 ? shown_r - 4 : 0);
         SendDlgItemMessage(dlg, IDC_AUDIO_METER_L, PBM_SETPOS, (WPARAM)shown_l, 0);
         SendDlgItemMessage(dlg, IDC_AUDIO_METER_R, PBM_SETPOS, (WPARAM)shown_r, 0);
+        meter_shown_l = shown_l; meter_shown_r = shown_r;
         return TRUE;
       }
       return FALSE;
@@ -3029,7 +3107,8 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_AUDIO_VOLUME:  aud.volume  = pos; break;
         case IDC_AUDIO_FM:      aud.fm      = pos; break;
         case IDC_AUDIO_PSG:     aud.psg     = pos; break;
-        case IDC_AUDIO_CDDA:    aud.cdda    = pos; break;
+        case IDC_AUDIO_CDDA:    aud.cdda = pos; break;
+        case IDC_AUDIO_PWM:     aud.pwm = pos; break;
         case IDC_AUDIO_LATENCY: aud.latency = pos; break;
         default: break;
       }
@@ -3075,6 +3154,7 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           aud.fm      = 100;
           aud.psg     = 150;
           aud.cdda    = 100;
+          aud.pwm     = 100;
           aud.latency = 4;
           audio_load_controls(dlg);
           audio_apply_live();
@@ -3115,15 +3195,162 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
   return FALSE;
 }
 
+/****************************************************************************
+ * Picture Adjustments: Contrast, Saturation, Gamma and Hue
+ *
+ * Like the Audio Levels and Latency window: the sliders act while they are dragged, Cancel puts the old values back and OK
+ * keeps them (and writes them to the settings file).
+ ****************************************************************************/
+
+static const struct { int slider, text, id; } padj_rows[4] =
+{
+  { IDC_PADJ_CONTRAST, IDC_PADJ_CONTRAST_TEXT, IDM_SET_CONTRAST_BASE },
+  { IDC_PADJ_SAT,      IDC_PADJ_SAT_TEXT,      IDM_SET_SATUR_BASE },
+  { IDC_PADJ_GAMMA,    IDC_PADJ_GAMMA_TEXT,    IDM_SET_GAMMA_BASE },
+  { IDC_PADJ_HUE,      IDC_PADJ_HUE_TEXT,      IDM_SET_HUE_BASE },
+};
+static int padj_orig[4];                          /* the values when the window opened */
+
+/* A slider's value as its readout shows it: 100%, 1.10 for the gamma, 15 degrees for the hue. */
+static void padj_show(HWND dlg, int k)
+{
+  int v = gui_slider_get(padj_rows[k].id);
+  char t[16];
+
+  if (padj_rows[k].id == IDM_SET_GAMMA_BASE) { wsprintfA(t, "%d.%02d", v / 100, v % 100); SetDlgItemTextA(dlg, padj_rows[k].text, t); }
+  else if (padj_rows[k].id == IDM_SET_HUE_BASE)
+  {
+    WCHAR wt[16];
+    wsprintfW(wt, L"%d\x00B0", v);
+    SetDlgItemTextW(dlg, padj_rows[k].text, wt);
+  }
+  else { wsprintfA(t, "%d%%", v); SetDlgItemTextA(dlg, padj_rows[k].text, t); }
+}
+
+/* The sliders and readouts from the values the program holds now. */
+static void padj_load(HWND dlg)
+{
+  int k;
+
+  for (k = 0; k < 4; k++)
+  {
+    HWND bar = GetDlgItem(dlg, padj_rows[k].slider);
+    int lo = 0, hi = 100, def = 0, span, step;
+
+    gui_slider_range(padj_rows[k].id, &lo, &hi, &def);
+    SendMessage(bar, TBM_SETRANGE, TRUE, MAKELPARAM(lo / 10, hi / 10));        /* one notch is 10: the knob jumps from value to value */
+    SendMessage(bar, TBM_SETLINESIZE, 0, 1);
+    SendMessage(bar, TBM_SETPAGESIZE, 0, 1);
+    span = hi / 10 - lo / 10; step = span / 8;                                  /* about eight ticks, the last one at the end of the range */
+    if (step < 1) step = 1;
+    while (step > 1 && span % step) step--;
+    SendMessage(bar, TBM_SETTICFREQ, (WPARAM)step, 0);
+    SendMessage(bar, TBM_SETPOS, TRUE, (LPARAM)((gui_slider_get(padj_rows[k].id) >= 0 ? gui_slider_get(padj_rows[k].id) + 5 : gui_slider_get(padj_rows[k].id) - 5) / 10));
+    padj_show(dlg, k);
+  }
+}
+
+static INT_PTR CALLBACK padj_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+  switch (msg)
+  {
+    case WM_INITDIALOG:
+    {
+      static const GuiTip tips[] =
+      {
+        { IDC_PADJ_CONTRAST, "Contrast",   "How strongly light and dark parts of the picture differ." },
+        { IDC_PADJ_SAT,      "Saturation", "How vivid the colors are; 0% is black and white." },
+        { IDC_PADJ_GAMMA,    "Gamma",      "Lightens (above 1) or darkens (below 1) the mid-tones." },
+        { IDC_PADJ_HUE,      "Hue",        "Turns all the colors around the color wheel." },
+        { IDC_PADJ_DEFAULTS, NULL,         "Put Contrast, Saturation, Gamma and Hue back to normal." },
+        { IDOK,              NULL,         "Keep these settings." },
+        { IDCANCEL,          NULL,         "Close and put the old values back." },
+      };
+      int k;
+
+      for (k = 0; k < 4; k++) padj_orig[k] = gui_slider_get(padj_rows[k].id);
+      theme_apply_to_window(dlg);
+      padj_load(dlg);
+      dlg_add_tips(dlg, tips, (int)(sizeof(tips) / sizeof(tips[0])));
+      return TRUE;
+    }
+
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    {
+      HBRUSH br = theme_ctlcolor((HDC)wp);
+      if (br) return (LRESULT)br;
+      break;
+    }
+
+    case WM_HSCROLL:
+    {
+      int k, id = GetDlgCtrlID((HWND)lp);
+
+      for (k = 0; k < 4; k++)
+        if (padj_rows[k].slider == id)
+        {
+          gui_slider_set(padj_rows[k].id, (int)SendMessage((HWND)lp, TBM_GETPOS, 0, 0) * 10);       /* seen while sliding */
+          padj_show(dlg, k);
+        }
+      return TRUE;
+    }
+
+    case WM_COMMAND:
+      switch (LOWORD(wp))
+      {
+        case IDC_PADJ_DEFAULTS:
+        {
+          int k;
+
+          for (k = 0; k < 4; k++)
+          {
+            int lo, hi, def;
+            if (gui_slider_range(padj_rows[k].id, &lo, &hi, &def)) gui_slider_set(padj_rows[k].id, def);
+          }
+          padj_load(dlg);
+          return TRUE;
+        }
+
+        case IDOK:
+          gui_slider_commit();
+          EndDialog(dlg, IDOK);
+          return TRUE;
+
+        case IDCANCEL:
+        {
+          int k;
+
+          for (k = 0; k < 4; k++) gui_slider_set(padj_rows[k].id, padj_orig[k]);
+          EndDialog(dlg, IDCANCEL);
+          return TRUE;
+        }
+      }
+      break;
+
+    case WM_CLOSE:
+      SendMessage(dlg, WM_COMMAND, IDCANCEL, 0);
+      return TRUE;
+  }
+  return FALSE;
+}
+
+void dlg_picture_adjust(HWND parent)
+{
+  gui_dialog_box(gui.large_ui ? IDD_PICTUREADJ_LARGE : IDD_PICTUREADJ, parent, padj_proc);
+}
+
 void dlg_audio(HWND parent)
 {
   aud.volume  = gui.volume;
   aud.fm      = config.fm_preamp;
   aud.psg     = config.psg_preamp;
   aud.cdda    = config.cdda_volume;
+  aud.pwm     = gui.pwm_level;
   aud.latency = gui.latency;
   aud_orig.volume = aud.volume; aud_orig.fm = aud.fm; aud_orig.psg = aud.psg;
-  aud_orig.cdda = aud.cdda; aud_orig.latency = aud.latency;
+  aud_orig.cdda = aud.cdda; aud_orig.pwm = aud.pwm; aud_orig.latency = aud.latency;
   adv_read_config();
 
   if (gui_dialog_box(gui.large_ui ? IDD_AUDIO_LARGE : IDD_AUDIO, parent, audio_proc) == IDOK)
@@ -3137,11 +3364,13 @@ void dlg_audio(HWND parent)
     config.high_freq = (int16)adv.highf;
     config.pcm_volume = (int16)adv.pcm;
     if (emu_running) audio_set_equalizer();
+    if (pico_active()) pico_settings_changed();
 
     gui.volume         = aud.volume;
     config.fm_preamp   = (int16)aud.fm;
     config.psg_preamp  = (int16)aud.psg;
     config.cdda_volume = (int16)aud.cdda;
+    gui.pwm_level      = aud.pwm;
     gui.latency        = aud.latency;
 
     waveout_set_volume(gui.volume);
@@ -3248,26 +3477,26 @@ void dlg_shortcuts(HWND parent)
 }
 
 static const char menu_guide_text[] =
-  "Every menu in one page. Keyboard shortcuts are in brackets (the original keys; Input > Hotkeys changes them).\r\n"
+  "Every menu, and the Settings, Controls, Cheats and Netplay windows, in one place. Keyboard shortcuts are in brackets (the original keys; Input > Hotkeys changes them).\r\n"
   "\r\n"
   "FILE\r\n"
   "  Open ROM... (Ctrl+O):\r\n"
-  "   Pick a game file to play: Mega Drive / Genesis, Master System, Game Gear, SG-1000, Mega CD, or a .zip / .7z / .gz that holds one.\r\n"
+  "   Pick a game file to play: Mega Drive / Genesis (and Sega Pico, which uses the same file types), Master System, Game Gear, SG-1000, Mega CD, 32X (run by PicoDrive: needs picodrive_libretro.dll in the Plugins folder next to the program; some settings of the Genesis Plus GX core do not apply to those), or a .zip / .7z / .gz that holds one.\r\n"
   "\r\n"
-  "  ROMs Directory... (Ctrl+R):\r\n"
-  "   Shows the game browser for a folder of games. Double-click a game to play it, right-click for more choices (play with a saved state, cheats, cover image, clear the recently played list: it is greyed when there is nothing to clear). Folders inside it are searched too (Settings > General > Scan ROMs Subfolders, on by default).\r\n"
+  "  ROM Directory... (Ctrl+R):\r\n"
+  "   Shows the game browser for a folder of games. Double-click a game to play it, right-click for more choices (play with a saved state, cheats, cover image, clear the recently played list: it is grayed when there is nothing to clear); right-clicking empty space shows the same menu with the choices for a game grayed; with more than one ROM folder set, Open ROM Directory opens a list of them. Folders inside it are searched too (Settings > General > Scan ROM Subfolders, on by default).\r\n"
   "\r\n"
   "  Recent Files:\r\n"
-  "   Your last games, each shown with its console. If a game's file is gone, the program says so and asks whether to remove it from this list (and from Recently Played); the same question comes from the Recently Played group.\r\n"
+  "   Your last games, each with its console on the right. If a game's file is gone, the program says so and asks whether to remove it from this list (and from Recently Played); the same question comes from the Recently Played group.\r\n"
   "\r\n"
   "  Insert Disc...:\r\n"
   "   A Mega CD command to swap the disc by hand, for games that do not ask for it themselves: pick the next disc's .cue or .chd file.\r\n"
   "\r\n"
   "  Apply Patch...:\r\n"
-  "   Pick an .ips or .bps patch file (or a .zip or .7z that holds one) and it is applied in memory to the running game (the item is grey while no game runs), which is then started again from the patched copy: for translations and hacks. A .bps patch made for a different game is refused. The game file itself is not changed.\r\n"
+  "   Pick an .ips or .bps patch file (or a .zip or .7z that holds one) and it is applied in memory to the running game (the item is gray while no game runs), which is then started again from the patched copy: for translations and hacks. A .bps patch made for a different game is refused. The game file itself is not changed.\r\n"
   "\r\n"
   "  ROM Information...:\r\n"
-  "   The game's name, console, genre, favorite state, file size and location, the CRC32, the cartridge header (console name, type, titles, product code, region, copyright, supported controllers, save RAM), and the ROM size and checksum.\r\n"
+  "   The game's name, console, genre, whether it is a favorite, file size and location, the CRC32, the cartridge header (console name, type, titles, product code, region, copyright, supported controllers, save RAM), and the ROM size and checksum. Right-clicking the column titles offers Size All Columns to Fit.\r\n"
   "\r\n"
   "  Open Genesis Plus EX Folder:\r\n"
   "   Opens the program folder: settings, saves, states, screenshots, recordings, cheats, covers and BIOS files.\r\n"
@@ -3283,7 +3512,7 @@ static const char menu_guide_text[] =
   "   Reset is the console's reset button. Hard Reset power-cycles the console (saved game data is kept).\r\n"
   "\r\n"
   "  Load State:\r\n"
-  "   Load State from Selected Slot (F8) restores the exact moment saved in the selected slot. Load State from Slot (keys 0-9) loads any of the slots 0-9 directly, whichever is selected (empty slots are greyed). Undo Load State (Ctrl+F8) puts the game back as it was just before the last load; one level, cleared when the game is closed.\r\n"
+  "   Load State from Selected Slot (F8) restores the exact moment saved in the selected slot. Load State from Slot (keys 0-9) loads any of the slots 0-9 directly, whichever is selected (empty slots are grayed). Undo Load State (Ctrl+F8) puts the game back as it was just before the last load; one level, cleared when the game is closed.\r\n"
   "\r\n"
   "  Save State:\r\n"
   "   Save State to Selected Slot (F5) saves the exact moment into the selected slot. Save State to Slot (Shift+0 - Shift+9) saves into any of the slots 0-9 directly. Undo Save State puts the slot back as it was before the last save (or empties it if it was empty); one level, cleared when the game is closed.\r\n"
@@ -3295,53 +3524,56 @@ static const char menu_guide_text[] =
   "   Load a state from, or save the state to, any file you choose (extension .gpstate), for example to send it to a friend or keep it outside the slots.\r\n"
   "\r\n"
   "  Manage States...:\r\n"
-  "   Thumbnails of all ten slots: left-click loads one, right-click saves to it, saves it to a file (Save This Slot As...) or deletes it.\r\n"
+  "   Thumbnails of all ten slots: left-click loads one, right-click saves to it, saves it to a file (Save This Slot As..., not for an empty slot) or deletes it (not for an empty slot); a double-click on an empty slot saves to it.\r\n"
   "\r\n"
-  "  Enable Rewind (Settings > General; Backspace, Hold):\r\n"
+  "  Enable Rewind (Settings > Options; Backspace, Hold):\r\n"
   "   Keeps a history of recent play so holding Backspace runs it backwards. Uses 256 MB by default and some CPU while on; switch it off if you never rewind. Not available during netplay.\r\n"
   "\r\n"
-  "  Rewind History Size (Settings > General):\r\n"
+  "  Rewind History Size (Settings > Options):\r\n"
   "   How much memory the Rewind history may use: 128, 256 (the default), 512 or 768 MB. More memory lets you go further back (how far depends on the game: busy scenes take more room); changing it starts the history again. The largest sizes may not be available in the 32-bit program.\r\n"
+  "\r\n"
+  "  Rewind Speed (Settings > Options):\r\n"
+  "   How fast Rewind runs backwards: Slow (half the speed), Normal (the default), Fast (twice) or Very Fast (four times). The faster ones go through the history sooner.\r\n"
   "\r\n"
   "  Pause When Inactive:\r\n"
   "   Pauses the game while another window has focus.\r\n"
   "\r\n"
-  "  Keep Running While Windows Are Open:\r\n"
-  "   Do not pause the game while Settings, Controls, Netplay and similar windows are open (questions that need an answer, such as Yes / No, still wait). It wins over Pause When Inactive: going to one of these windows does not pause the game. Off to start with; in Settings > General.\r\n"
-  "\r\n"
   "  Mute When Inactive:\r\n"
   "   Silences the game while another window has focus; it keeps running (Pause When Inactive stops it). In Settings > General.\r\n"
+  "\r\n"
+  "  Hide Mouse Pointer:\r\n"
+  "   Hides the pointer after it has been still for 2, 3, 5 or 10 seconds, over a running game in a window and in fullscreen; moving the mouse shows it again (Settings > Input).\r\n"
+  "\r\n"
+  "  Keep Only One Instance:\r\n"
+  "   Off by default. When on, starting the program again (or opening a game with it) brings the running copy to the front and opens the game there, instead of starting a second copy that would share and overwrite the same settings and saves. Takes effect the next time the program starts; a launch from a frontend (--exit-on-close) is not affected. In Settings > General.\r\n"
   "\r\n"
   "  Keep the PC Awake While Playing:\r\n"
   "   Stops Windows from sleeping, dimming the screen or starting the screen saver while a game is running, and lets it do so again when the game stops. In Settings > General.\r\n"
   "\r\n"
-  "  Keep Only One Instance:\r\n"
-  "   Off to start with. When on, starting the program again (or opening a game with it) brings the running copy to the front and opens the game there, instead of starting a second copy that would share and overwrite the same settings and saves. Takes effect the next time the program starts; a launch from a frontend (--exit-on-close) is not affected. In Settings > General.\r\n"
-  "\r\n"
   "  Confirm Exit While Playing:\r\n"
-  "   Asks what to do when you close the program while a game is running (on to start with): Stop Emulation (back to the game list, the program stays), Exit or Cancel. In Settings > General.\r\n"
+  "   Asks what to do when you close the program while a game is running (on by default): Stop Emulation (back to the game list, the program stays), Exit or Cancel. In Settings > General.\r\n"
   "\r\n"
   "  Game Speed (Ctrl++, Ctrl+-, Ctrl+0):\r\n"
-  "   Steps the speed of the game (grey while no game runs) through 25, 50, 75, 100, 125, 150, 200, 300 and 400 % and shows it on screen; Ctrl+0 goes back to 100 %. The sound follows the speed: below 100 % it is stretched and plays lower, above 100 % short slices play at the normal pitch (a little choppy). The speed returns to 100 % when the game is closed, and it is not available during netplay.\r\n"
+  "   Steps the speed of the game (gray while no game runs) through 25, 50, 75, 100, 125, 150, 200, 300 and 400% and shows it on screen; Ctrl+0 goes back to 100 %. The sound follows the speed: below 100% it is stretched and plays lower, above 100% short slices play at the normal pitch (a little choppy). The speed returns to 100% when the game is closed, and it is not available during netplay.\r\n"
   "\r\n"
   "  Auto Resume:\r\n"
-  "   Saves the game when you close it (or quit) and, the next time you open that game, asks whether to carry on from there. The question has a \"Do not ask again\" box that remembers your answer; the Restore Dialog button next to Auto Resume in Settings brings it back. It uses a state of its own, so your ten save slots are untouched. On to start with; when you close a running game the exit question has a \"Resume this game next time\" box.\r\n"
+  "   Saves the game when you close it (or quit) and, the next time you open that game, asks whether to carry on from there. The question has a \"Do not ask again\" box that remembers your answer; the Restore Dialog button next to Auto Resume in Settings brings it back. It uses a state of its own, so your ten save slots are untouched. On by default; when you close a running game the exit question has a \"Resume this game next time\" box.\r\n"
   "\r\n"
   "  Fast Forward (Tab), Rewind (Backspace):\r\n"
-  "   Ticked items that keep the game running fast, or backwards, until you untick them (Rewind needs Enable Rewind in Settings > General). The keys themselves work while held; they can be changed under Input > Hotkeys. Only one of Fast Forward and Rewind is on at a time. For slow motion use Game Speed below 100 %.\r\n"
+  "   Ticked items that keep the game running fast, or backwards, until you untick them (Rewind needs Enable Rewind in Settings > Options). The keys themselves work while held; they can be changed under Input > Hotkeys. Only one of Fast Forward and Rewind is on at a time. For slow motion use Game Speed below 100 %.\r\n"
   "\r\n"
   "VIEW\r\n"
   "  View Mode:\r\n"
   "   List View or Grid View: how the game browser shows your games.\r\n"
   "\r\n"
   "  List Columns:\r\n"
-  "   Choose which columns the list view shows: Favorite (a star: click it to mark a game as a favorite), and Console (Name is always shown), and Genre, Region (read from tags such as (USA) in the file name), File Size, File Type (zip, bin, chd and so on) (these four are shown after Console and hidden at first). Drag a column title to move the column, and drag the edge between titles to change its width; the order and the widths you leave are remembered. Click a column's title to sort by it; Shift+click more titles to sort by them as well, in that order (for example Console, then Genre, then name), and Shift+click one again to flip it, while a plain click starts over (View > Show Recently Played shows what you played last). Right-clicking the column header does the same. The choices are greyed out while the grid view is shown. Right-clicking the column header also offers Auto-Resize All Columns, which gives every shown column the width its contents need.\r\n"
+  "   A Sega Pico game (a Mega Drive file whose header says SEGA PICO) is listed as its own console, Sega Pico. Choose which columns the list view shows: Favorite (a star: click it to mark a game as a favorite) and Console (Name is always shown), plus Genre, Region (read from tags such as (USA) in the file name), File Size and File Type (zip, bin, chd and so on), which are hidden at first and shown after Console. Drag a column title to move the column, and drag the edge between titles to change its width; the order and the widths you leave are remembered. Click a column's title to sort by it; Shift+click more titles to sort by them as well, in that order (for example Console, then Genre, then name); Shift+click one again to flip it, while a plain click starts over (View > Show Recently Played shows what you played last). Right-clicking the column header offers the same choices, and also Size All Columns to Fit, which gives every shown column the width its contents need. The choices are grayed out while the grid view is shown.\r\n"
   "\r\n"
   "  Theme:\r\n"
   "   System (follow Windows), Light or Dark.\r\n"
   "\r\n"
   "  Style (Settings > General):\r\n"
-  "   Classic (the look the program has always had) or Modern: flat, rounded buttons, check boxes, radio buttons and drop-down lists (the box and the list that opens), tabs with an accent line under the chosen one, softer toolbar buttons, on-screen messages on a rounded plate instead of an outline, the chosen game or row in the accent color, rounded window corners and a title bar and border in the color of the theme (Windows 11), and Segoe UI text (changed at once in the windows that are open, both ways). It is also in View > Style, and goes with Theme: any Style can be Light or Dark.\r\n"
+  "   Classic (the look the program has always had) or Modern: flat, rounded buttons, check boxes, radio buttons and drop-down lists (the box and the list that opens), tabs with an accent line under the chosen one, softer toolbar buttons, the chosen game or row in the accent color, rounded window corners and a title bar and border in the color of the theme (Windows 11), and Segoe UI text, also in the menus (changed at once in the windows that are open, both ways). It is also in View > Style, and goes with Theme: any Style can be Light or Dark.\r\n"
   "\r\n"
   "  Interface Size (Settings > General):\r\n"
   "   Normal or Large menus and dialogs. Changing it restarts the program.\r\n"
@@ -3350,16 +3582,16 @@ static const char menu_guide_text[] =
   "   Writes the name of each toolbar button (Open, Play, Settings ...) under its icon; switch it off for icons only.\r\n"
   "\r\n"
   "  Show Toolbar, Show Search Bar (Ctrl+F), Show Filter Bar:\r\n"
-  "   Switch the rows above the game list on or off. The toolbar has buttons for open ROM, refresh, favorites only, search (the same as Ctrl+F), play, pause, stop, reset, switch fullscreen, screenshot, settings, the Video and Audio settings tabs and the player controls; a star button next to Refresh shows only your favorites. The toolbar stays above the game while it runs in a window; in fullscreen it slides in at the top edge of the screen together with the menu bar (the picture makes room for it) (View > Toolbar in Fullscreen switches that on; it is off to start with). The search bar narrows the list as you type (Ctrl+F jumps to it; Close or Show Search Bar hides it, and Show Search Bar brings it back). Search words narrow by one field: region:usa, console:mega cd, genre:action, type:chd, fav:yes; anything else you type is looked for in the name (for example sonic region:usa). The filter bar narrows it by console, genre (looked up from the game's title in a table built into the program; a game that is not in it is listed as Unknown) and region (read from tags such as (USA) in the file name). Hiding the filter bar clears its choices, so the list shows every game again. Show Status Bar (View > Toolbars, on by default) shows or hides the bar along the bottom. Toolbar Icon Size (Small, Normal, the default, or Large; also in View > Toolbars > Toolbar Size) and Show Toolbar Labels (the name of each button under its icon, on to start with) are in Settings > General. When the window is too narrow for all the buttons, the ones that do not fit go on a second row (a third if needed), like a menu bar, and the bar grows taller; they return to one row when the window is wide enough again.\r\n"
+  "   Switch the rows above the game list on or off. The toolbar has buttons for open ROM, refresh, favorites only, search (the same as Ctrl+F), play, pause, stop, reset, switch fullscreen, screenshot, settings, the Video and Audio settings tabs and the player controls; a star button next to Refresh shows only your favorites. The toolbar stays above the game while it runs in a window; in fullscreen it slides in at the top edge of the screen together with the menu bar (the picture makes room for it; View > Toolbars > Toolbar in Fullscreen switches that on, and it is off by default). The search bar narrows the list as you type (Ctrl+F jumps to it; Close or Show Search Bar hides it, and Show Search Bar brings it back). Search words narrow by one field: region:usa, console:mega cd, genre:action, type:chd, fav:yes; anything else you type is looked for in the name (for example sonic region:usa). The filter bar narrows it by console, genre (looked up from the game's title in a table built into the program; a game that is not in it is listed as Unknown) and region (read from tags such as (USA) in the file name). Hiding the filter bar clears its choices, so the list shows every game again. Show Status Bar (View > Toolbars, on by default) shows or hides the bar along the bottom. Toolbar Icon Size (Small, Normal, the default, or Large; also in View > Toolbars > Toolbar Size) and Show Toolbar Labels (the name of each button under its icon, on by default) are in Settings > General. When the window is too narrow for all the buttons, the ones that do not fit go on a second row (a third if needed), like a menu bar, and the bar grows taller; they return to one row when the window is wide enough again.\r\n"
   "\r\n"
   "  Toolbar in Fullscreen:\r\n"
   "   In fullscreen, shows the toolbar together with the menu bar when the mouse touches the top edge of the screen.\r\n"
   "\r\n"
   "  Show Favorites Only:\r\n"
-  "   Mark a game as a favorite by clicking its star in the Favorite column (the right-click menu has Add To Favorites too). Show Favorites Only, or the star on the toolbar, hides every other game. Sorting by the Favorite column puts your favorites first.\r\n"
+  "   Mark a game as a favorite by clicking its star in the Favorite column (the right-click menu has Add to Favorites too). Show Favorites Only, or the star on the toolbar, hides every other game. Sorting by the Favorite column puts your favorites first.\r\n"
   "\r\n"
   "  Show Recently Played:\r\n"
-  "   Shows the last few games you opened as a group at the top of the list, above all the others. On by default; choose it again to switch it off.\r\n"
+  "   Shows the last few games you opened as a group at the top of the list, above all the others (they are in the full list too). On by default; choose it again to switch it off.\r\n"
   "\r\n"
   "  Clean Game Names:\r\n"
   "   The game list shows \"Sonic The Hedgehog\" instead of \"Sonic The Hedgehog (USA, Europe) [!].md\". Only the list (and File > Recent Files) changes, not the files. On by default.\r\n"
@@ -3374,47 +3606,47 @@ static const char menu_guide_text[] =
   "   A strip of letters beside the list: click a letter, or drag along the strip, to jump to the games starting with it (the letter under the pointer grows) (# is for names starting with a digit or a symbol); letters with no game are dimmed. \r\n"
   "\r\n"
   "  List Spacing:\r\n"
-  "   Compact, Normal or Expanded spacing between the rows of the game list (greyed while a game is running). \r\n"
+  "   Compact, Normal or Expanded spacing between the rows of the game list (grayed while a game is running). \r\n"
+  "\r\n"
+  "  Always on Top:\r\n"
+  "   Keeps the window above every other window (also in Settings > General).\r\n"
   "\r\n"
   "  Reset Window Size:\r\n"
   "   Puts the window back at the size chosen under Video > Window Size, in the middle of the screen.\r\n"
   "\r\n"
   "VIDEO\r\n"
   "  Window Size:\r\n"
-  "   1x to 6x (3x to start with).\r\n"
+  "   1x to 6x (3x by default).\r\n"
   "\r\n"
   "  Fullscreen (Alt+Enter), Start ROM in Fullscreen:\r\n"
   "   Esc also toggles fullscreen. In fullscreen, move the mouse to the top edge of the screen to show the menu bar; it hides again when the mouse moves away. The mouse cursor stays visible in fullscreen and hides itself after a few idle seconds. Closing the ROM leaves fullscreen and returns to the selected window size.\r\n"
   "\r\n"
-  "  Always on Top:\r\n"
-  "   Keeps the window above every other window.\r\n"
-  "\r\n"
   "  Render Filter:\r\n"
-  "   Pixel-art scalers and CRT looks (Scale2x, Smooth, xBRZ, Scanlines, CRT...) applied before the picture is shown.\r\n"
+  "   Pixel-art scalers and CRT looks (Scale2x, xBR, HQ2x, xBRZ, Catmull-Rom, Scanlines, CRT...) applied before the picture is shown.\r\n"
   "\r\n"
   "  Shaders:\r\n"
-  "   Runs a librashader (.slangp) GPU shader chain on top of the picture, Direct3D 11 only, and 64-bit exe only (the 32-bit exe has no Shaders menu); librashader.dll ships with the exe (see the README).\r\n"
+  "   Runs a librashader (.slangp) shader chain on top of the picture, Direct3D 11 only, and 64-bit exe only (the 32-bit exe has no Shaders menu); librashader.dll ships in the Plugins folder next to the exe (see the README).\r\n"
   "\r\n"
   "  Visual Effects:\r\n"
   "   Smooth Scaling (soft edges when enlarged), Integer Scaling (enlarges the picture by whole multiples only, 1x, 2x, 3x ..., so every pixel is the same size; it is centered, with borders, when the window is between two sizes, and follows the Aspect Ratio setting for the shape of the pixels), Brighten (a gentle brightness lift), LCD Ghosting (bright pixels fade slowly, like a handheld screen).\r\n"
   "\r\n"
-  "  Picture Adjustments:\r\n"
-  "   Contrast, Saturation, Gamma and Hue, each a slider (Settings > Picture; Reset Picture Adjustments puts them back), alongside Brighten (Settings > Video). They work with every renderer.\r\n"
+  "  Picture Adjustments...:\r\n"
+  "   A window with Contrast, Saturation, Gamma and Hue, each a slider that acts while you drag it (Restore Defaults puts them back to normal, Cancel puts back what they were when the window opened, OK keeps them), alongside Brighten (Settings > Video; the window is also a button there). They work with every renderer.\r\n"
   "\r\n"
   "  Flicker Blending, Dither Smoothing:\r\n"
   "   Flicker Blending joins the two frames of an object that a game shows every other frame to fake transparency, so it looks solid. Dither Smoothing softens the checkerboard patterns many games use to fake extra colors (Settings > Video).\r\n"
   "\r\n"
   "  Bezel Image...:\r\n"
-  "   Draws an image (a PNG whose middle is see-through: a TV, an arcade cabinet) over the picture as a frame; Remove Bezel goes back to plain bars. The picker starts in the bezels folder next to the program (made for you). The bezel is drawn in fullscreen only (Settings > Picture, in the Bezel and Border frame).\r\n"
+  "   Draws an image (a PNG whose middle is see-through: a TV, an arcade cabinet) over the picture as a frame; Remove Bezel goes back to plain bars. The picker starts in the bezels folder next to the program (made for you). The bezel is drawn in fullscreen only (Settings > Video, in the Bezel and Border frame).\r\n"
   "\r\n"
   "  Shader Parameters...:\r\n"
-  "   Adjusts the loaded shader preset's own parameters while it runs, with a slider that jumps from one value to the next (1, 2, 3 ...) as the preset defines them, without editing its file; the values are remembered for that preset (Video > Shaders, and Settings > Video in the shader box under the preset file; greyed until a shader that has settings is loaded).\r\n"
+  "   Adjusts the loaded shader preset's own parameters while it runs, with a slider that jumps from one value to the next (1, 2, 3 ...) as the preset defines them, without editing its file; the values are remembered for that preset (Video > Shaders, and Settings > Video in the shader box under the preset file; grayed until a shader that has settings is loaded).\r\n"
   "\r\n"
-  "  Skip Render Filter With Shaders:\r\n"
-  "   While a GPU shader runs, the Render Filter is not applied first, so the shader gets the game's own picture instead of one the filter already enlarged. Shaders that scale by whole multiples or place a bezel work out their sizes from the picture they receive, so one that looks too small or wrong with a Render Filter on may look right with this ticked. Off by default; has no effect without a shader or a Render Filter (Settings > Video, in the shader box beside Shader Parameters; Direct3D 11 only).\r\n"
+  "  Skip Render Filter with Shaders:\r\n"
+  "   While a shader runs, the Render Filter is not applied first, so the shader gets the game's own picture instead of one the filter already enlarged. Shaders that scale by whole multiples or place a bezel work out their sizes from the picture they receive, so one that looks too small or wrong with a Render Filter on may look right with this ticked. Off by default; has no effect without a shader or a Render Filter (Video > Shaders, below Shader Parameters, and Settings > Video, in the shader box beside it; Direct3D 11 only).\r\n"
   "\r\n"
   "  Border Color:\r\n"
-  "   The colour of the bars around the picture when the window or screen is a different shape: black, dark gray, gray, white, navy, dark green or dark red (Settings > Picture).\r\n"
+  "   The color of the bars around the picture when the window or screen is a different shape: black, dark gray, gray, white, navy, dark green or dark red (Settings > Video).\r\n"
   "\r\n"
   "  Fullscreen Mode:\r\n"
   "   Whether fullscreen is a Borderless Window or Exclusive Fullscreen: the screen is switched to the Fullscreen Resolution for the game and put back afterwards (Video menu, or Settings > Video).\r\n"
@@ -3423,50 +3655,47 @@ static const char menu_guide_text[] =
   "   The screen size used when Fullscreen Mode is Exclusive Fullscreen: a drop-down of the sizes your monitor offers (Desktop Resolution changes nothing). Under Window Size in Settings > Video.\r\n"
   "\r\n"
   "  Scanlines:\r\n"
-  "   Dark lines between rows: Off, 25, 50, 75 or 100 %.\r\n"
+  "   Dark lines between rows: Off, 25, 50, 75 or 100%.\r\n"
   "\r\n"
   "  NTSC Filter:\r\n"
-  "   Composite, S-Video or RGB television look.\r\n"
+  "   Composite, S-Video or RGB television look. For a 32X game it is the program's own version of the look (the picture keeps its size), not the Genesis Plus GX core's.\r\n"
   "\r\n"
   "  Aspect Ratio:\r\n"
   "   Original Console Pixels (the default: the Mega Drive's own pixels, 8:7 wide in the 256-pixel mode and 32:35 in the 320-pixel one, which makes the picture about 1.31 times as wide as it is high; other consoles use square pixels), 1:1 (Square Pixels), 4:3 (Standard, as on a CRT television) or 16:9 (Widescreen: stretches the picture to fill a widescreen window).\r\n"
   "\r\n"
   "  Limit Redraws:\r\n"
-  "   Draw the picture at most 30, 40, 50 or 60 times a second while the game itself still runs at full speed. Helps a weak PC or a very fast monitor; Off draws every frame (Settings > Video).\r\n"
-  "\r\n"
-  "  Hide Mouse Pointer:\r\n"
-  "   Hides the pointer after it has been still for 2, 3, 5 or 10 seconds, over a running game in a window and in fullscreen; moving the mouse shows it again (Settings > Video).\r\n"
+  "   Draws the picture at most 30, 40, 50 or 60 times a second while the game itself still runs at full speed. Helps a weak PC or a very fast monitor; Off draws every frame (Settings > Video).\r\n"
   "\r\n"
   "  Borders:\r\n"
-  "   Hide or show the overscan borders (top/bottom, left/right).\r\n"
+  "   Hides or shows the overscan borders (top/bottom, left/right).\r\n"
   "\r\n"
   "  Interlaced Mode:\r\n"
-  "   Single Field (the default) or Double Field, for games that use the 448-line interlaced mode.\r\n"
+  "   Single Field (the default) or Double Field, for games that use the 448-line interlaced mode. Single Field shows the same half of the picture every frame, so it stays steady. Double Field shows both fields at once; where something moves, the older field's lines are rebuilt from the new ones and both lines of each pair are drawn partly alike, so there are no comb teeth and the picture hardly shakes (a moving part is a little softer than a still one). With Original Console Pixels or Square Pixels the picture is drawn at the shape of the 224-line one, not tall.\r\n"
   "\r\n"
   "  Frameskip:\r\n"
   "   Skips drawing some frames on a slow PC (Off, Auto, or Manual by audio-buffer level). Not used during netplay or recording.\r\n"
   "\r\n"
   "  VSync:\r\n"
-  "   Wait for the screen's refresh after each frame so motion is even. Works with any renderer; it is skipped for a frame whenever the sound buffer runs low, so it never causes crackle. Off by default.\r\n"
+  "   Waits for the screen's refresh after each frame so motion is even. Works with any renderer; it is skipped for a frame whenever the sound buffer runs low, so it never causes crackle. Off by default.\r\n"
   "\r\n"
   "  Renderer:\r\n"
-  "   GDI draws with the CPU; Direct3D 9 and Direct3D 11 use the graphics card instead (each falls back to GDI automatically if it isn't available). Direct3D 11 is what a GPU shader tool such as librashader needs.\r\n"
+  "   GDI draws with the CPU; Direct3D 9 and Direct3D 11 use the graphics card instead (each falls back to GDI automatically if it isn't available). Direct3D 11 is what a shader tool such as librashader needs.\r\n"
   "\r\n"
   "AUDIO\r\n"
   "  Mute (Ctrl+M):\r\n"
   "   Silences the sound; untick to hear it again.\r\n"
   "\r\n"
-  "  Mute FM Sound (Ctrl+N), Mute PSG Sound (Ctrl+B):\r\n"
-  "   Silence the FM chip (the main music) or the PSG chip (the square-wave sound) on its own, without touching the saved levels.\r\n"
+  "  Mute FM Sound (Ctrl+N), Mute PSG Sound (Ctrl+B), Mute PWM Sound (Ctrl+P):\r\n"
+  "   Silence the FM chip (the main music), the PSG chip (the square-wave sound) or, in a 32X game, the PWM sound (most of its music and effects) on its own, without touching the saved levels. The level of the PWM sound is the PWM Preamp slider of Levels and Latency.\r\n"
   "\r\n"
   "  Levels and Latency...:\r\n"
-  "   Master volume, FM and PSG levels, CD audio, how many frames of sound are buffered, and on the right the audio filter (Off, Low-Pass or a 3-Band EQ) with its settings and the Sega CD PCM volume. The sliders act while you drag them (Cancel puts the old levels back), and a live Level meter at the bottom (left and right) shows what is playing; it moves while the game keeps running behind the window (Keep Running While Windows Are Open).\r\n"
+  "   Master volume, FM and PSG levels (they work for 32X games too), CD audio (not for 32X), how many frames of sound are buffered, and on the right the audio filter (Off, Low-Pass or a 3-Band EQ) with its settings and the Sega CD PCM volume. The sliders act while you drag them (Cancel puts the old levels back), and a live Level meter at the bottom (left and right) shows what is playing (it stays empty when no game is running); it moves while the game keeps running behind the window.\r\n"
   "\r\n"
   "  High-Quality FM Synthesis, Master System FM Unit and Chip (Settings > Audio):\r\n"
   "   Band-limited FM, whether the Master System's FM unit is used (auto, off, on), and which chip emulates it.\r\n"
   "\r\n"
   "  FM Chip:\r\n"
-  "   Which Genesis FM sound chip is emulated: YM2612 or YM3438, the exact Nuked versions (default is YM2612 Nuked) or MAME.\r\n"
+  "   Which Genesis FM sound chip is emulated: YM2612 or YM3438, the exact Nuked versions (default is YM2612 Nuked) or MAME. A 32X game (PicoDrive) has only the two chip types: the YM3438 kinds play as a YM3438, the others as a YM2612.\r\n"
   "\r\n"
   "  Audio Backend:\r\n"
   "   Which Windows sound system plays the game's sound: Windows Classic, XAudio2, WASAPI (Shared; the default) or WASAPI (Exclusive). The newer ones can have lower delay and cope better when the PC is busy. Exclusive gives the game the sound device for itself, for the lowest delay: no other program can play sound on that device while the game runs, and the device has to accept 16-bit stereo at the chosen Sample Rate. If one cannot be opened the game falls back (Exclusive to Shared, then to Windows Classic). Sound Device applies to all of them (Settings > Audio). Takes effect at once.\r\n"
@@ -3484,7 +3713,7 @@ static const char menu_guide_text[] =
   "   Cleaner PSG sound, a soft high-frequency roll-off, and mono instead of stereo.\r\n"
   "\r\n"
   "  Stereo Width:\r\n"
-  "   Narrow (50 %), Normal, Wide (150 %) or Extra Wide (200 %): pulls the left and right sound toward the middle or spreads them apart (Settings > Audio).\r\n"
+  "   Narrow (50%), Normal, Wide (150%) or Extra Wide (200%): pulls the left and right sound toward the middle or spreads them apart (Settings > Audio).\r\n"
   "\r\n"
   "  Bass Boost:\r\n"
   "   Off, Light, Medium or Strong: lifts the low notes so the music is fuller on laptop speakers and small headphones (Settings > Audio).\r\n"
@@ -3500,31 +3729,31 @@ static const char menu_guide_text[] =
   "\r\n"
   "INPUT\r\n"
   "  Controls...:\r\n"
-  "   One window with a tab for Player 1, one for Player 2 and an Advanced tab (what is plugged into the console's two controller ports, and the combos). The pad tabs lay the buttons out like a Mega Drive pad in titled frames (D-Pad with its deadzone, System, Buttons with their Turbo ticks) around a picture of the pad. Click a button, then press the key or gamepad button you want (Esc or a right click cancels the wait; right-click a button to set or clear it; clicking its spot on the picture works too). Tick Turbo beside A, B, C, X, Y or Z: held down, the button then fires repeatedly (Turbo Rate sets how fast). A key or button can only be on one pad button: assigning it takes it off the one that had it (also on the other player, for keys), and a line under the pad says what was removed, and when the key is also a shortcut or the pad button also a gamepad hotkey. Auto Assign goes through them all in turn. Pressing a mapped key or gamepad button lights its spot on the picture, so you can check a pad; tick Test Keys to try keys such as Enter, Tab and Esc without them operating the window. Set keyboard keys and gamepad buttons, and set the gamepad thumbstick's deadzone (how far it has to move off-center before it registers at all). The right stick counts as four more buttons (RS Up, Down, Left, Right) that can be assigned like any other; this works for XInput pads and, where the pad reports the stick on its Rx / Ry or Z / Rz axes, for DirectInput ones. Gamepad Hotkeys... opens a window to choose which pad button runs each shortcut, pressed on its own (no Back needed): Fast Forward and Rewind (held), Toggle Turbo, Save State and Load State (current slot), and Previous and Next Slot. By default the right stick does the last four (up = save, down = load, left = previous slot, right = next slot) and LB / LT are Fast Forward / Rewind, the right stick button (RSB) switches Turbo on or off (the buttons keep their Turbo setting). A button used there also reaches the game, so the right stick is a good choice. Xbox-style (XInput) pad of Player 1 only. Player 1 defaults: arrows, Z X C = A B C, A S D = X Y Z, Enter = Start, Right Shift = Mode. Restore Defaults (bottom left) opens a list: Player 1, Player 2 or Advanced Tab (the combos removed and both ports back to a Control Pad); only that one goes back to its defaults (a player's also resets the Turbo Rate).\r\n"
+  "   One window with a tab for Player 1, one for Player 2 and an Extras tab (what is plugged into the console's two controller ports, and the combos). The pad tabs lay the buttons out like a Mega Drive pad in titled frames (D-Pad with its deadzone, System, Buttons with their Turbo ticks) around a picture of the pad. Click a button, then press the key or gamepad button you want (Esc or a right click cancels the wait; right-click a button to set or clear it; clicking its spot on the picture works too). Tick Turbo beside A, B, C, X, Y or Z: held down, the button then fires repeatedly (Turbo Rate sets how fast). A key or button can only be on one pad button: assigning it takes it off the one that had it (also on the other player, for keys), and a line under the pad says what was removed, and when the key is also a shortcut or the pad button also a gamepad hotkey. Auto Assign goes through them all in turn. Pressing a mapped key or gamepad button lights its spot on the picture, so you can check a pad; tick Test Keys to try keys such as Enter, Tab and Esc without them operating the window. You can also set the gamepad thumbstick's deadzone (how far it has to move off-center before it registers at all). The right stick counts as four more buttons (RS Up, Down, Left, Right) that can be assigned like any other; this works for XInput pads and, where the pad reports the stick on its Rx / Ry or Z / Rz axes, for DirectInput ones. Gamepad Hotkeys... opens a window to choose which pad button runs each shortcut, pressed on its own (no Back needed): Fast Forward and Rewind (held), Toggle Turbo, Save State and Load State (current slot), and Previous and Next Slot. By default the right stick does the last four (up = save, down = load, left = previous slot, right = next slot) and LB / LT are Fast Forward / Rewind; the right stick button (RSB) switches Turbo on or off (the buttons keep their Turbo setting). A button used there also reaches the game, so the right stick is a good choice. Gamepad hotkeys use the Xbox-style (XInput) pad of Player 1 only. Player 1 defaults: arrows, Z X C = A B C, A S D = X Y Z, Enter = Start, Right Shift = Mode. Restore Defaults (bottom left) opens a list: Player 1, Player 2 or Advanced Tab (the combos removed and both ports back to a Control Pad); only that one goes back to its defaults (a player's also resets the Turbo Rate).\r\n"
   "\r\n"
   "  Hotkeys...:\r\n"
   "   Every keyboard shortcut in one list: select an action, click Assign (or double-click it) and press the key you want, alone or with Ctrl, Shift or Alt. A key can only be on one action: the old one loses it. Clear removes a shortcut and Restore Defaults brings the original keys back. The menu labels and the Keyboard Shortcuts window follow your choices. Fast Forward and Rewind (the keys you hold, Tab and Backspace by default) are in the list too; their gamepad buttons are under Controls > Gamepad Hotkeys.\r\n"
   "\r\n"
   "  Port A / Port B Device:\r\n"
-  "   What is plugged in: Control Pad, Mouse, a light gun (Light Phaser, Menacer or Justifier, depending on the port), XE-1AP analog joystick, Activator, Paddle Control, Sports Pad, Graphic Board (Pico's drawing tablet), a 4-player Team Player adapter, EA 4-Way Play (4 players; it takes both ports), a Master Tap (the Master System's 4-player adapter) or the Smash Controller — not every device is on both ports. Found in Input > Controls, on the Advanced tab (no longer in the Input menu or Settings).\r\n"
+  "   What is plugged in: Control Pad, Mouse, a light gun (Light Phaser, Menacer or Justifier, depending on the port), XE-1AP analog joystick, Activator, Paddle Control, Sports Pad, Graphic Board (Pico's drawing tablet), a 4-player Team Player adapter, EA 4-Way Play (4 players; it takes both ports), a Master Tap (the Master System's 4-player adapter) or the Smash Controller; not every device is on both ports. Found in Input > Controls, on the Extras tab (no longer in the Input menu or Settings).\r\n"
   "\r\n"
   "  Enable Background Input:\r\n"
-  "   Keep reading the controller while another window has focus.\r\n"
+  "   Keeps reading the controller while another window has focus.\r\n"
   "\r\n"
   "  Show Light Gun Crosshair:\r\n"
-  "   Show a crosshair instead of the arrow over the picture while a light gun is plugged in (off to start with; Settings > Input only, not in the Input menu).\r\n"
+  "   Shows a crosshair instead of the arrow over the picture while a light gun is plugged in (off by default; Settings > Input only, not in the Input menu).\r\n"
   "\r\n"
   "  Invert Mouse Y Axis:\r\n"
-  "   Flip the up/down movement of the Sega Mouse (Settings > Input only, not in the Input menu).\r\n"
+  "   Flips the up/down movement of the Sega Mouse (Settings > Input only, not in the Input menu).\r\n"
   "\r\n"
   "  Combo Buttons...:\r\n"
-  "   Makes one key or pad button press several game buttons together. It is in the Advanced tab of Controls (Input > Controls...), in one Combos frame. The Saved Combos list always shows 12 numbered rows (number, trigger, actions). Click a row (an empty one for a new combo), then click the Trigger button and press the key or gamepad button to use (a letter or digit, F1-F12, Num0-Num9, Space, an arrow key, or a pad button: A B X Y LB RB LT RT Back Start or the D-pad on XInput pads). Then click the game buttons you want in the Actions grid (Up Down Left Right, Start Mode, X Y Z, A B C): each click adds that button to the row, for example Gamepad Y -> Down+A. The Hold button opens a menu that makes the action you just added Held: after the trigger is pressed it stays down by itself, for the time chosen (0.25 to 10 seconds) or until you press that button yourself, shown as Down(Hold 1.0s); Off (No Hold) is the default, the action is then only pressed while the trigger is. The Pause button opens a menu to wait before the next action starts (Pause 0.5s); without one, the action after a Held one starts 70 ms later (Down, then A). Remove Last takes the last action off the row, Delete Combo empties the selected row (up to 12 combos). If every action is Held until you let go, the trigger works as a switch: press it to hold them, press it again to let go. Held actions are also let go when the window loses the focus or a game is opened or closed. The How It Works button, at the right end of the list's title row, explains all this with an example. Saved with Controls. They work for Player 1.\r\n"
+  "   Makes one key or pad button press several game buttons together. It is on the Extras tab of Controls (Input > Controls...), in one Combos frame. The Saved Combos list always shows 12 numbered rows (number, trigger, actions). Click a row (an empty one for a new combo), then click the Trigger button and press the key or gamepad button to use (a letter or digit, F1-F12, Num0-Num9, Space, an arrow key, or a pad button: A B X Y LB RB LT RT Back Start or the D-pad on XInput pads). Then click the game buttons you want in the Actions grid (Up Down Left Right, Start Mode, X Y Z, A B C): each click adds that button to the row, for example Gamepad Y -> Down+A. The Hold button opens a menu that makes the action you just added Held: after the trigger is pressed it stays down by itself, for the time chosen (0.25 to 10 seconds) or until you press that button yourself, shown as Down(Hold 1.0s); Off (No Hold) is the default, the action is then only pressed while the trigger is. The Pause button opens a menu to wait before the next action starts (Pause 0.5s); without one, the action after a Held one starts 70 ms later (Down, then A). Remove Last takes the last action off the row, Delete Combo empties the selected row (up to 12 combos). If every action is Held until you let go, the trigger works as a switch: press it to hold them, press it again to let go. Held actions are also let go when the window loses focus or a game is opened or closed. The How It Works button, at the right end of the list's title row, explains all this with an example. Saved with Controls. They work for Player 1.\r\n"
   "\r\n"
   "  Profile (Controls window):\r\n"
-  "   In the Controls window, a Profile box with Load, Save and Delete: a profile stores both players' keys and buttons, pad types, deadzones, the turbo rate and the combos (not the ports; in the profiles folder next to the program). The Profile box is a drop-down you can also type in: pick a saved profile or type a name, then use Load (loads it into the window, and OK keeps it), New (a new profile from the window, under the name typed in the box), Save (saves the window into the loaded profile; with another name typed in the box it renames the loaded profile, after asking) or Delete. Restore Defaults (next to OK) puts both players' keys, buttons, deadzones, turbo rate and combos back to their defaults; Load and Delete are greyed while no profile is saved.\r\n"
+  "   In the Controls window, a Profile box with Load, Save and Delete: a profile stores both players' keys and buttons, pad types, deadzones, the turbo rate and the combos (not the ports; in the profiles folder next to the program). The Profile box is a drop-down you can also type in: pick a saved profile or type a name, then use Load (loads it into the window, and OK keeps it), New (a new profile from the window, under the name typed in the box), Save (saves the window into the loaded profile; with another name typed in the box it renames the loaded profile, after asking) or Delete. Restore Defaults (next to OK) puts both players' keys, buttons, deadzones, turbo rate and combos back to their defaults; Load and Delete are grayed while no profile is saved.\r\n"
   "\r\n"
   "  Mouse Speed:\r\n"
-  "   How fast the Sega Mouse moves: 50 to 200 %.\r\n"
+  "   How fast the Sega Mouse moves: 50 to 200%.\r\n"
   "\r\n"
   "  Pause When the Pad Disconnects:\r\n"
   "   Pauses the game with a message when Player 1's gamepad is unplugged or its battery runs out, instead of running on without input. Off by default (Settings > Input).\r\n"
@@ -3536,66 +3765,69 @@ static const char menu_guide_text[] =
   "   While a Sega Mouse or light gun game runs, keeps the pointer inside the picture. Pausing the game, opening a menu or dialog, or Alt+Tab lets it go.\r\n"
   "\r\n"
   "  Gamepad Hotkeys:\r\n"
-  "   Under Controls, besides fast forward, rewind and the states: Pause, Reset, Screenshot, Fullscreen, Mute, Record Video + Audio, and Game Speed Faster and Slower, and Pause Menu can each be put on a gamepad button (none by default). A box in the same window makes them need a held Hold Button (the last row), so the pad's buttons are free in the game when it is not held. The Pause Menu pauses the game and shows a small menu over the picture: Resume, Save State, Load State, Reset and Quit to the List. Move with the D-pad (or the arrow keys), choose with the pad\'s A or Start (or Enter), and go back with B (or Esc).\r\n"
+  "   Under Controls, besides fast forward, rewind and the states, these can each be put on a gamepad button (none by default): Pause, Reset, Screenshot, Fullscreen, Mute, Record Video + Audio, Game Speed Faster and Slower, and the Pause Menu. A box in the same window makes them need a held Hold Button (the last row), so the pad's buttons are free in the game when it is not held. The Pause Menu pauses the game and shows a small menu over the picture: Resume, Save State, Load State, Reset and Quit to the List. Move with the D-pad (or the arrow keys), choose with the pad\'s A or Start (or Enter), and go back with B (or Esc).\r\n"
   "\r\n"
   "TOOLS\r\n"
   "  Cheats... (Ctrl+C):\r\n"
-  "   Add Game Genie, Action Replay or raw codes, or load a .cht file. Convert... shows a code as Game Genie, Action Replay or raw. When other files in the game's console folder under cheats have a name starting like the game's (\"Sonic The Hedgehog (Action Replay).cht\" beside \"Sonic The Hedgehog (USA).cht\"), a drop-down appears under the buttons to add their cheats to the list; it is not shown otherwise. A file in cheats\\library named after the game's CRC32 (12345678.cht) is loaded by itself for a game that has no cheats of its own.\r\n"
+  "   With no game running, this opens the cheats of the game picked in the list, without starting it. Add Game Genie, Action Replay or raw codes (also a work RAM byte, aaaaaa:dd), or load a .cht file. Click #, Code, Description or Status to sort the list; the # is the number a cheat got when it was added and stays with it. Right-clicking the column titles offers Size All Columns to Fit. The Status column says Active, Off, Cheats are off, Game not running or Code not valid for this system. ROM codes wait for the first button press after a game starts or is reset (at least two seconds, at most twenty), because a game checks its ROM first. In netplay both PCs need the same cheats on. Convert... shows a code as Game Genie, Action Replay or raw. When other files in the game's console folder under Cheats have a name starting like the game's (\"Sonic The Hedgehog (Action Replay).cht\" beside \"Sonic The Hedgehog (USA).cht\"), the Similar Cheat Files drop-down appears under the buttons to load their cheats (when the list already has cheats it offers Load, which replaces the list, or Insert, which merges the file's cheats into it); it is not shown otherwise. A file in Cheats\\library named after the game's CRC32 (12345678.cht) is loaded by itself for a game that has no cheats of its own.\r\n"
   "\r\n"
   "  Cheat Search...:\r\n"
-  "   Finds where a value (lives, health, ammo; or with Size 2 bytes a score or money, saved as two cheats) is kept in memory, so you can make a cheat without a code (a Mega CD game can also search the CD's own memory, Word RAM in either of its modes: pick it under Memory). A reset or a state load starts the search again. The window stays open while the game runs: First Search, change the value in the game, choose Compare (Equal to value, Changed, Unchanged, Increased or Decreased) and Next Search, and repeat until a few addresses are left; select one, type the value to hold in Set to and click Add Cheat. It becomes an ordinary RAM cheat in the Cheats list.\r\n"
+  "   Finds where a value (lives, health, ammo; or with Size 2 bytes a score or money, saved as two cheats) is kept in memory, so you can make a cheat without a code (a Mega CD game can also search the CD's own memory, Word RAM in either of its modes: pick it under Memory). A reset or a state load starts the search again; closing the window keeps it until the game stops. Working it through: First Scan, change the value in the game, choose Compare (Equal to Value, Changed, Unchanged, Increased or Decreased) and Next Scan, and repeat until a few addresses are left; select one, type the value to hold in Set to and click Add Cheat. It becomes an ordinary RAM cheat in the Cheats list.\r\n"
   "\r\n"
   "  Record Input..., Play Input Recording..., Stop Input Recording / Playback:\r\n"
-  "   Record Input saves the state of the game at that moment and every button you press after it into a .gpm file; Play Input Recording loads that state and presses the same buttons again, exactly: for speedruns and bug reports. It must be played with the same game. Stop ends either one; closing the game does too. Not during netplay. These are in Tools > Record.\r\n"
+  "   Record Input saves the state of the game at that moment and every button you press after it into a .gpm file (named after the game and the time, in the Input folder inside the recordings folder, like the other recordings); Play Input Recording loads that state and presses the same buttons again, exactly: for speedruns and bug reports. It must be played with the same game. Stop ends either one; closing the game does too. Not during netplay. These are in Tools > Record.\r\n"
   "\r\n"
   "  Record VGM File:\r\n"
-  "   Records what the sound chips play into a .vgm file that music players supporting the format can play. Like the other recordings it goes in the recordings folder (in its VGM folder), named after the game and the time, and Stop Recording (Alt+F11) ends it (the item is grayed while logging). It is in Tools > Record, and grayed out until a game is loaded.\r\n"
+  "   Records what the sound chips play into a .vgm file that music players supporting the format can play. Like the other recordings it goes in the recordings folder (in its VGM folder, in the console's folder), named after the game and the time, and Stop Recording (Alt+F11) ends it (the item is grayed while logging). Shift+F10 starts it. A recording that starts while a game plays begins with the state of the sound chips, so the instruments are there even if the song started earlier (the FM chip is read back, whichever FM Chip is chosen, so this holds after a state was loaded too). At the end every held note is released and the PSG turned down, so the file does not end on a ringing tone. A 32X game's PWM sound is recorded too; only some players can play it (the libvgm-based ones). It is in Tools > Record, and grayed out until a game is loaded.\r\n"
   "\r\n"
   "  Netplay... / Stop Netplay:\r\n"
   "   Two-player game over a local network: one PC hosts, the other joins. Both need the same ROM, the same program file and the same settings. The status bar shows the ping to the other player and whether a different delay would suit it better. A lost connection is given a minute to come back. The Host box can open the router's port for you (UPnP, off until you tick it).\r\n"
   "\r\n"
   "  Record:\r\n"
-  "   Video + Audio (Shift+F11) makes an .mp4, Audio Only (Ctrl+F11) a .wav. Files go in the recordings folder, each kind in a folder of its own (Video, Audio, GIF, VGM); Record Animated GIF makes a picture-only .gif (20 pictures a second, up to 6 seconds, then it stops by itself) with Ctrl+F12. Stop Recording (Alt+F11) ends it, a Record VGM File log too.\r\n"
+  "   Video + Audio (Shift+F11) makes an .mp4, Audio Only (Ctrl+F11) a .wav. Files go in the recordings folder, each kind in a folder of its own (Video, Audio, GIF, VGM, Input) and in it a folder for the console. How a video recording looks is set in Settings > Options > Video Recording: its size (1x to 4x the console's own picture, 2x by default), its quality (automatic, or 4 to 32 Mbit/s) and its shape (the console's own, stretched to 4:3, or stretched to 16:9). Record Animated GIF makes a picture-only .gif (20 pictures a second, up to 6 seconds, then it stops by itself) with Ctrl+F12. Stop Recording (Alt+F11) ends it, a Record VGM File log too.\r\n"
   "\r\n"
   "  Save Screenshot (F12):\r\n"
   "   Saves a PNG named after the game and the time.\r\n"
   "\r\n"
   "  Screenshot Output:\r\n"
-  "   Final: the render filter is applied, then the picture is stretched to 4:3. Corrected: the plain picture stretched to 4:3 at 640x480. Raw: exactly what the emulator drew, at its own size. Settings > General only (no longer in the Tools menu).\r\n"
+  "   Corrected (the default): the picture stretched to the 4:3 shape of a TV, 640x480. Raw: the console's own picture at its own size (for example 320x224), not stretched. Final: like Corrected, but with the Render Filter applied (the same as Corrected when no filter is on). Settings > Options only (no longer in the Tools menu).\r\n"
+  "\r\n"
+  "  Screenshot Size:\r\n"
+  "   1x to 4x: how many times larger than the output's own size the screenshot is (Corrected 640x480, Raw the console's own size, Final the filter's size). Raw is enlarged in whole pixels so it stays sharp. Settings > Options only.\r\n"
   "\r\n"
   "OPTIONS\r\n"
   "  Settings...:\r\n"
-  "   Every option of the menus on tabs (General, View, Video, Picture, OSD, Audio, Input and Options). Hover over an option for a short description (it hides after 30 seconds). Restore Defaults (bottom left) opens a list: All Tabs puts every setting on all tabs back to its default, keeping your controls, ROM folder and cheats; This Tab does the same for the tab you are looking at only. The window grows taller when a tab needs more room. OK keeps what you changed; Cancel (also the X and Esc) puts every setting back as it was when the window opened. Changes show at once while the window is open, so you can see their effect; the buttons that open another window or act on files (ROM Directories, Bezel Image, Clear Cover Cache, Restore Dialog) work immediately and are not undone by Cancel. A change takes effect at once, exactly as if you had used the menu; the windows that have their own settings open from a button.\r\n"
+  "   The options of the menus, and some more, on tabs (General, Video, Audio, Picture, Input, Options and OSD). Hover over an option for a short description (it hides after 30 seconds). Restore Defaults (bottom left) opens a list: All Tabs puts every setting on all tabs back to its default, keeping your controls, ROM folder and cheats; This Tab does the same for the tab you are looking at only. The window grows taller when a tab needs more room. OK keeps what you changed; Cancel (also the X and Esc) puts every setting back as it was when the window opened. Changes show at once while the window is open, so you can see their effect; the buttons that open another window or act on files (ROM Directories, Bezel Image, Clear Cover Cache, Restore Dialog) work immediately and are not undone by Cancel. A change takes effect at once, exactly as if you had used the menu; the windows that have their own settings open from a button.\r\n"
   "\r\n"
   "  Region:\r\n"
   "   Which region the console reports to the game: detect from the ROM, USA, Europe or Japan.\r\n"
   "\r\n"
   "  Force VDP Mode:\r\n"
-  "   Run the video timing at 60 Hz (NTSC) or 50 Hz (PAL) whatever the region says.\r\n"
+  "   Runs the video timing at 60 Hz (NTSC) or 50 Hz (PAL), whatever the region says.\r\n"
   "\r\n"
   "  Console:\r\n"
-  "   Detect the console from the game, or force a specific model.\r\n"
+  "   Detects the console from the game, or forces a specific model.\r\n"
   "\r\n"
   "  Lock-On Cartridge:\r\n"
-  "   Attach a Game Genie, Action Replay or Sonic & Knuckles to the game. Settings > Options only (not in the Options menu).\r\n"
+  "   Attaches a Game Genie, Action Replay or Sonic & Knuckles to the game. Settings > Options only (not in the Options menu).\r\n"
   "\r\n"
   "  Boot from BIOS When Available:\r\n"
-  "   Run the console's start-up ROM when a BIOS file is present (see below). Settings > Options only (not in the Options menu).\r\n"
+  "   Runs the console's start-up ROM when a BIOS file is present (see below). Settings > Options only (not in the Options menu).\r\n"
   "\r\n"
   "  Emulate Address Error Exceptions:\r\n"
   "   Hardware-accurate crashes on bad memory access; turn off only for a few hacked games. Settings > Options only (not in the Options menu).\r\n"
   "\r\n"
   "  Emulate Mega CD Disc Latency:\r\n"
-  "   Make the Mega CD drive seek slowly like the real one; some games need it; off (the default) makes loading instant. Settings > Options only (not in the Options menu).\r\n"
+  "   Makes the Mega CD drive seek slowly like the real one (some games need it); off, the default, makes loading instant. Settings > Options only (not in the Options menu).\r\n"
   "\r\n"
   "  Show Extended Game Gear Screen:\r\n"
-  "   Show the whole Game Gear picture instead of only the part its screen displayed. Settings > Options only (not in the Options menu).\r\n"
+  "   Shows the whole Game Gear picture instead of only the part its screen displayed. Settings > Options only (not in the Options menu).\r\n"
   "\r\n"
   "  Show Master System Side Borders:\r\n"
   "   Off by default, which crops the 8-pixel columns at each side; tick to show them. Settings > Options only (not in the Options menu).\r\n"
   "\r\n"
-  "  Show Frame Rate:\r\n"
-  "   Frames per second on screen. (Settings > OSD.)\r\n"
+  "  Show Frame Rate (Ctrl+T):\r\n"
+  "   Frames per second on screen. (Settings > OSD.) Ctrl+T switches it on and off, and it can be put on a pad button in Gamepad Hotkeys.\r\n"
   "\r\n"
   "  Messages for Changed Options:\r\n"
   "   On by default: changing an option shows its name and new value (needs Show Messages) (Settings > OSD).\r\n"
@@ -3607,7 +3839,7 @@ static const char menu_guide_text[] =
   "   1, 2, 3 (the default), 4, 5, 6 or 7 seconds: how long each message stays on screen (Settings > OSD). Messages Shown (1 to 7, default 3) sets how many of the latest messages stay together, the newest nearest the corner and older ones stacked beside it; each fades out when its time is up.\r\n"
   "\r\n"
   "  Font Color:\r\n"
-  "   White (the default), Yellow, Green, Cyan, Orange, Pink, Red or Black: the colour of messages, the frame rate and the pause menu title (Settings > OSD). The outline turns light for dark colours, so the text stays readable on any picture.\r\n"
+  "   White (the default), Yellow, Green, Cyan, Orange, Pink, Red or Black: the color of messages, the frame rate and the pause menu title (Settings > OSD). The outline turns light for dark colors, so the text stays readable on any picture.\r\n"
   "\r\n"
   "  Font Size:\r\n"
   "   Small, Normal, Large or Extra Large: the size of the text of messages, the frame rate and the pause menu (Settings > OSD).\r\n"
@@ -3622,13 +3854,13 @@ static const char menu_guide_text[] =
   "   Off, or 5, 10, 15, 20, 25 or 30 seconds: when a game starts, its first seconds run at full speed to get past logos and intros. A press of a game button ends the skip early. Not used when resuming a game or during netplay (Settings > Options). Off by default.\r\n"
   "\r\n"
   "  Enable Log:\r\n"
-  "   Writes genesis-plus-ex.log next to the program: games loaded, settings, messages, errors, netplay events and crashes. Off by default; send it along with a bug report (Settings > Options).\r\n"
+  "   Writes genesis-plus-ex.log in the Logs folder next to the program: the program version, Windows and the main settings, games loaded and closed, resets, saved and loaded states, the cheat codes read and when the ROM ones go in, messages, errors, netplay events and crashes. Off by default; send it along with a bug report (Settings > Options).\r\n"
   "\r\n"
   "  Keep a Cover Cache:\r\n"
-  "   On to start with. Each finished cover is saved (small and compressed) in one file, covers\\thumbs.dat, so the next time the program starts the grid covers appear almost at once instead of being read and scaled again. A cover you change, or a new cover size or frame, is made again by itself; the first run, and a new size, still take the usual time. Clear Cover Cache (next to it in Settings > General) deletes the saved covers. The file holds roughly 20 to 60 KB per game and size, and is emptied by itself when it passes 300 MB.\r\n"
+  "   On by default. Each finished cover is saved (small and compressed) in one file, Covers\\thumbs.dat, so the next time the program starts the grid covers appear almost at once instead of being read and scaled again. A cover you change, or a new cover size or frame, is made again by itself; the first run, and a new size, still take the usual time. Clear Cover Cache (next to it in Settings > General) deletes the saved covers. The file holds roughly 20 to 60 KB per game and size, and is emptied by itself when it passes 300 MB.\r\n"
   "\r\n"
-  "  Crash reports:\r\n"
-  "   If the program crashes it writes genesis-plus-ex-crash.txt and genesis-plus-ex-crash.dmp next to the program, whether or not Enable Log is on (only the last crash is kept). Off by default; switch it on with Enable Crash Report in Settings > Options. Send both with a bug report.\r\n"
+  "  Enable Crash Report:\r\n"
+  "   If the program crashes it writes genesis-plus-ex-crash.txt and genesis-plus-ex-crash.dmp in the Logs folder next to the program, whether or not Enable Log is on (only the last crash is kept). Off by default; switch it on with Enable Crash Report in Settings > Options. Send both with a bug report.\r\n"
   "\r\n"
   "  Show Messages:\r\n"
   "   Short messages over the picture, such as \"Saved to slot 3\" or the name of a screenshot. Changing an option, from a menu or from Settings, shows its name and new value too (\"Smooth Scaling: On\", \"Scanlines: 50%\"). Untick to hide them (the status bar still shows them). (Settings > OSD.)\r\n"
@@ -3637,14 +3869,16 @@ static const char menu_guide_text[] =
   "  Keyboard Shortcuts (F1):\r\n"
   "   The list of hotkeys.\r\n"
   "\r\n"
-  "  Menu Guide:\r\n"
-  "   This page. Pick a section on the left to show just that part.\r\n"
+  "  User Guide:\r\n"
+  "   This page. Pick a section on the left to show just that part. The window can be made bigger or maximized.\r\n"
   "\r\n"
   "  About Genesis Plus EX:\r\n"
   "   Version and credits.\r\n"
-  "\r\n"
+  "\r\n";
+
+static const char guide_bios_text[] =
   "BIOS AND FIRMWARE FILES\r\n"
-  "Required or optional firmware files go in the program's \"bios\" folder (Open Genesis Plus EX Folder, then bios).\r\n"
+  "Required or optional firmware files go in the program's \"BIOS\" folder (Open Genesis Plus EX Folder, then BIOS).\r\n"
   "\r\n"
   "Filename:\tDescription:\r\n"
   "\r\n"
@@ -3659,12 +3893,87 @@ static const char menu_guide_text[] =
   "- sk.bin\tSonic & Knuckles ROM (lock-on) - optional\r\n"
   "- sk2chip.bin\tSonic & Knuckles UPMEM ROM (lock-on) - optional\r\n"
   "- areplay.bin\tAction Replay ROM (lock-on) - optional\r\n"
-  "- ggenie.bin\tGame Genie ROM (lock-on) - optional";
+  "- ggenie.bin\tGame Genie ROM (lock-on) - optional\r\n"
+  "- 32X_G_BIOS.BIN\t32X Genesis-side BIOS - not needed, not used (32X games start without it)\r\n"
+  "- 32X_M_BIOS.BIN\t32X Master SH-2 BIOS - not needed, not used\r\n"
+  "- 32X_S_BIOS.BIN\t32X Slave SH-2 BIOS - not needed, not used\r\n";
 
 /* One page of text, split at run time into its sections (a header is a line
    with no indent, in capitals; entries are the indented lines under it) so the
    guide can be browsed by section and filtered by a search word. */
 #define GUIDE_MAX_SECTIONS 16
+
+static const char guide_extra_text[] =
+  "CONTROLS WINDOW\r\n"
+  "  Where it is:\r\n"
+  "   Input > Controls... or the Controls button on the toolbar. It has a tab for Player 1, one for Player 2 and an Extras tab (Alt+1, Alt+2 and Alt+E open them).\r\n"
+  "  Buttons of the pad:\r\n"
+  "   Click a button, then press the key or gamepad button you want. The same press works for keyboard and pad. Esc or a right click cancels. A key or button can only be on one pad button; giving it to a new one takes it from the old one.\r\n"
+  "  Input Devices:\r\n"
+  "   Which gamepad (or the keyboard) the window shows and reads; the arrow next to it looks for pads again.\r\n"
+  "  Controller Model:\r\n"
+  "   Which Mega Drive pad the game sees for this player: Match the Game (the default), 3-Button, 6-Button or 2-Button.\r\n"
+  "  Turbo and Turbo Rate:\r\n"
+  "   The Turbo box beside A, B, C, X, Y and Z makes that button fire again and again while it is held. Turbo Rate sets how fast: Slower, Slow, Medium (the default), Fast or Faster.\r\n"
+  "  Deadzone:\r\n"
+  "   How far a stick has to move before it counts.\r\n"
+  "  Profile:\r\n"
+  "   Load, New, Save and Delete keep whole control setups (both players, pad types, deadzones, turbo rate and combos) in the Profiles folder.\r\n"
+  "  Auto Assign...:\r\n"
+  "   Goes through all the buttons in turn so you only press the keys.\r\n"
+  "  Gamepad Hotkeys...:\r\n"
+  "   Puts shortcuts (fast forward, rewind, states, pause, screenshot and more) on pad buttons; an optional hold button keeps the pad free for the game until it is held.\r\n"
+  "  Test Keys:\r\n"
+  "   Try your keys: while it is ticked the keyboard no longer moves around or presses buttons in this window, so you can press any key or pad button and see its spot light.\r\n"
+  "  Extras tab:\r\n"
+  "   Port A Device and Port B Device choose what is plugged into each port (Control Pad, Mouse, Light Phaser, Menacer, Justifier, Paddle, Sports Pad, Team Player, Master Tap and more). Combo buttons let one key or pad button press several game buttons: pick a row, choose the Trigger, then click the game buttons to add; Hold keeps a button down for a time and Pause waits before the next one. Up to 12 combos; How It Works shows an example.\r\n"
+  "  Restore Defaults:\r\n"
+  "   Puts both players' keys, buttons, deadzones, turbo rate and combos back to their defaults. OK keeps what you changed; Cancel puts everything back.\r\n"
+  "\r\n"
+  "CHEATS WINDOW\r\n"
+  "  Where it is:\r\n"
+  "   Tools > Cheats... (Ctrl+C), or Edit Cheats in a game's right-click menu in the list (no need to start the game).\r\n"
+  "  Enable Cheats:\r\n"
+  "   Turns every cheat on or off at once. It is off until you turn it on.\r\n"
+  "  The list:\r\n"
+  "   #  The number a cheat got when it was added; it stays with the cheat when the list is sorted.\r\n"
+  "   Box  Tick it to switch that cheat on; the box in the column title ticks or unticks all of them.\r\n"
+  "   Code  A Game Genie, Action Replay or raw code (the hint under the buttons shows what this console accepts).\r\n"
+  "   Description  The name you gave it.\r\n"
+  "   Status  Active, Off, Cheats are off, Game not running, or Code not valid for this system.\r\n"
+  "   Click a title to sort by it (again to turn the order round); right-click the titles for Size All Columns to Fit.\r\n"
+  "  Name and Code:\r\n"
+  "   Type a name and a code, then Add Code. Select a cheat to edit it, then Save.\r\n"
+  "  Remove and Remove All:\r\n"
+  "   Take out the selected cheat, or every cheat (it asks first).\r\n"
+  "  Load Cheat...:\r\n"
+  "   Adds the cheats of a RetroArch .cht file to the list.\r\n"
+  "  Export...:\r\n"
+  "   Saves the list as a RetroArch .cht file (name, code and whether it is on), to keep, share or use in another program; Load Cheat reads it back.\r\n"
+  "  Convert...:\r\n"
+  "   Shows a code as Game Genie, Action Replay or raw.\r\n"
+  "  Similar Cheat Files:\r\n"
+  "   Other cheat files in the console's Cheats folder whose name starts like the game's. Pick one to load its cheats; when the list already has cheats you choose Load (replace the list) or Insert (merge them in).\r\n"
+  "  Cheat Search:\r\n"
+  "   Tools > Cheat Search... (a window of its own) finds where a value (lives, health, a score) is kept in memory, so you can make a cheat without a code.\r\n"
+  "  Good to know:\r\n"
+  "   Right-clicking the column titles of the result list offers Size All Columns to Fit. ROM codes wait for the first button press after a game starts or resets (twenty seconds at most). In netplay both PCs need the same cheats on, and the window is locked during the session.\r\n"
+  "\r\n"
+  "NETPLAY WINDOW\r\n"
+  "  Where it is:\r\n"
+  "   Tools > Netplay...\r\n"
+  "  Before you start:\r\n"
+  "   Both PCs load the same ROM, use the same program and the same settings. Only cartridge games work (not Mega CD), and both ports need a Control Pad.\r\n"
+  "  Host:\r\n"
+  "   Pick a port (55455 by default), an input delay (1 to 4 frames) and, if you like, a session code, then press Host. The host is Player 1.\r\n"
+  "  Join:\r\n"
+  "   Press Find hosts and choose the host (or type its address), enter the code and press Join. The guest is Player 2.\r\n"
+  "  During a session:\r\n"
+  "   Both games reset and start together. The status bar shows the ping. Pause, reset, states, cheats, rewind, fast forward and emulation settings are locked.\r\n"
+  "  If something differs:\r\n"
+  "   A setting that differs between the PCs refuses the connection and names it; the games are compared every second.\r\n"
+  "  Open the port on my router automatically:\r\n"
+  "   Lets friends outside your network join with your public address (UPnP). Otherwise forward the port yourself; Windows Firewall may ask to allow TCP 55455 and UDP 55456.\r\n";
 
 static struct
 {
@@ -3680,7 +3989,7 @@ static int guide_is_header(const char *line)
   const char *p = line;
   int letters = 0;
 
-  if (*p == ' ' || *p == '\r' || *p == '\n' || *p == '\0') return 0;
+  if (*p == ' ' || *p == '\r' || *p == '\n' || *p == '\0' || *p == '\t') return 0;
   for (; *p && *p != '\r' && *p != '\n'; p++)
   {
     if (*p >= 'a' && *p <= 'z') return 0;
@@ -3689,14 +3998,22 @@ static int guide_is_header(const char *line)
   return letters >= 3;
 }
 
+/* The whole guide: the menus, then the windows (Settings is made from its own table of options, so it cannot fall behind). */
 static void guide_parse(void)
 {
   char *p;
   int s = 0;
+  size_t cs = settings_guide_text(NULL, 0), need = sizeof(menu_guide_text) + sizeof(guide_extra_text) + sizeof(guide_bios_text) + cs + 16;
 
-  guide.text = (char *)malloc(sizeof(menu_guide_text) + 2);
+  guide.text = (char *)malloc(need);
   if (!guide.text) return;
   lstrcpyA(guide.text, menu_guide_text);
+  lstrcatA(guide.text, "\r\n");
+  settings_guide_text(guide.text + lstrlenA(guide.text), cs + 1);
+  lstrcatA(guide.text, "\r\n");
+  lstrcatA(guide.text, guide_extra_text);
+  lstrcatA(guide.text, "\r\n");
+  lstrcatA(guide.text, guide_bios_text);                       /* the firmware files come last */
   lstrcatA(guide.text, "\r\n");
 
   guide.name[0] = "Introduction";
@@ -3720,56 +4037,471 @@ static void guide_parse(void)
   guide.count = s + 1;
 }
 
-/* Shows the chosen section (or all of them) in the text pane. */
+/* What each paragraph of the page looks like. */
+enum { GP_H1, GP_H2, GP_PARA, GP_ROW, GP_LOGO, GP_CTITLE, GP_CENTER };
+typedef struct { int start, len, type, label; } GuidePara;
+
+/* The first page shows the logo in the middle, with the credits under it: the page keeps room for the logo at its top and a picture window
+   on the text box covers that room (see guide_logo_place). */
+static int guide_logo_on;                       /* the page shown is the first one */
+#define GUIDE_LOGO_H TBS(96)                    /* the logo's height, in pixels */
+#define GUIDE_LOGO_MARGIN TBS(12)               /* the room above and below it */
+static HWND guide_logo_wnd;                     /* a picture window on the text box, over the room kept for the logo */
+static int guide_logo_w;
+
+static int guide_logo_dx;                       /* the logo's shake, in pixels (a hidden extra) */
+static DWORD guide_logo_wob;                    /* when the pointer came onto the logo, 0 when it is not on it */
+
+/* The logo's window covers all the room kept for the logo (so nothing of the line under it shows through, and a click on it selects no text). */
+#define GUIDE_LOGO_ROOM (GUIDE_LOGO_H + 2 * GUIDE_LOGO_MARGIN)
+
+/* Puts the logo's window where the room for it is now (the text may have scrolled or the box been resized); hides it when it is not in view. */
+static void guide_logo_place(HWND rich)
+{
+  RECT cr;
+  POINT pt;
+  int y;
+
+  if (!guide_logo_wnd) return;
+  if (!guide_logo_on) { ShowWindow(guide_logo_wnd, SW_HIDE); return; }
+  GetClientRect(rich, &cr);
+  pt.x = pt.y = 0;
+  SendMessage(rich, EM_GETSCROLLPOS, 0, (LPARAM)&pt);              /* how far the page is scrolled: the room for the logo is at its very top */
+  y = -pt.y;
+  if (y + GUIDE_LOGO_ROOM <= 0 || y >= cr.bottom) { ShowWindow(guide_logo_wnd, SW_HIDE); return; }
+  {
+    RECT cur;
+    int x = (cr.right - guide_logo_w) / 2 + guide_logo_dx;
+    GetWindowRect(guide_logo_wnd, &cur);
+    MapWindowPoints(NULL, rich, (POINT *)&cur, 2);
+    if (IsWindowVisible(guide_logo_wnd) && cur.left == x && cur.top == y) return;           /* already there */
+    SetWindowPos(guide_logo_wnd, HWND_TOP, x, y, guide_logo_w, GUIDE_LOGO_ROOM, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    RedrawWindow(rich, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);      /* (the room may still show the other page: the box and the logo over it are painted at once) */
+  }
+}
+
+/* The logo: the pointer on it shakes it for a moment, and seven clicks on it play the SEGA sound (hidden extras); the arrow stays the pointer,
+   and a click selects nothing behind it. */
+static LRESULT CALLBACK guide_logo_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
+{
+  (void)id; (void)ref;
+  switch (msg)
+  {
+    case WM_SETCURSOR:
+      SetCursor(LoadCursor(NULL, IDC_ARROW));
+      return TRUE;
+
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
+      eggs_logo_click();
+      return 0;
+
+    case WM_MOUSEMOVE:
+      if (!guide_logo_wob)
+      {
+        TRACKMOUSEEVENT te;
+        te.cbSize = sizeof(te); te.dwFlags = TME_LEAVE; te.hwndTrack = h; te.dwHoverTime = 0;
+        TrackMouseEvent(&te);
+        guide_logo_wob = GetTickCount() | 1;
+        SetTimer(h, 1, 16, NULL);
+      }
+      break;
+
+    case WM_MOUSELEAVE:
+      guide_logo_wob = 0;
+      break;
+
+    case WM_TIMER:
+      if (wp == 1)
+      {
+        DWORD age = GetTickCount() - (guide_logo_wob ? guide_logo_wob : GetTickCount());
+        int dx = guide_logo_wob ? eggs_wobble_dx(age, TBS(10)) : 0;
+
+        if (dx != guide_logo_dx) { guide_logo_dx = dx; guide_logo_place(GetParent(h)); }
+        if (!guide_logo_wob || age > 700) { KillTimer(h, 1); if (guide_logo_dx) { guide_logo_dx = 0; guide_logo_place(GetParent(h)); } }
+        return 0;
+      }
+      break;
+
+    case WM_NCDESTROY:
+      RemoveWindowSubclass(h, guide_logo_proc, 1);
+      break;
+  }
+  return DefSubclassProc(h, msg, wp, lp);
+}
+
+/* The window with the logo on the color of the page (a picture window cannot blend: the logo is laid over that color pixel by pixel first). */
+static void guide_logo_make(HWND rich, COLORREF bg)
+{
+  HBITMAP logo, img;
+  BITMAPINFO bi;
+  unsigned char *src, *dst;
+  void *dbits = NULL;
+  int w = 0, x, y;
+  HDC sc;
+
+  logo = gui_logo_bitmap(GUIDE_LOGO_H, &w);
+  if (!logo) { gui_log("User Guide: the logo could not be made"); return; }
+
+  ZeroMemory(&bi, sizeof(bi));
+  bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bi.bmiHeader.biWidth = w;
+  bi.bmiHeader.biHeight = -GUIDE_LOGO_ROOM;                      /* top-down */
+  bi.bmiHeader.biPlanes = 1;
+  bi.bmiHeader.biBitCount = 32;
+  bi.bmiHeader.biCompression = BI_RGB;
+  sc = GetDC(NULL);
+  src = (unsigned char *)malloc((size_t)w * GUIDE_LOGO_ROOM * 4);
+  img = CreateDIBSection(sc, &bi, DIB_RGB_COLORS, &dbits, NULL, 0);
+  dst = (unsigned char *)dbits;
+  bi.bmiHeader.biHeight = -GUIDE_LOGO_H;                         /* (the picture itself is read at its own height) */
+  if (src && dst && GetDIBits(sc, logo, 0, GUIDE_LOGO_H, src, &bi, DIB_RGB_COLORS) == GUIDE_LOGO_H)
+  {
+    for (y = 0; y < GUIDE_LOGO_ROOM; y++)
+      for (x = 0; x < w; x++)
+      {
+        int sy = y - GUIDE_LOGO_MARGIN;                              /* the room above and below the picture is the page's color */
+        const unsigned char *p = src + ((size_t)(sy < 0 ? 0 : sy >= GUIDE_LOGO_H ? GUIDE_LOGO_H - 1 : sy) * w + x) * 4;      /* premultiplied B G R A */
+        unsigned char *q = dst + ((size_t)y * w + x) * 4;
+        int inv = (sy < 0 || sy >= GUIDE_LOGO_H) ? 255 : 255 - p[3];
+        q[0] = (unsigned char)((inv == 255 ? 0 : p[0]) + GetBValue(bg) * inv / 255);
+        q[1] = (unsigned char)((inv == 255 ? 0 : p[1]) + GetGValue(bg) * inv / 255);
+        q[2] = (unsigned char)((inv == 255 ? 0 : p[2]) + GetRValue(bg) * inv / 255);
+        q[3] = 255;
+      }
+    if (!guide_logo_wnd)
+    {
+      /* The text box paints over a window put on it unless it leaves its children alone. */
+      SetWindowLong(rich, GWL_STYLE, GetWindowLong(rich, GWL_STYLE) | WS_CLIPCHILDREN);
+      guide_logo_wnd = CreateWindowExA(0, "STATIC", "", WS_CHILD | SS_BITMAP | SS_NOTIFY, 0, 0, w, GUIDE_LOGO_ROOM, rich, NULL, g_inst, NULL);
+      if (guide_logo_wnd) SetWindowSubclass(guide_logo_wnd, guide_logo_proc, 1, 0);
+    }
+    if (guide_logo_wnd)
+    {
+      HBITMAP old = (HBITMAP)SendMessage(guide_logo_wnd, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)img);
+      if (old) DeleteObject(old);
+      guide_logo_w = w;
+      img = NULL;                                                    /* (the window has it now) */
+    }
+  }
+  if (img) DeleteObject(img);
+  free(src);
+  ReleaseDC(NULL, sc);
+  DeleteObject(logo);
+}
+
+static void guide_title_case(char *title)
+{
+  int k, up = 1;
+
+  for (k = 0; title[k]; k++)
+  {
+    if (title[k] == ' ') up = 1;
+    else if (up) up = 0;
+    else if (title[k] >= 'A' && title[k] <= 'Z') title[k] = (char)(title[k] + 32);
+  }
+  if (!strncmp(title, "Bios", 4)) memcpy(title, "BIOS", 4);                 /* an acronym */
+  { char *w = strstr(title, " And "); if (w) memcpy(w + 1, "and", 3); }     /* a small word */
+}
+
+/* Shows the chosen section (or all of them) in the text pane, as a formatted page: titles, items in bold, the text of each indented
+   under it and the lists of options as two columns. */
 static void guide_show(HWND dlg)
 {
+  HWND rich = GetDlgItem(dlg, IDC_MENUGUIDE_TEXT);
   int sel = (int)SendDlgItemMessage(dlg, IDC_MENUGUIDE_LIST, LB_GETCURSEL, 0, 0);
-  int s;
-  size_t cap = sizeof(menu_guide_text) + 16;
+  int s, n = 0, cap_p = 4096, len = 0, k, dark = theme_is_dark(), big = gui.large_ui;
+  size_t cap = (size_t)lstrlenA(guide.text ? guide.text : "") + 800;           /* (the credits of the first page too) */
+  int prelude = 0;                                               /* paragraphs the first page has above its text: the logo's room and the credits */
   char *out = (char *)malloc(cap);
-  char *o = out;
+  GuidePara *ps = (GuidePara *)malloc(sizeof(GuidePara) * (size_t)cap_p);
+  COLORREF fg = dark ? THEME_DARK_TEXT : GetSysColor(COLOR_WINDOWTEXT);
+  COLORREF accent = dark ? theme_accent_edge() : theme_accent_bg(), bg = dark ? RGB(0x24, 0x24, 0x24) : GetSysColor(COLOR_WINDOW);
+  const int COL = 3300;                                         /* the width of the first column of a list, in twips */
+  CHARFORMAT2A cf;
+  PARAFORMAT2 pf;
+  CHARRANGE cr;
 
-  if (!out || !guide.text) { free(out); return; }
+  if (!out || !ps || !guide.text) { free(out); free(ps); return; }
+
+  guide_logo_on = (sel == 0);
+  if (guide_logo_on)
+  {
+    static const char head[] = "Genesis Plus EX v" APP_VERSION " (" APP_BITS ")";
+    static const char credits[] = CREDITS_TEXT;
+    const char *c = credits;
+
+    guide_logo_make(rich, bg);
+
+    ps[n].start = len; ps[n].len = 1; ps[n].type = GP_LOGO; ps[n].label = 0;                 /* one space: the line the logo's room belongs to */
+    out[len++] = ' '; out[len++] = '\r'; n++;
+    ps[n].start = len; ps[n].len = (int)sizeof(head) - 1; ps[n].type = GP_CTITLE; ps[n].label = 0;
+    memcpy(out + len, head, sizeof(head) - 1); len += (int)sizeof(head) - 1; out[len++] = '\r'; n++;
+    while (*c)
+    {
+      const char *e = strchr(c, '\r');
+      int l = e ? (int)(e - c) : lstrlenA(c);
+      ps[n].start = len; ps[n].len = l; ps[n].type = GP_CENTER; ps[n].label = 0;
+      memcpy(out + len, c, (size_t)l); len += l; out[len++] = '\r'; n++;
+      c += l;
+      while (*c == '\r' || *c == '\n') c++;
+    }
+    prelude = n;
+  }
 
   for (s = 0; s < guide.count; s++)
   {
-    size_t n;
+    char *p;
 
-    if (sel > 0 && sel != s) continue;   /* row 0 is "All", row n is section n */
-    n = (size_t)(guide.end[s] - guide.first[s]);
-    memcpy(o, guide.first[s], n);
-    o += n;
+    if (sel != s) continue;              /* row n of the list is section n (row 0 the introduction) */
+    for (p = guide.first[s]; p < guide.end[s]; )
+    {
+      char *eol = strchr(p, '\n'), *q;
+      int l, type, label = 0, first_sp;
+
+      if (!eol || eol >= guide.end[s]) eol = guide.end[s] - 1;
+      l = (int)(eol - p);
+      if (l > 0 && p[l - 1] == '\r') l--;
+      if (l <= 0) { p = eol + 1; continue; }
+      if (n + 2 >= cap_p || (size_t)len + (size_t)l + 4 >= cap) break;
+
+      for (first_sp = 0; first_sp < l && (p[first_sp] == ' ' || p[first_sp] == '-'); first_sp++) ;
+      q = (char *)memchr(p, '\t', (size_t)l);
+      if (q && !(p[0] == ' ' && p[1] == ' ' && p[2] != ' ' && p[l - 1] == ':'))     /* a line with a tab is a row of a list */
+      {
+        int a = (p[0] == '-' ? 2 : 0), b = (int)(q - p);
+        while (a < b && (p[a] == ' ' || p[a] == '\t')) a++;
+        memcpy(out + len, p + a, (size_t)(b - a));
+        out[len + (b - a)] = '\t';
+        memcpy(out + len + (b - a) + 1, q + 1, (size_t)(l - b - 1));
+        label = b - a;
+        ps[n].start = len; ps[n].len = (b - a) + 1 + (l - b - 1); ps[n].type = GP_ROW; ps[n].label = label;
+      }
+      else
+      {
+        int a = 0, e = l;
+        if (guide_is_header(p)) type = GP_H1;
+        else if (p[0] == ' ' && p[1] == ' ' && p[2] != ' ' && p[l - 1] == ':') type = GP_H2;           /* an item: two spaces, then its name and a colon */
+        else type = GP_PARA;
+        while (a < e && p[a] == ' ') a++;
+        if (type == GP_H2) e--;                               /* the colon */
+        memcpy(out + len, p + a, (size_t)(e - a));
+        if (type == GP_H1) { out[len + (e - a)] = '\0'; guide_title_case(out + len); }
+        ps[n].start = len; ps[n].len = e - a; ps[n].type = type; ps[n].label = 0;
+      }
+      len += ps[n].len;
+      out[len++] = '\r';
+      n++;
+      p = eol + 1;
+    }
   }
-  *o = '\0';
+  if (len > 0) len--;                                         /* no paragraph mark after the last one */
+  out[len] = '\0';
 
-  SetDlgItemTextA(dlg, IDC_MENUGUIDE_TEXT, out);
+  SendMessage(rich, WM_SETREDRAW, FALSE, 0);
+  SendMessage(rich, EM_SETBKGNDCOLOR, 0, (LPARAM)bg);
+  SetWindowTextA(rich, out);
+
+  ZeroMemory(&cf, sizeof(cf));
+  cf.cbSize = sizeof(cf);
+  cf.dwMask = CFM_COLOR | CFM_SIZE | CFM_FACE | CFM_BOLD;
+  cf.crTextColor = fg;
+  cf.yHeight = big ? 240 : 200;
+  lstrcpyA(cf.szFaceName, "Segoe UI");
+  SendMessage(rich, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
+
+  for (k = 0; k < n; k++)
+  {
+    int top = ps[k].type == GP_H1 && k == 0 ? 0 : 1;
+
+    cr.cpMin = ps[k].start; cr.cpMax = ps[k].start + ps[k].len;
+    SendMessage(rich, EM_EXSETSEL, 0, (LPARAM)&cr);
+
+    ZeroMemory(&pf, sizeof(pf));
+    pf.cbSize = sizeof(pf);
+    pf.dwMask = PFM_STARTINDENT | PFM_OFFSET | PFM_SPACEBEFORE | PFM_SPACEAFTER | PFM_TABSTOPS;
+    ZeroMemory(&cf, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = CFM_BOLD | CFM_COLOR | CFM_SIZE;
+    cf.crTextColor = fg;
+    cf.yHeight = big ? 240 : 200;
+    switch (ps[k].type)
+    {
+      case GP_H1:
+        pf.dySpaceBefore = top ? 520 : 0; pf.dySpaceAfter = 140;
+        cf.dwEffects = CFE_BOLD; cf.crTextColor = accent; cf.yHeight = big ? 360 : 300;
+        break;
+      case GP_H2:
+        pf.dySpaceBefore = 240; pf.dySpaceAfter = 20;
+        cf.dwEffects = CFE_BOLD; cf.yHeight = big ? 260 : 220;
+        break;
+      case GP_ROW:
+        pf.dxStartIndent = 200; pf.dxOffset = COL; pf.dySpaceBefore = 40; pf.dySpaceAfter = 40;           /* the name at 200, the text (and what it wraps to) at COL + 200 */
+        pf.cTabCount = 1; pf.rgxTabs[0] = COL + 200;
+        break;
+      case GP_LOGO:
+        pf.dwMask |= PFM_ALIGNMENT; pf.wAlignment = PFA_CENTER;
+        pf.dySpaceBefore = (GUIDE_LOGO_H + 2 * GUIDE_LOGO_MARGIN) * 1440 / gui_dpi; pf.dySpaceAfter = 0;      /* the room the logo is drawn in */
+        cf.yHeight = 20;
+        break;
+      case GP_CTITLE:
+        pf.dwMask |= PFM_ALIGNMENT; pf.wAlignment = PFA_CENTER;
+        pf.dySpaceBefore = 0; pf.dySpaceAfter = 120;
+        cf.dwEffects = CFE_BOLD; cf.yHeight = big ? 340 : 280;
+        break;
+      case GP_CENTER:
+        pf.dwMask |= PFM_ALIGNMENT; pf.wAlignment = PFA_CENTER;
+        pf.dySpaceBefore = 0; pf.dySpaceAfter = 20;
+        break;
+      default:
+        pf.dxStartIndent = 200; pf.dySpaceAfter = 80;
+        if (prelude && k == prelude) pf.dySpaceBefore = 420;            /* the text of the first page, a little below the credits */
+        break;
+    }
+    SendMessage(rich, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    SendMessage(rich, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+
+    if (ps[k].type == GP_ROW)                                   /* the name at the start of a row of a list is bold */
+    {
+      cr.cpMax = ps[k].start + ps[k].label;
+      SendMessage(rich, EM_EXSETSEL, 0, (LPARAM)&cr);
+      ZeroMemory(&cf, sizeof(cf));
+      cf.cbSize = sizeof(cf);
+      cf.dwMask = CFM_BOLD;
+      cf.dwEffects = CFE_BOLD;
+      SendMessage(rich, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    }
+  }
+
+  cr.cpMin = cr.cpMax = 0;
+  SendMessage(rich, EM_EXSETSEL, 0, (LPARAM)&cr);
+  SendMessage(rich, EM_HIDESELECTION, TRUE, 0);
+  SendMessage(rich, WM_SETREDRAW, TRUE, 0);
+  SendMessage(rich, WM_VSCROLL, SB_TOP, 0);
+  InvalidateRect(rich, NULL, TRUE);
+  guide_logo_place(rich);
   free(out);
+  free(ps);
+}
+
+/* The User Guide can be resized and maximized: the list stays as wide as it was and the page takes the rest. */
+static RECT guide_rl, guide_rt, guide_rb;      /* the list, the page and the Close button, in client coordinates, as the window opened */
+static int  guide_cw, guide_ch, guide_minw, guide_minh;
+
+static void guide_place(HWND dlg)
+{
+  RECT cr;
+  int dx, dy;
+
+  GetClientRect(dlg, &cr);
+  dx = cr.right - guide_cw; dy = cr.bottom - guide_ch;
+  MoveWindow(GetDlgItem(dlg, IDC_MENUGUIDE_LIST), guide_rl.left, guide_rl.top, guide_rl.right - guide_rl.left, guide_rl.bottom - guide_rl.top + dy, TRUE);
+  MoveWindow(GetDlgItem(dlg, IDC_MENUGUIDE_TEXT), guide_rt.left, guide_rt.top, guide_rt.right - guide_rt.left + dx, guide_rt.bottom - guide_rt.top + dy, TRUE);
+  MoveWindow(GetDlgItem(dlg, IDOK), guide_rb.left + dx, guide_rb.top + dy, guide_rb.right - guide_rb.left, guide_rb.bottom - guide_rb.top, TRUE);
+  RedrawWindow(dlg, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);      /* (the page, and the text on it, drawn again for its new width: bits of the old one stayed) */
+}
+
+static void guide_remember(HWND dlg)
+{
+  RECT cr, wr;
+  int ids[3] = { IDC_MENUGUIDE_LIST, IDC_MENUGUIDE_TEXT, IDOK }, i;
+  RECT *dst[3] = { &guide_rl, &guide_rt, &guide_rb };
+
+  GetClientRect(dlg, &cr);
+  guide_cw = cr.right; guide_ch = cr.bottom;
+  for (i = 0; i < 3; i++)
+  {
+    GetWindowRect(GetDlgItem(dlg, ids[i]), dst[i]);
+    MapWindowPoints(NULL, dlg, (POINT *)dst[i], 2);
+  }
+  GetWindowRect(dlg, &wr);
+  guide_minw = wr.right - wr.left; guide_minh = wr.bottom - wr.top;
+}
+
+/* A pop-up menu of a window of the program: drawn the same way everywhere (owner-drawn, in the Large interface or Modern-font look, when the
+   main menus are), by the main window, which is the one that draws the owner-drawn items. Returns the command chosen, or 0. */
+int gui_popup(HMENU menu, UINT flags, int x, int y)
+{
+  int cur = gui_cursor_show(), cmd;
+
+  if (theme_menus_owner()) theme_ownerdraw_menu(menu);
+  cmd = (int)TrackPopupMenu(menu, flags | TPM_RETURNCMD, x, y, 0, g_hwnd, NULL);
+  theme_unconvert_menu(menu);                       /* (gives back what the owner-drawn items held) */
+  gui_cursor_restore(cur);
+  return cmd;
+}
+
+/* Right click in the text of the User Guide: Copy (the selected text) and Select All. */
+static LRESULT CALLBACK guide_text_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
+{
+  (void)id; (void)ref;
+  if (msg == WM_CONTEXTMENU)
+  {
+    HMENU menu = CreatePopupMenu();
+    CHARRANGE cr;
+    POINT mp;
+    int cmd, cur = gui_cursor_show();
+
+    SendMessage(h, EM_EXGETSEL, 0, (LPARAM)&cr);
+    mp.x = (short)LOWORD(lp); mp.y = (short)HIWORD(lp);
+    if (lp == (LPARAM)-1) GetCursorPos(&mp);                    /* (from the keyboard: where the pointer is) */
+    AppendMenuA(menu, MF_STRING | (cr.cpMax > cr.cpMin ? 0 : MF_GRAYED), 2101, "&Copy");
+    AppendMenuA(menu, MF_STRING, 2102, "Select &All");
+    if (theme_menus_owner()) theme_ownerdraw_menu(menu);
+    cmd = (int)gui_popup(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, mp.x, mp.y);       /* (the main window draws the owner-drawn items) */
+    DestroyMenu(menu);
+    gui_cursor_restore(cur);
+    if (cmd == 2101) SendMessage(h, WM_COPY, 0, 0);
+    else if (cmd == 2102) { cr.cpMin = 0; cr.cpMax = -1; SendMessage(h, EM_EXSETSEL, 0, (LPARAM)&cr); }
+    return 0;
+  }
+  if (msg == WM_VSCROLL || msg == WM_MOUSEWHEEL || msg == WM_SIZE || msg == WM_KEYDOWN || msg == WM_MOUSEMOVE || msg == WM_LBUTTONUP || msg == WM_PAINT)
+  {
+    LRESULT r = DefSubclassProc(h, msg, wp, lp);        /* (the text has moved: the logo goes with it) */
+    guide_logo_place(h);
+    if (msg == WM_PAINT && guide_logo_on && guide_logo_wnd && IsWindowVisible(guide_logo_wnd))
+      RedrawWindow(guide_logo_wnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);       /* (the text box may have painted its page over the room: the logo is put back at once) */
+    return r;
+  }
+  if (msg == WM_NCDESTROY) RemoveWindowSubclass(h, guide_text_proc, 1);
+  return DefSubclassProc(h, msg, wp, lp);
 }
 
 static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
   switch (msg)
   {
+    case WM_GETMINMAXINFO:
+    {
+      MINMAXINFO *mm = (MINMAXINFO *)lp;
+      if (guide_minw > 0) { mm->ptMinTrackSize.x = guide_minw; mm->ptMinTrackSize.y = guide_minh; }
+      return TRUE;
+    }
+
+    case WM_SIZE:
+      if (wp != SIZE_MINIMIZED && guide_cw > 0) guide_place(dlg);
+      return 0;
+
     case WM_INITDIALOG:
-      theme_apply_to_window(dlg);
+      theme_apply_to_window(dlg);            /* (the Modern style changes the frame: the sizes are taken after it) */
+      guide_remember(dlg);
       {
         static const GuiTip tips[] =
         {
-          { IDC_MENUGUIDE_LIST, NULL, "Pick a menu to read about it, or All for everything." },
-          { IDC_MENUGUIDE_TEXT, NULL, "What each menu item does." },
+          { IDC_MENUGUIDE_LIST, NULL, "Pick a menu or window to read about it." },
+          { IDC_MENUGUIDE_TEXT, NULL, "What each menu item and each window does." },
           { IDOK, NULL, "Close this window." },
         };
         gui_dialog_tips(dlg, tips, (int)(sizeof(tips) / sizeof(tips[0])));
       }
       {
-        int tabs[1] = { 130 };
         int s;
         HWND list = GetDlgItem(dlg, IDC_MENUGUIDE_LIST);
 
-        SendDlgItemMessage(dlg, IDC_MENUGUIDE_TEXT, EM_SETTABSTOPS, 1, (LPARAM)tabs);
+        SendDlgItemMessage(dlg, IDC_MENUGUIDE_TEXT, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(12, 12));
+        SetWindowSubclass(GetDlgItem(dlg, IDC_MENUGUIDE_TEXT), guide_text_proc, 1, 0);
 
         guide_parse();
-        SendMessageA(list, LB_ADDSTRING, 0, (LPARAM)"All");
         for (s = 0; s < guide.count; s++)
         {
           char title[64];
@@ -3778,17 +4510,7 @@ static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
 
           for (; src[n] && src[n] != '\r' && src[n] != '\n' && n < 60; n++) title[n] = src[n];
           title[n] = '\0';
-          if (s == 0) continue;          /* the introduction is only in "All" */
-          /* "BIOS AND FIRMWARE FILES" -> "Bios And Firmware Files" */
-          {
-            int k, up = 1;
-            for (k = 0; title[k]; k++)
-            {
-              if (title[k] == ' ') up = 1;
-              else if (up) up = 0;
-              else if (title[k] >= 'A' && title[k] <= 'Z') title[k] = (char)(title[k] + 32);
-            }
-          }
+          guide_title_case(title);                       /* "BIOS AND FIRMWARE FILES" -> "BIOS and Firmware Files" */
           SendMessageA(list, LB_ADDSTRING, 0, (LPARAM)title);
         }
         SendMessage(list, LB_SETCURSEL, 0, 0);
@@ -3800,6 +4522,13 @@ static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
       free(guide.text);
       guide.text = NULL;
       guide.count = 0;
+      guide_logo_on = 0;
+      if (guide_logo_wnd)
+      {
+        HBITMAP img = (HBITMAP)SendMessage(guide_logo_wnd, STM_GETIMAGE, IMAGE_BITMAP, 0);
+        if (img) DeleteObject(img);                      /* (the window is destroyed with the text box; the picture is ours) */
+        guide_logo_wnd = NULL;
+      }
       return FALSE;
 
     case WM_MEASUREITEM:
@@ -3811,7 +4540,7 @@ static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
 
     case WM_DRAWITEM:
     {
-      /* The list of sections is drawn here so its selection has the theme's colours (the system one turned white in dark mode). */
+      /* The list of sections is drawn here so its selection has the theme's colors (the system one turned white in dark mode). */
       DRAWITEMSTRUCT *di = (DRAWITEMSTRUCT *)lp;
       if (di->CtlID == IDC_MENUGUIDE_LIST && di->itemID != (UINT)-1)
       {
@@ -3872,12 +4601,15 @@ static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
 
 void dlg_menu_guide(HWND parent)
 {
+  LoadLibraryA("Msftedit.dll");                  /* the text box of the page is a rich text box */
   gui_dialog_box(gui.large_ui ? IDD_MENUGUIDE_LARGE : IDD_MENUGUIDE, parent, menu_guide_proc);
 }
 
 static const char *system_name(void)
 {
+  if (pico_active()) return "32X";
   if (system_hw == SYSTEM_MCD) return "Sega CD / Mega CD";
+  if (system_hw == SYSTEM_PICO) return "Sega Pico";
   if ((system_hw & SYSTEM_PBC) == SYSTEM_MD) return "Genesis / Mega Drive";
   if (system_hw == SYSTEM_GG || system_hw == SYSTEM_GGMS) return "Game Gear";
   if (system_hw == SYSTEM_SMS || system_hw == SYSTEM_SMS2) return "Master System";
@@ -3957,6 +4689,48 @@ static char *rominfo_all_text(void)
   return all;
 }
 
+/* Right-clicking the title row of a list offers Size All Columns to Fit: every column gets the width
+   its contents (or its title) need. */
+static LRESULT CALLBACK header_menu_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
+{
+  if (msg == WM_CONTEXTMENU)
+  {
+    HWND list = (HWND)ref;
+    HMENU menu = CreatePopupMenu();
+    POINT pt;
+    int cmd;
+
+    pt.x = (short)LOWORD(lp); pt.y = (short)HIWORD(lp);
+    if (lp == (LPARAM)-1) GetCursorPos(&pt);
+    AppendMenuA(menu, MF_STRING, 2100, "Size All Columns to Fit");
+    if (theme_menus_owner()) theme_ownerdraw_menu(menu);
+    cmd = (int)gui_popup(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y);
+    DestroyMenu(menu);
+    if (cmd == 2100)
+    {
+      int k, n = (int)SendMessage(hwnd, HDM_GETITEMCOUNT, 0, 0);
+
+      for (k = 0; k < n; k++)
+      {
+        int w1, w2;
+        ListView_SetColumnWidth(list, k, LVSCW_AUTOSIZE);
+        w1 = ListView_GetColumnWidth(list, k);
+        ListView_SetColumnWidth(list, k, LVSCW_AUTOSIZE_USEHEADER);
+        w2 = ListView_GetColumnWidth(list, k);
+        ListView_SetColumnWidth(list, k, (w1 > w2 ? w1 : w2) + 8);
+      }
+    }
+    return 0;
+  }
+  if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, header_menu_proc, id);
+  return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+void gui_list_header_menu(HWND list)
+{
+  SetWindowSubclass(ListView_GetHeader(list), header_menu_proc, 1, (DWORD_PTR)list);
+}
+
 static INT_PTR CALLBACK rominfo_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
   switch (msg)
@@ -3986,7 +4760,7 @@ static INT_PTR CALLBACK rominfo_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         }
         menu = CreatePopupMenu();
         AppendMenuA(menu, MF_STRING | (sel >= 0 ? 0 : (UINT)MF_GRAYED), 1, "Copy");
-        cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, dlg, NULL);
+        cmd = gui_popup(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y);
         DestroyMenu(menu);
         if (cmd == 1 && sel >= 0)
         {
@@ -4065,7 +4839,7 @@ static INT_PTR CALLBACK rominfo_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
               lstrcatA(devs, dev_names[d]);
             }
           if (!strncmp(rominfo.ROMType, "GM", 2))      lstrcpyA(typetxt, "Game");
-          else if (!strncmp(rominfo.ROMType, "AL", 2)) lstrcpyA(typetxt, "Educational program");
+          else if (!strncmp(rominfo.ROMType, "AL", 2)) lstrcpyA(typetxt, "Educational Program");
           else if (!strncmp(rominfo.ROMType, "BR", 2)) lstrcpyA(typetxt, "Boot ROM");
           else typetxt[0] = '\0';
           if (sram.detected && sram.end >= sram.start)
@@ -4080,25 +4854,25 @@ static INT_PTR CALLBACK rominfo_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             "Console:\t%s\r\n"
             "Genre:\t%s\r\n"
             "Favorite:\t%s\r\n"
-            "File size:\t%s\r\n"
+            "File Size:\t%s\r\n"
             "CRC32:\t%s\r\n"
             "Location:\t%s\r\n"
             "\r\n"
             "CARTRIDGE HEADER\r\n"
-            "Console name:\t%s\r\n"
+            "Console Name:\t%s\r\n"
             "Type:\t%s\r\n"
-            "Domestic title:\t%s\r\n"
-            "International title:\t%s\r\n"
-            "Product code:\t%s\r\n"
+            "Domestic Title:\t%s\r\n"
+            "International Title:\t%s\r\n"
+            "Product Code:\t%s\r\n"
             "Region:\t%s\r\n"
             "Copyright:\t%s\r\n"
             "Controllers:\t%s\r\n"
             "Save RAM:\t%s\r\n"
             "\r\n"
             "ROM\r\n"
-            "ROM size:\t%lu KB\r\n"
-            "Header checksum:\t%04X\r\n"
-            "Calculated checksum:\t%04X %s\r\n",
+            "ROM Size:\t%lu KB\r\n"
+            "Header Checksum:\t%04X\r\n"
+            "Calculated Checksum:\t%04X %s\r\n",
             fname8[0] ? fname8 : "(unknown)",
             system_name(),
             genre[0] ? genre : "(unknown)",
@@ -4140,6 +4914,7 @@ static INT_PTR CALLBACK rominfo_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           col.pszText = "Value";
           col.cx = (rc.right - rc.left) * 64 / 100;
           SendMessageA(list, LVM_INSERTCOLUMNA, 1, (LPARAM)&col);
+          gui_list_header_menu(list);
 
           for (line = strtok(text, "\r\n"); line; line = strtok(NULL, "\r\n"))
           {
@@ -4279,13 +5054,11 @@ static INT_PTR CALLBACK about_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       SetDlgItemTextA(dlg, IDC_ABOUT_TEXT,
         "Genesis Plus EX v" APP_VERSION " (" APP_BITS ")\r\n"
         "\r\n"
-        "Genesis Plus EX, a Windows emulator based on Genesis Plus GX\r\n"
-        "Sega Mega Drive / Genesis, Master System, Game Gear, SG-1000, Mega CD and Pico emulator.\r\n"
+        "A Windows emulator for Sega Mega Drive / Genesis, Master System, Game Gear, SG-1000, Mega CD, Pico and 32X, based on Genesis Plus GX and PicoDrive.\r\n"
         "\r\n"
-        "Core by Charles MacDonald (1998-2003) and Eke-Eke (2007-2026).\r\n"
-        "Windows frontend by Hazem Abdelghani (2026).\r\n"
+        CREDITS_TEXT
         "\r\n"
-        "Distributed under the Genesis Plus GX license: source must accompany modified redistributions, and it may not be sold or used commercially.");
+        "Distributed under the licenses of Genesis Plus GX and PicoDrive: the source must accompany modified redistributions, and it may not be sold or used commercially.");
 
       SendDlgItemMessage(dlg, IDC_ABOUT_LINK1, WM_SETTEXT, 0,
         (LPARAM)"<a href=\"https://github.com/hazem-abdelghani/genesis-plus-ex\">Genesis Plus EX</a>");
@@ -4386,16 +5159,20 @@ void dlg_about(HWND parent)
 /* Makes sure the cursor is visible. Returns how many ShowCursor(TRUE) calls
    it took (always at least one), so gui_cursor_restore() can undo exactly
    that and leave the counter where fullscreen had put it. */
+int gui_cursor_depth;                        /* windows that have asked for the pointer (the idle hiding waits while there are any) */
+
 int gui_cursor_show(void)
 {
   int calls = 1;
 
+  gui_cursor_depth++;
   while (ShowCursor(TRUE) < 0 && calls < 64) calls++;
   return calls;
 }
 
 void gui_cursor_restore(int hidden_count)
 {
+  if (gui_cursor_depth > 0) gui_cursor_depth--;
   while (hidden_count-- > 0) ShowCursor(FALSE);
 }
 
@@ -4414,11 +5191,7 @@ void gui_center_window(HWND w)
 
 /* Question and message boxes (Yes / No, OK ...) open in the middle of the program's window, not of the screen. */
 static HHOOK msgbox_hook;
-static int msgbox_depth;                 /* question boxes open right now */
-static HWND msgbox_wnd;                  /* the topmost one */
-static HWND msgbox_owner;                /* the window the box was opened from: it is centred over that (the Controls or Cheats window, say), not over the main window */
-static int msgbox_follows_main;          /* 1 when it is over the main window, and so moves with it */
-static int msgbox_dx, msgbox_dy, msgbox_main_free;   /* msgbox_main_free: the main window was usable when the box opened */         /* where it sits relative to the main window */
+static HWND msgbox_owner;                /* the window the box was opened from: it is centered over that (the Controls or Cheats window, say), not over the main window */
 
 static LRESULT CALLBACK msgbox_center_proc(int code, WPARAM wp, LPARAM lp)
 {
@@ -4435,7 +5208,6 @@ static LRESULT CALLBACK msgbox_center_proc(int code, WPARAM wp, LPARAM lp)
     if (!lstrcmpA(cls, "#32770") && msgbox_hook)
     {
       if (own && own != g_hwnd && IsWindow(own) && IsWindowVisible(own) && !IsIconic(own)) ref = own;
-      msgbox_follows_main = (ref == g_hwnd);
       if (ref && IsWindowVisible(ref) && !IsIconic(ref) && GetWindowRect(box, &br) && GetWindowRect(ref, &rr))
       {
         int x = rr.left + ((rr.right - rr.left) - (br.right - br.left)) / 2;
@@ -4450,12 +5222,6 @@ static LRESULT CALLBACK msgbox_center_proc(int code, WPARAM wp, LPARAM lp)
           if (y < mi.rcWork.top) y = mi.rcWork.top;
         }
         SetWindowPos(box, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        msgbox_wnd = box;
-        msgbox_dx = x - rr.left;
-        msgbox_dy = y - rr.top;
-        /* The question disabled the main window; it is enabled again so it can be dragged. The main window ignores
-           everything but moving while a question is open (see gui_msgbox_blocks()). */
-        if (msgbox_main_free && ref == g_hwnd) EnableWindow(ref, TRUE);
       }
       else gui_center_window(box);
       UnhookWindowsHookEx(msgbox_hook);
@@ -4487,8 +5253,6 @@ int gui_msgbox(HWND owner, const char *text, const char *caption, UINT flags)
 
   msgbox_owner = gui_visible_top(owner);
   msgbox_hook = SetWindowsHookExA(WH_CBT, msgbox_center_proc, NULL, GetCurrentThreadId());
-  if (msgbox_depth == 0) msgbox_main_free = g_hwnd && IsWindowEnabled(g_hwnd);     /* not so when a modal window (Settings ...) is open: it stays modal */
-  msgbox_depth++;
   {
     /* Owned by the window that is on top of the program (Settings, Controls ... when one is open), so it always opens in front of
        it, never behind; and brought to the front of everything. */
@@ -4496,39 +5260,12 @@ int gui_msgbox(HWND owner, const char *text, const char *caption, UINT flags)
     if (top == g_hwnd) while ((lap = GetLastActivePopup(top)) != NULL && lap != top && IsWindowVisible(lap) && !IsIconic(lap)) top = lap;
     r = MessageBoxA(top, text, caption, flags | MB_SETFOREGROUND);
   }
-  msgbox_depth--;
   msgbox_owner = saved_owner;
-  if (msgbox_depth == 0) msgbox_wnd = NULL;
   if (msgbox_hook) { UnhookWindowsHookEx(msgbox_hook); msgbox_hook = NULL; }
   msgbox_hook = saved;
   return r;
 }
 
-/* While a question box is open the main window can be moved but does nothing else: commands, closing, dropped files
-   and double-clicks are turned away. */
-int gui_msgbox_blocks(UINT msg, WPARAM wp, LPARAM lp)
-{
-  if (msgbox_depth <= 0) return 0;
-  switch (msg)
-  {
-    case WM_COMMAND: case WM_CLOSE: case WM_DROPFILES: return 1;
-    case WM_SYSCOMMAND: return (wp & 0xFFF0) != SC_MOVE;
-    case WM_NOTIFY:
-    {
-      const NMHDR *h = (const NMHDR *)lp;
-      return h && (h->code == NM_DBLCLK || h->code == NM_RETURN || h->code == NM_CLICK || h->code == NM_RCLICK);
-    }
-  }
-  return 0;
-}
-
-/* The main window moved: the open question box goes with it. */
-void gui_msgbox_follow(void)
-{
-  RECT rr;
-  if (msgbox_depth <= 0 || !msgbox_follows_main || !msgbox_wnd || !IsWindow(msgbox_wnd) || !g_hwnd || !GetWindowRect(g_hwnd, &rr)) return;
-  SetWindowPos(msgbox_wnd, NULL, rr.left + msgbox_dx, rr.top + msgbox_dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-}
 #define MessageBoxA gui_msgbox
 
 /* The program's icon in the title bar of a window (Settings, Controls, Cheats ...); small dialogs (a name to type, a question) have none. */
@@ -4599,7 +5336,7 @@ void gui_restore_combo_animation(void)
   combo_anim_was = 0;
 }
 
-/* A modal window, centered; with Keep Running While Windows Are Open the game goes on behind it. */
+/* A modal window, centered; the game goes on behind it. */
 INT_PTR gui_modal(int template_id, HWND parent, DLGPROC proc, LPARAM lp)
 {
   int paced = 0;
@@ -4609,7 +5346,7 @@ INT_PTR gui_modal(int template_id, HWND parent, DLGPROC proc, LPARAM lp)
   center_icon_now = center_icon;
   center_icon = 0;
   center_hook = SetWindowsHookExA(WH_CBT, center_proc, NULL, GetCurrentThreadId());
-  if (gui.run_in_dialogs && emu_running) { gui_pace(1); paced = 1; }
+  if (emu_running) { gui_pace(1); paced = 1; }
 
   /* A drop-down list slides open with an animation; in this program's windows it opens at once instead.
      The Windows setting is put back when the window closes (windows opened from a window share one change). */
@@ -4648,7 +5385,7 @@ INT_PTR gui_dialog_box(int template_id, HWND parent, DLGPROC proc)
  *
  * Uses the Vista+ "common item" dialog instead of GetOpenFileName. The old
  * API lets Windows restore its own remembered state -- last folder, window
- * size / maximised, even a previous search -- and only treats the start
+ * size / maximized, even a previous search -- and only treats the start
  * folder as a hint. Here the start folder is forced (SetFolder) and the
  * remembered state is cleared every time, per picker (each has its own
  * GUID so they can't affect one another).
@@ -4820,9 +5557,9 @@ static void np_dlg_status(HWND dlg, const char *text)
   SetDlgItemTextA(dlg, IDC_NP_STATUS, text);
 }
 
-/* In dark mode the system draws a group box's title in black whatever colour
+/* In dark mode the system draws a group box's title in black whatever color
    the dialog asks for, which vanishes against the dark background. So the
-   group boxes of this dialog paint themselves: a thin grey frame and a light
+   group boxes of this dialog paint themselves: a thin gray frame and a light
    title. (Only the frame and title are drawn; everything inside is left to the
    controls on top.) */
 static LRESULT CALLBACK np_groupbox_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
@@ -4971,7 +5708,7 @@ static INT_PTR CALLBACK netplay_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_DRAWITEM:
     {
-      /* The hosts found: a chosen row is the accent colour in dark mode (a plain list box draws it white there). */
+      /* The hosts found: a chosen row is the accent color in dark mode (a plain list box draws it white there). */
       const DRAWITEMSTRUCT *di = (const DRAWITEMSTRUCT *)lp;
       int dark = theme_is_dark(), sel;
       COLORREF bg, fg;
@@ -5220,11 +5957,9 @@ static void statemgr_refresh_slot(HWND dlg, int slot)
     wsprintfA(label, "Slot %d\nEmpty", slot);
   }
 
-  /* Enabled whenever a state exists, even without a loadable thumbnail --
-     an older save from before this dialog existed still has no .bmp next
-     to it, and should still be loadable, just without a preview image. */
+  /* Always enabled, so an empty slot can be right-clicked or double-clicked to save to it. A state without a thumbnail (an older
+     save from before this dialog existed has no .bmp) still loads, just without a preview image. */
   SendMessage(btn, BM_SETIMAGE, IMAGE_BITMAP, (LPARAM)statemgr_bitmaps[slot]);
-  EnableWindow(btn, exists);
   SetWindowTextA(lbl, label);
 }
 
@@ -5242,7 +5977,7 @@ static INT_PTR CALLBACK statemgr_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         statemgr_refresh_slot(dlg, i);
         tips[i].id = IDC_STATEMGR_SLOT_BASE + i;
         tips[i].label = NULL;
-        tips[i].tip = "Left-click loads this slot; right-click saves to it, saves it to a file, or deletes it.";
+        tips[i].tip = "Left-click loads this slot (double-click an empty one to save to it); right-click saves to it, saves it to a file, or deletes it.";
       }
       tips[STATEMGR_SLOTS].id = IDCANCEL;
       tips[STATEMGR_SLOTS].label = NULL;
@@ -5299,8 +6034,7 @@ static INT_PTR CALLBACK statemgr_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           }
 
           SetForegroundWindow(dlg);
-          cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                               px, py, 0, dlg, NULL);
+          cmd = gui_popup(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, px, py);
         }
         PostMessage(dlg, WM_NULL, 0, 0);
         DestroyMenu(menu);
@@ -5315,7 +6049,7 @@ static INT_PTR CALLBACK statemgr_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           char dest[GUI_PATH_LEN], suggest[GUI_PATH_LEN], base[GUI_PATH_LEN];
           lstrcpynA(base, emu_rom_base(), sizeof(base));
           wsprintfA(suggest, "%s slot %d.gpstate", base, slot);
-          if (gui_save_file(dlg, "Save This Slot As", "Genesis Plus EX state\0*.gpstate\0All files\0*.*\0\0", "gpstate", suggest, dest, sizeof(dest)))
+          if (gui_save_file(dlg, "Save This Slot As", "Genesis Plus EX State\0*.gpstate\0All Files\0*.*\0\0", "gpstate", suggest, dest, sizeof(dest)))
             gui_notify(CopyFileA(state_p, dest, FALSE) ? "Slot %d saved to the file" : "Could not write the state file", slot);
         }
         else if (cmd == 2 && exists)
@@ -5333,7 +6067,7 @@ static INT_PTR CALLBACK statemgr_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       int id = LOWORD(wp);
 
       if (id >= IDC_STATEMGR_SLOT_BASE && id < IDC_STATEMGR_SLOT_BASE + STATEMGR_SLOTS &&
-          HIWORD(wp) == BN_CLICKED)
+          (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == BN_DOUBLECLICKED))
       {
         int slot = id - IDC_STATEMGR_SLOT_BASE;
         char state_p[GUI_PATH_LEN];
@@ -5341,8 +6075,16 @@ static INT_PTR CALLBACK statemgr_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         state_path(slot, state_p, sizeof(state_p));
         if (GetFileAttributesA(state_p) != INVALID_FILE_ATTRIBUTES)
         {
-          emu_load_state(slot);
-          EndDialog(dlg, IDOK);
+          if (HIWORD(wp) == BN_CLICKED)
+          {
+            emu_load_state(slot);
+            EndDialog(dlg, IDOK);
+          }
+        }
+        else if (HIWORD(wp) == BN_DOUBLECLICKED)           /* a double-click on an empty slot saves to it */
+        {
+          emu_save_state(slot);
+          statemgr_refresh_slot(dlg, slot);
         }
         return TRUE;
       }

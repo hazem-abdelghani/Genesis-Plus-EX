@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-/* Builds xBRZ's 64 MB colour-distance table (takes about a tenth of a second
+/* Builds xBRZ's 64 MB color-distance table (takes about a tenth of a second
    the first time; no-op afterwards). Returns 0 if the memory isn't available. */
 int  xbrz_glue_prepare(void);
 

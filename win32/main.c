@@ -28,6 +28,8 @@
 #include "coverart.h"
 #include "d3d11_video.h"
 #include "shader_chain.h"
+#include "picocore.h"
+#include "eq.h"
 
 /* Required by main.h / the core (sdl/error.c reads log_error). */
 int log_error = 0;
@@ -40,38 +42,76 @@ HINSTANCE g_inst;
 int emu_running;
 int emu_paused;
 
-/* Shared UI font -- the normal system default everywhere, or (when
-   gui.large_ui is on) a version scaled up 50% (the height times 1.5),
-   applied uniformly rather than
-   guessing a different amount per control. Created once, lazily, and
-   kept for the app's lifetime rather than per-control, since every
-   caller wants the exact same font. */
+int gui_dpi = 96;         /* the display scale of the main window's monitor (96 = 100%) */
+
+/* The system's display scale, for the start (the window's own is known once it is made, and changes when it moves to another monitor). */
+static void dpi_init(void)
+{
+  typedef UINT (WINAPI *GetDpiForSystem_t)(void);
+  GetDpiForSystem_t get_dpi = (GetDpiForSystem_t)GetProcAddress(GetModuleHandleA("user32.dll"), "GetDpiForSystem");
+
+  if (get_dpi) gui_dpi = (int)get_dpi();
+  else
+  {
+    HDC dc = GetDC(NULL);
+    if (dc) { gui_dpi = GetDeviceCaps(dc, LOGPIXELSY); ReleaseDC(NULL, dc); }
+  }
+  if (gui_dpi < 96) gui_dpi = 96;
+}
+
+/* Shared UI font -- the normal system default at 100%; at another display scale, or (when gui.large_ui is on) a version of it made
+   bigger (the height times the scale, times 1.5 for the Large interface), applied uniformly rather than guessing a different amount per control.
+   One is kept for the scale it was made for (a font that was in use before the scale changed is left alone: controls may still hold it). */
 static HFONT ui_font_base(void)
 {
-  static HFONT large_font;
+  static HFONT scaled_font;
+  static int scaled_dpi;
   HFONT stock = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
-  if (!gui.large_ui) return stock;
+  if (!gui.large_ui && gui_dpi == 96) return stock;
 
-  if (!large_font)
+  if (!scaled_font || scaled_dpi != gui_dpi)
   {
     LOGFONTA lf;
+    HFONT f;
     GetObjectA(stock, sizeof(lf), &lf);
     /* lfHeight is conventionally negative (character height, not cell
        height) -- scaling while preserving sign keeps this correct
        regardless of which convention the stock font happens to use. */
-    lf.lfHeight = (LONG)(lf.lfHeight * 1.5);
-    large_font = CreateFontIndirectA(&lf);
-    if (!large_font) large_font = stock;
+    if (gui.large_ui) lf.lfHeight = (LONG)(lf.lfHeight * 1.5);
+    lf.lfHeight = MulDiv(lf.lfHeight, gui_dpi, 96);
+    f = CreateFontIndirectA(&lf);
+    if (!f) return stock;
+    scaled_font = f;
+    scaled_dpi = gui_dpi;
   }
 
-  return large_font;
+  return scaled_font;
 }
 
-/* The program's text font; with the Modern style the same size in Segoe UI. */
+/* The program's text font: the system one at the style's size (Classic 9 pt; Modern in Segoe UI, a little bigger). */
 HFONT gui_get_ui_font(void)
 {
   return theme_style_font(ui_font_base());
+}
+
+static BOOL CALLBACK dpi_font_child(HWND c, LPARAM unused)
+{
+  (void)unused;
+  RemovePropA(c, "gpx_basefont");                                  /* (the font it kept was made for the old scale) */
+  SendMessage(c, WM_SETFONT, (WPARAM)ui_font_base(), FALSE);
+  return TRUE;
+}
+
+/* The window moved to a monitor with another display scale: the text and the sizes the program works out follow it. */
+static void dpi_changed(HWND hwnd, int dpi)
+{
+  if (dpi < 96 || dpi == gui_dpi) return;
+  gui_dpi = dpi;
+  EnumChildWindows(hwnd, dpi_font_child, 0);
+  theme_apply_to_window(hwnd);                                     /* the style's font and size on top of it */
+  browser_density_changed();
+  browser_bars_changed();
 }
 
 /* Set only when emu_paused was switched on by losing focus, not by the
@@ -105,6 +145,10 @@ static char rom_base[128];
 static int16 soundframe[4096];
 
 static int   in_modal_loop;
+static int   menu_popups_open;      /* drop-down menus open now (the game waits only while one is) */
+static int   menu_loop_active;      /* a menu is open (the loop of the menu bar or of a drop-down is running) */
+static int   menu_rebuild_pending;  /* the Style changed while a menu was open: the menu bar is made again when the menu closes */
+static int   menu_keyboard_mode;   /* the menu bar was opened with Alt or F10 and is still open: losing the focus to it is not leaving the program */
 static double diag_draw;        /* the slowest drawing of a picture in the last second (logged after a change, with Enable Log) */
 static char  vgm_name[160];     /* the file name of the VGM log being recorded */
 static int   skip_autosave_once;   /* set by the exit question when "Resume this game next time" is unticked: the game is closed without being kept for Auto Resume */
@@ -113,6 +157,7 @@ static DWORD fps_tick;
 static LARGE_INTEGER perf_freq;
 static double next_frame_time;
 static double next_rewind_time;
+static int rewind_bar_ref;       /* frames of history there were when this rewind began: a full bar */
 static int    rewind_hit_limit_notified;
 
 /* Mega CD backup RAM header, used to tell formatted RAM from blank RAM. */
@@ -338,10 +383,20 @@ void gui_notify(const char *fmt, ...)
   {
     char shown[256];
     int i, start = 1;
-    /* Every word starts with a capital letter: "saved to slot 3" is shown as "Saved To Slot 3". */
+    /* Title Case: "saved to slot 3" is shown as "Saved to Slot 3" (a, an, the, to, of, in, on, at, by, for, from, and,
+       or, as stay small unless they start the message). */
     for (i = 0; buf[i] && i < (int)sizeof(shown) - 1; i++)
     {
-      shown[i] = (start && buf[i] >= 'a' && buf[i] <= 'z') ? (char)(buf[i] - 32) : buf[i];
+      int cap = start && buf[i] >= 'a' && buf[i] <= 'z';
+      if (cap && i > 0)
+      {
+        static const char *const small[] = { "a", "an", "the", "to", "of", "in", "on", "at", "by", "for", "from", "and", "or", "as" };
+        int k, n = 0;
+        while (buf[i + n] && buf[i + n] != ' ' && buf[i + n] != ')' && buf[i + n] != ',' && buf[i + n] != ':') n++;
+        for (k = 0; k < (int)(sizeof(small) / sizeof(small[0])); k++)
+          if ((int)lstrlenA(small[k]) == n && !strncmp(buf + i, small[k], (size_t)n)) { cap = 0; break; }
+      }
+      shown[i] = cap ? (char)(buf[i] - 32) : buf[i];
       start = (buf[i] == ' ' || buf[i] == '(');
     }
     shown[i] = '\0';
@@ -391,7 +446,7 @@ void gui_status_slot(const char *text)
   int w;
 
   if (!g_status) return;
-  w = status_px(text) + 24;                    /* the pane grows to fit the text, whatever the screen's scaling: it was cut off */
+  w = status_px(text) + DPIS(24);              /* the pane grows to fit the text, whatever the screen's scaling: it was cut off */
   if (w != status_slot_w) { status_slot_w = w; layout_status(); }
   SendMessageA(g_status, SB_SETTEXTA, 1, (LPARAM)text);
 }
@@ -455,6 +510,7 @@ static void layout_status(void)
 
   if (!g_status) return;
 
+  if (gui.large_ui) SendMessage(g_status, SB_SETMINHEIGHT, DPIS(30), 0);     /* (follows the display scale when the window moves) */
   SendMessage(g_status, WM_SIZE, 0, 0);
   GetClientRect(g_hwnd, &rc);
 
@@ -462,12 +518,12 @@ static void layout_status(void)
      also carries the browser panel's game count, which runs noticeably
      longer ("15 of 934 games", "999+ games found (list capped)"). */
   {
-    int w3 = status_px("9999%") + 24;       /* the speed, in a pane of its own */
-    int w2 = status_px("9999 FPS") + 24;    /* the frame rate */
-    int w1 = status_px("Slot 0") + 24;      /* the slot, or the game count */
-    if (w3 < 60) w3 = 60;
-    if (w2 < 70) w2 = 70;
-    if (w1 < 150) w1 = 150;
+    int w3 = status_px("9999%") + DPIS(24);       /* the speed, in a pane of its own */
+    int w2 = status_px("9999 FPS") + DPIS(24);    /* the frame rate */
+    int w1 = status_px("Slot 0") + DPIS(24);      /* the slot, or the game count */
+    if (w3 < DPIS(60)) w3 = DPIS(60);
+    if (w2 < DPIS(70)) w2 = DPIS(70);
+    if (w1 < DPIS(150)) w1 = DPIS(150);
     if (status_slot_w > w1) w1 = status_slot_w;
     parts[2] = rc.right - w3;
     parts[1] = parts[2] - w2;
@@ -500,7 +556,7 @@ static void get_content_rect(RECT *out)
 
 /* Lets browser.c (which can't see the static get_content_rect above)
    trigger a relayout of its own controls -- needed after picking a folder
-   from the "Choose ROMs Directory" button, which switches the panel from that
+   from the "Choose ROM Directory" button, which switches the panel from that
    button to the normal search+list view without a window resize to
    otherwise trigger it. */
 void browser_relayout(void)
@@ -553,7 +609,7 @@ static void check_radio(HMENU menu, int base, int count, int selected)
   CheckMenuRadioItem(menu, base, base + count - 1, base + selected, MF_BYCOMMAND);
 }
 
-/* Empties a menu. With Larger UI the items are owner-drawn and each carries a
+/* Empties a menu. With the Large interface the items are owner-drawn and each carries a
    malloc'd copy of its text in itemData (see theme.c), which has to be freed
    here or every rebuild leaks it. */
 static void clear_menu(HMENU menu)
@@ -565,8 +621,12 @@ static void clear_menu(HMENU menu)
     memset(&mii, 0, sizeof(mii));
     mii.cbSize = sizeof(mii);
     mii.fMask  = MIIM_FTYPE | MIIM_DATA;
+    {
+      HMENU sub = GetSubMenu(menu, 0);
+      if (sub) clear_menu(sub);                     /* its own texts first (the Large interface keeps one for every item) */
+    }
     if (GetMenuItemInfoA(menu, 0, TRUE, &mii) && (mii.fType & MFT_OWNERDRAW) && mii.dwItemData)
-      free((void *)mii.dwItemData);
+      { theme_menu_forget(mii.dwItemData); free((void *)mii.dwItemData); }     /* (its picture must not stay for the next text at that address) */
     DeleteMenu(menu, 0, MF_BYPOSITION);
   }
 }
@@ -596,7 +656,7 @@ static void rebuild_recent_menu(void)
     split_basename(gui.recent[i], name, sizeof(name));
     { char full[GUI_PATH_LEN], shown[GUI_PATH_LEN]; wsprintfA(full, "%s.x", name); browser_display_name(full, shown, sizeof(shown)); lstrcpyA(name, shown); }      /* Show Clean Names applies here too */
 
-    /* "Sonic The Hedgehog | Mega Drive": the console's short name, i.e. the
+    /* "Sonic The Hedgehog        Mega Drive" (the console on the right): the console's short name, i.e. the
        part before " / " ("Mega Drive / Genesis" -> "Mega Drive"). */
     console = browser_console_for_path(gui.recent[i]);
     if (console && console[0])
@@ -607,11 +667,11 @@ static void rebuild_recent_menu(void)
       lstrcpynA(shortname, console, sizeof(shortname));
       slash = strstr(shortname, " / ");
       if (slash) *slash = '\0';
-      wsprintfA(label, "&%d  %s | %s", added + 1, name, shortname);
+      wsprintfA(label, "%s%d.%s%s\t%s", added + 1 < 10 ? "&" : "", added + 1, added + 1 < 10 ? "     " : "   ", name, shortname);      /* after the tab: the right-hand column, where shortcuts go */
     }
     else
     {
-      wsprintfA(label, "&%d  %s", added + 1, name);
+      wsprintfA(label, "%s%d.%s%s", added + 1 < 10 ? "&" : "", added + 1, added + 1 < 10 ? "     " : "   ", name);
     }
     AppendMenuA(recent, MF_STRING, (UINT_PTR)(IDM_FILE_RECENT_BASE + i), label);
     added++;
@@ -627,15 +687,15 @@ static void rebuild_recent_menu(void)
     AppendMenuA(recent, MF_STRING, (UINT_PTR)IDM_FILE_RECENT_CLEAR, "&Clear Recent Files");
   }
 
-  if (gui.large_ui) theme_ownerdraw_menu(recent);
+  if (theme_menus_owner()) theme_ownerdraw_menu(recent);
 
   DrawMenuBar(g_hwnd);
 }
 
-/* Room reserved for filter entries: IDM_VIDEO_FILTER_BASE .. +23. The menu
+/* Room reserved for filter entries: IDM_VIDEO_FILTER_BASE .. +47. The menu
    command for entry i is IDM_VIDEO_FILTER_BASE + i, where i is the filter's
    index in filters.c's table. */
-#define FILTER_MENU_MAX 24
+#define FILTER_MENU_MAX 48
 
 /* Finds the "Video" top-level menu by what's actually in it (a known,
    always-direct-child item) rather than by position -- a hardcoded
@@ -688,24 +748,48 @@ static void rebuild_filter_menu(void)
 
   if (count > 0)
   {
+    /* Sorted by name (the table in filters.c is), the families in a sub-menu of their own; a filter with no family of its
+       own is listed directly. */
+    HMENU groups[24];
+    const char *gname[24];
+    int ng = 0, k;
+
     AppendMenuA(filters, MF_SEPARATOR, 0, NULL);
     for (i = 0; i < count; i++)
     {
-      if (i > 0 && video_filter_separator_before(i)) AppendMenuA(filters, MF_SEPARATOR, 0, NULL);
-      AppendMenuA(filters, MF_STRING, (UINT_PTR)(IDM_VIDEO_FILTER_BASE + i), video_filter_name(i));
+      const char *g = video_filter_group(i);
+      HMENU target = filters;
+
+      if (g)
+      {
+        for (k = 0; k < ng; k++) if (!lstrcmpA(gname[k], g)) break;
+        if (k == ng && ng < 24)
+        {
+          groups[ng] = CreatePopupMenu();
+          gname[ng] = g;
+          AppendMenuA(filters, MF_POPUP | MF_STRING, (UINT_PTR)groups[ng], g);
+          ng++;
+        }
+        if (k < ng) target = groups[k];
+      }
+      AppendMenuA(target, MF_STRING, (UINT_PTR)(IDM_VIDEO_FILTER_BASE + i), video_filter_name(i));
     }
+
+    for (k = 0; k < ng; k++)
+      if (current >= 0 && current < count)
+        CheckMenuRadioItem(groups[k], (UINT)(IDM_VIDEO_FILTER_BASE + current), (UINT)(IDM_VIDEO_FILTER_BASE + current), (UINT)(IDM_VIDEO_FILTER_BASE + current), MF_BYCOMMAND);      /* (a dot, not a check mark: one filter is on) */
   }
 
   if (current < 0 || current >= count)
   {
-    CheckMenuItem(filters, IDM_VIDEO_FILTER_NONE, MF_BYCOMMAND | MF_CHECKED);
+    CheckMenuRadioItem(filters, IDM_VIDEO_FILTER_NONE, IDM_VIDEO_FILTER_NONE, IDM_VIDEO_FILTER_NONE, MF_BYCOMMAND);
   }
   else
   {
-    CheckMenuItem(filters, (UINT)(IDM_VIDEO_FILTER_BASE + current), MF_BYCOMMAND | MF_CHECKED);
+    CheckMenuRadioItem(filters, (UINT)(IDM_VIDEO_FILTER_BASE + current), (UINT)(IDM_VIDEO_FILTER_BASE + current), (UINT)(IDM_VIDEO_FILTER_BASE + current), MF_BYCOMMAND);
   }
 
-  if (gui.large_ui) theme_ownerdraw_menu(filters);
+  if (theme_menus_owner()) theme_ownerdraw_menu(filters);
 
   DrawMenuBar(g_hwnd);
 }
@@ -767,9 +851,42 @@ static void port_choose(int port, int value)
     if (input.system[other] == SYSTEM_WAYPLAY) input.system[other] = SYSTEM_GAMEPAD;
     input.system[port] = (uint8)value;
   }
+  /* remembered: only what was chosen here (what a game sets for itself on the other port is not) */
+  if (value == SYSTEM_WAYPLAY) gui_user_ports[0] = gui_user_ports[1] = SYSTEM_WAYPLAY;
+  else
+  {
+    if (gui_user_ports[other] == SYSTEM_WAYPLAY) gui_user_ports[other] = SYSTEM_GAMEPAD;
+    gui_user_ports[port] = (uint8)value;
+  }
 }
 
-/* Finds the "Save Slot" submenu by the first command ID it holds, rather
+/* A game is about to load: the ports go back to the user's choice (the last game may have put its own device there, such as
+   a light gun). The core then applies what it knows about the new game. */
+static void ports_for_new_game(void)
+{
+  input.system[0] = gui_user_ports[0];
+  input.system[1] = gui_user_ports[1];
+}
+
+/* A Mega Drive or Mega CD game cannot be played with the Master System's Light Phaser, Paddle, Sports Pad or Master Tap (they stay
+   chosen for the games that use them): a pad goes there for this game, as the console expects. */
+static void ports_fit_system(void)
+{
+  int port;
+
+  if (system_hw != SYSTEM_MCD && (system_hw & SYSTEM_PBC) != SYSTEM_MD) return;
+  for (port = 0; port < 2; port++)
+  {
+    int d = input.system[port];
+    if (d == SYSTEM_LIGHTPHASER || d == SYSTEM_PADDLE || d == SYSTEM_SPORTSPAD || d == SYSTEM_MASTERTAP)
+    {
+      gui_log("Input: port %c had a device for the Master System (%d); a Control Pad is used for this game", port ? 'B' : 'A', d);
+      input.system[port] = SYSTEM_GAMEPAD;
+    }
+  }
+}
+
+/* Finds the "Select State Slot" submenu by the first command ID it holds, rather
    than by position or by which top-level menu it lives in, so moving it
    between menus (it used to be under File, now Emulation) doesn't break
    this. */
@@ -820,8 +937,9 @@ static void menu_set_text(HMENU menu, UINT id, const char *text)
     char *stored = (char *)malloc((size_t)lstrlenA(text) + 1);
     if (!stored) return;
     lstrcpyA(stored, text);
+    theme_menu_text_moved(mii.dwItemData, (ULONG_PTR)stored);       /* (its picture goes with it) */
     if (mii.dwItemData) free((void *)mii.dwItemData);
-    mii.fMask      = MIIM_DATA;
+    mii.fMask      = MIIM_FTYPE | MIIM_DATA;                          /* (the type again: the menu measures its items anew for the longer text) */
     mii.dwItemData = (ULONG_PTR)stored;
   }
   else
@@ -874,7 +992,7 @@ static void update_slot_menu_labels(HMENU slot_menu, int base)
 
 int gui_game_running(void) { return emu_running; }
 
-/* A submenu whose items are all greyed is greyed itself (Record, with no game running). Returns 1 when every item of `menu` is. */
+/* A submenu whose items are all grayed is grayed itself (Record, with no game running). Returns 1 when every item of `menu` is. */
 static int menu_autogray(HMENU menu)
 {
   int i, n = GetMenuItemCount(menu), items = 0, usable = 0;
@@ -898,6 +1016,42 @@ static int menu_autogray(HMENU menu)
     else if (!(mii.fState & (MFS_GRAYED | MFS_DISABLED))) usable++;
   }
   return items > 0 && usable == 0;
+}
+
+/* What does nothing for a 32X game (PicoDrive runs it, not the Genesis Plus GX core): these are grayed out in the menus and in
+   Settings while one is running, and refused when a shortcut asks for them. */
+/* The sample rate the running game's sound is made at: a 32X game keeps the rate it was started with (a new choice waits for
+   the next game), the others follow the setting at once. */
+static int run_rate_now(void)
+{
+  return pico_active() && pico_sample_rate() > 0 ? pico_sample_rate() : gui.sample_rate;
+}
+
+int gui_pico_unsupported(int id)
+{
+  if (!pico_active()) return 0;
+
+  /* (Force VDP Mode, Console, Borders, Interlaced Mode and High-Quality PSG stay available: they are kept for the games of the other systems.) */
+  if (id >= IDM_EMU_LOCKON_BASE && id < IDM_EMU_LOCKON_BASE + 4) return 1;
+  if (id == IDM_EMU_BIOS || id == IDM_EMU_ADDRERROR || id == IDM_EMU_CDLATENCY) return 1;
+  if (id >= IDM_SET_FMUNIT_BASE && id < IDM_SET_FMUNIT_BASE + 3) return 1;
+  if (id >= IDM_SET_OPLL_BASE && id < IDM_SET_OPLL_BASE + 2) return 1;
+  if (id == IDM_VIDEO_SMSBORDER || id == IDM_VIDEO_GGEXTRA) return 1;
+  if (id >= IDM_INPUT_PORTA_BASE && id < IDM_INPUT_PORTA_BASE + PORT_CHOICES) return 1;
+  if (id >= IDM_INPUT_PORTB_BASE && id < IDM_INPUT_PORTB_BASE + PORT_CHOICES) return 1;
+  if (id == IDM_INPUT_GUNCURSOR || id == IDM_INPUT_INVERTMOUSE) return 1;
+  if (id >= IDM_SET_MOUSESENS_BASE && id < IDM_SET_MOUSESENS_BASE + 5) return 1;
+  if (id >= IDM_SET_GUNX_BASE && id < IDM_SET_GUNX_BASE + 7) return 1;
+  if (id >= IDM_SET_GUNY_BASE && id < IDM_SET_GUNY_BASE + 7) return 1;
+  return 0;
+}
+
+/* The option only a 32X game uses (Mute PWM Sound): it means nothing while a game of another system runs. With no game open it stays
+   available. */
+int gui_pico_only(int id)
+{
+  if (!emu_running || pico_active()) return 0;
+  return id == IDM_AUDIO_MUTE_PWM;
 }
 
 void gui_update_menu(void)
@@ -969,7 +1123,7 @@ void gui_update_menu(void)
   EnableMenuItem(g_menu, IDM_EMU_PAUSE, MF_BYCOMMAND | rom_state);
   EnableMenuItem(g_menu, IDM_EMU_RESET, MF_BYCOMMAND | rom_state);
   EnableMenuItem(g_menu, IDM_EMU_HARDRESET, MF_BYCOMMAND | rom_state);
-  EnableMenuItem(g_menu, IDM_EMU_CHEATS, MF_BYCOMMAND | rom_state);
+  EnableMenuItem(g_menu, IDM_EMU_CHEATS, MF_BYCOMMAND | ((!emu_running && browser_has_selection()) ? MF_ENABLED : rom_state));
   EnableMenuItem(g_menu, IDM_EMU_CHEATSEARCH, MF_BYCOMMAND | rom_state);
   EnableMenuItem(g_menu, IDM_VIDEO_FULLSCREEN, MF_BYCOMMAND | rom_state);
 
@@ -1014,7 +1168,7 @@ void gui_update_menu(void)
     CheckMenuItem(g_menu, IDM_VIEW_COL_FAV, MF_BYCOMMAND | (browser_column_hidden(2) ? MF_UNCHECKED : MF_CHECKED));   /* the star column is 2, Genre 3 */
     for (c = 0; c < 4; c++)
       CheckMenuItem(g_menu, IDM_VIEW_COL_EXTRA + c, MF_BYCOMMAND | (browser_column_hidden(3 + c) ? MF_UNCHECKED : MF_CHECKED));
-    /* The columns only exist in the list view: grey while the grid is shown. */
+    /* The columns only exist in the list view: gray while the grid is shown. */
     {
       static const int col_ids[] = { IDM_VIEW_COL_FAV, IDM_VIEW_COL_BASE + 1, IDM_VIEW_COL_EXTRA, IDM_VIEW_COL_EXTRA + 1, IDM_VIEW_COL_EXTRA + 2, IDM_VIEW_COL_EXTRA + 3 };
       int k;
@@ -1074,7 +1228,7 @@ void gui_update_menu(void)
                 MF_BYCOMMAND | (gui.show_fps ? MF_CHECKED : MF_UNCHECKED));
   check_radio(g_menu, IDM_VIDEO_INTERLACE_BASE, 2, config.render ? 1 : 0);
   check_radio(g_menu, IDM_VIDEO_LCD_BASE, 4,
-              config.lcd == 0 ? 0 : (config.lcd <= 96 ? 1 : (config.lcd <= 160 ? 2 : 3)));
+              config.lcd == 0 ? 0 : (config.lcd <= 128 ? 1 : (config.lcd <= 160 ? 2 : 3)));
   check_radio(g_menu, IDM_VIDEO_FRAMESKIP_BASE, 6, gui.frameskip);
   CheckMenuItem(g_menu, IDM_EMU_REWIND,
                 MF_BYCOMMAND | (gui.rewind ? MF_CHECKED : MF_UNCHECKED));
@@ -1088,6 +1242,8 @@ void gui_update_menu(void)
   EnableMenuItem(g_menu, IDM_VIDEO_SHADERPARAMS, MF_BYCOMMAND | (shader_chain_param_count() ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));
   CheckMenuItem(g_menu, IDM_VIDEO_SHADER_PRESET,
                 MF_BYCOMMAND | (shader_chain_active() ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(g_menu, IDM_VIDEO_SHADERNOFILTER, MF_BYCOMMAND | (gui.shader_nofilter ? MF_CHECKED : MF_UNCHECKED));
+  EnableMenuItem(g_menu, IDM_VIDEO_SHADERNOFILTER, MF_BYCOMMAND | (gui.shader_preset_path[0] ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));
 
   CheckMenuItem(g_menu, IDM_AUDIO_ENABLE,
                 /* Menu label is "Mute", so the checkmark means the opposite of
@@ -1109,6 +1265,8 @@ void gui_update_menu(void)
   EnableMenuItem(g_menu, IDM_EMU_REWINDNOW, MF_BYCOMMAND | ((emu_running && gui.rewind && !netplay_active()) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));
   CheckMenuItem(g_menu, IDM_AUDIO_MUTE_FM, MF_BYCOMMAND | (gui.mute_fm ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_AUDIO_MUTE_PSG, MF_BYCOMMAND | (gui.mute_psg ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(g_menu, IDM_AUDIO_MUTE_PWM, MF_BYCOMMAND | (gui.mute_pwm ? MF_CHECKED : MF_UNCHECKED));
+  EnableMenuItem(g_menu, IDM_AUDIO_MUTE_PWM, MF_BYCOMMAND | (gui_pico_only(IDM_AUDIO_MUTE_PWM) ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED));      /* (grayed only while a game of another system runs) */
   CheckMenuItem(g_menu, IDM_VIDEO_INTSCALE, MF_BYCOMMAND | (gui.integer_scale ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_EMU_AUTOSAVE, MF_BYCOMMAND | (gui.autosave ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_OPTIONS_OSD, MF_BYCOMMAND | (gui.osd ? MF_CHECKED : MF_UNCHECKED));
@@ -1132,6 +1290,13 @@ void gui_update_menu(void)
 
   check_radio(g_menu, IDM_INPUT_PORTA_BASE, PORT_CHOICES, port_menu_index(0));
   check_radio(g_menu, IDM_INPUT_PORTB_BASE, PORT_CHOICES, port_menu_index(1));
+
+  if (pico_active())                        /* a 32X game: what does nothing for it is grayed out */
+  {
+    int k;
+    for (k = 1; k < 3800; k++)
+      if (gui_pico_unsupported(k)) EnableMenuItem(g_menu, (UINT)k, MF_BYCOMMAND | MF_GRAYED | MF_DISABLED);
+  }
 
   {
     int top, nt = GetMenuItemCount(g_menu);
@@ -1161,14 +1326,14 @@ int gui_port_index(int port)
    every item once the bar has wrapped to a second row: whichever titles land
    on the row Windows drops come up blank until something else (a click, a
    hover, a resize) forces a repaint of that one item, at which point it
-   appears for good. This is not specific to Larger UI -- it reproduces in
-   plain dark mode at a narrow window, Larger UI just makes it easier to hit
+   appears for good. This is not specific to the Large interface -- it reproduces in
+   plain dark mode at a narrow window, the Large interface just makes it easier to hit
    because the bigger font needs more width. There is no fix for the message
    not being sent, so the window is kept wide enough that the bar never wraps
    in the first place, both when it is first created (create_main_window())
    and whenever it is resized to a scale afterward (gui_resize_to_scale(),
    which otherwise sizes purely from the game picture and knows nothing about
-   the menu bar). Measured against the menu's plain text, before Larger UI's
+   the menu bar). Measured against the menu's plain text, before the Large interface's
    theme_ownerdraw_menu() converts the items: once converted, their text is no
    longer retrievable through GetMenuStringA(). Returns 0 outside dark mode,
    where the bar is never touched by hand and this does not apply. */
@@ -1182,7 +1347,7 @@ static int menu_bar_min_width(HMENU menu)
   if (!theme_is_dark() || !menu) return 0;
 
   mhdc  = GetDC(NULL);
-  mfont = gui.large_ui ? gui_get_ui_font() : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+  mfont = theme_menus_owner() ? gui_get_ui_font() : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
   mold  = (HFONT)SelectObject(mhdc, mfont);
   mcount = GetMenuItemCount(menu);
 
@@ -1194,7 +1359,7 @@ static int menu_bar_min_width(HMENU menu)
     if (GetMenuStringA(menu, (UINT)mi, mtext, sizeof(mtext), MF_BYPOSITION) > 0 &&
         GetTextExtentPoint32A(mhdc, mtext, lstrlenA(mtext), &msz))
     {
-      needed += msz.cx + (gui.large_ui ? 44 : 40);   /* generous: the real bar's own
+      needed += msz.cx + (theme_menus_owner() ? 44 : 40);   /* generous: the real bar's own
         inter-item and edge spacing runs well past itemWidth's own +20 formula,
         confirmed by direct testing (20 left 2 of 9 items still wrapped, 20+a
         flat +60 still left 1 of 9 wrapped) -- a window wider than strictly
@@ -1213,17 +1378,18 @@ static int menu_bar_min_width(HMENU menu)
 void gui_resize_to_scale(int scale)
 {
   RECT want;
-  int w, h, sb = 0;
+  int w, h, w0, sb = 0;
 
   if (gui.fullscreen) return;
 
   video_preferred_size(scale, &w, &h);
+  w0 = w;
 
   /* With no game running the ROM browser is what is shown: wide enough for
      its toolbar. */
   if (!gui.hide_toolbar && w < TBS(480)) w = TBS(480);
 
-  /* The Larger UI's toolbar is wide: the window is made wide enough for it to stay on one row (as far as the screen allows). */
+  /* The Large interface's toolbar is wide: the window is made wide enough for it to stay on one row (as far as the screen allows). */
   if (gui.large_ui && !gui.hide_toolbar)
   {
     int tw = browser_toolbar_one_row_width();
@@ -1233,6 +1399,16 @@ void gui_resize_to_scale(int scale)
     if (GetMonitorInfo(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST), &mi) && tw > mi.rcWork.right - mi.rcWork.left - 16)
       tw = mi.rcWork.right - mi.rcWork.left - 16;
     if (w < tw) w = tw;
+  }
+
+  /* A game's picture keeps its shape: a window made wider for the toolbar is made taller by the same factor (as far as the screen allows). */
+  if (emu_running && w > w0 && w0 > 0)
+  {
+    MONITORINFO mi;
+    int th = (int)((long long)h * w / w0);
+
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfo(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST), &mi) && th + browser_toolbar_height_at(w) + DPIS(160) <= mi.rcWork.bottom - mi.rcWork.top) h = th;
   }
 
   if (g_status && IsWindowVisible(g_status))
@@ -1259,6 +1435,26 @@ void gui_resize_to_scale(int scale)
   SetWindowPos(g_hwnd, NULL, 0, 0,
                want.right - want.left, want.bottom - want.top,
                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+  /* The menu bar can be taller than the system's own (the Large interface's is 1.5 times) or wrap onto a second row, which
+     AdjustWindowRectEx() does not know: what is left for the client area is then too small. Grow the window by what is missing. */
+  {
+    int pass, ch = h + sb + browser_toolbar_height_at(w);
+
+    for (pass = 0; pass < 3; pass++)
+    {
+      RECT cr, wr;
+      int dh, dw;
+
+      GetClientRect(g_hwnd, &cr);
+      dh = ch - cr.bottom;
+      dw = w - cr.right;
+      if (dh == 0 && dw <= 0) break;
+      GetWindowRect(g_hwnd, &wr);
+      SetWindowPos(g_hwnd, NULL, 0, 0, wr.right - wr.left + (dw > 0 ? dw : 0), wr.bottom - wr.top + dh,
+                   SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+  }
 }
 
 /* Keeps the window above all others, or lets it behave normally again --
@@ -1281,11 +1477,13 @@ void apply_always_on_top(void)
 static const char *rom_console = "";       /* folder name, "" if not known  */
 
 static const char *const console_folders[] =
-  { "MegaDrive", "MasterSystem", "GameGear", "SG1000", "MegaCD", "Other" };
+  { "MegaDrive", "MasterSystem", "GameGear", "SG1000", "MegaCD", "32X", "Pico", "Other" };
 
 static const char *console_folder_name(void)
 {
   if (system_hw == SYSTEM_MCD) return "MegaCD";
+  if (pico_active()) return "32X";
+  if (system_hw == SYSTEM_PICO) return "Pico";
   if ((system_hw & SYSTEM_PBC) == SYSTEM_MD) return "MegaDrive";
   if (system_hw == SYSTEM_GG || system_hw == SYSTEM_GGMS) return "GameGear";
   if (system_hw == SYSTEM_SMS || system_hw == SYSTEM_SMS2 || system_hw == SYSTEM_MARKIII) return "MasterSystem";
@@ -1302,6 +1500,23 @@ static void identify_rom(void)
 static int file_exists(const char *path)
 {
   return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+/* The Mega CD RAM cartridge's file: Saves\MegaCD\cart.brm (it used to be in Saves itself, and is still read from there). */
+static void cart_brm_path(char *out, int out_len, int for_read)
+{
+  char tmp[GUI_PATH_LEN * 2];
+
+  wsprintfA(tmp, "%s\\MegaCD", osd_path("Saves"));
+  CreateDirectoryA(tmp, NULL);
+  wsprintfA(tmp, "%s\\MegaCD\\cart.brm", osd_path("Saves"));
+  lstrcpynA(out, tmp, out_len);
+  if (for_read && !file_exists(out))
+  {
+    char old[GUI_PATH_LEN * 2];
+    wsprintfA(old, "%s\\cart.brm", osd_path("Saves"));
+    if (file_exists(old)) lstrcpynA(out, old, out_len);
+  }
 }
 
 /* Where a game's saves and states live: <kind>\<Console>\<Game name>\<Game name><ext>, one folder for each game
@@ -1346,6 +1561,32 @@ void emu_console_file_path(const char *kind, const char *ext, char *out, int out
   CreateDirectoryA(tmp, NULL);
   wsprintfA(tmp, "%s\\%s\\%s%s", osd_path(kind), rom_console[0] ? rom_console : "Other", rom_base, ext);
   lstrcpynA(out, tmp, out_len);
+}
+
+/* A new recording's file: Recordings\<Kind>\<Console>\<game>_<date>_<time>.<ext> (the folders are made). */
+static void recording_file_path(const char *kind, const char *ext, char *out, int out_len)
+{
+  char dir[GUI_PATH_LEN];
+  SYSTEMTIME st;
+
+  wsprintfA(dir, "Recordings\\%s", kind);
+  ensure_dir("Recordings");
+  ensure_dir(dir);
+  wsprintfA(dir, "Recordings\\%s\\%s", kind, rom_console[0] ? rom_console : "Other");
+  ensure_dir(dir);
+  GetLocalTime(&st);
+  gui_snprintf(out, out_len, "%s\\%s_%04d%02d%02d_%02d%02d%02d.%s", osd_path(dir), rom_base,
+               st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, ext);
+}
+
+static int is_directory(const char *path);
+
+/* Where Play Input Recording starts looking: the Input folder inside recordings, or recordings itself while that folder is not made yet
+   (a folder is made when it is first used). */
+static void input_recordings_dir(char *out, int out_len)
+{
+  lstrcpynA(out, osd_path("Recordings\\Input"), out_len);
+  if (!is_directory(out)) lstrcpynA(out, osd_path("Recordings"), out_len);
 }
 
 void emu_ensure_data_dir(const char *kind)
@@ -1401,6 +1642,13 @@ static uint32 backup_ram_hash(void)
     h = bram_hash_bytes(h, scd.bram, 0x2000);
     if (scd.cartridge.id) h = bram_hash_bytes(h, scd.cartridge.area, (size_t)scd.cartridge.mask + 1);
   }
+  if (pico_active())
+  {
+    size_t n;
+    unsigned char *p = pico_save_ram(&n);
+    if (p) h = bram_hash_bytes(h, p, n);
+    return h;
+  }
   if (sram.on) h = bram_hash_bytes(h, sram.sram, 0x10000);
   return h;
 }
@@ -1416,27 +1664,41 @@ static void save_backup_ram(void)
 
   if (!emu_running) return;
 
-  emu_ensure_data_dir("saves");
+  emu_ensure_data_dir("Saves");
+
+  if (pico_active())                      /* a 32X game: the battery memory PicoDrive keeps, if the game has any */
+  {
+    size_t n;
+    unsigned char *p = pico_save_ram(&n);
+    if (p)
+    {
+      emu_data_path("Saves", ".srm", 0, path, sizeof(path));
+      write_file_atomic(path, p, n);
+    }
+    bram_saved_hash = backup_ram_hash();
+    bram_hash_valid = 1;
+    return;
+  }
 
   if (system_hw == SYSTEM_MCD)
   {
     if (!memcmp(scd.bram + 0x2000 - 0x20, brm_format + 0x20, 0x20))
     {
-      emu_data_path("saves", ".brm", 0, path, sizeof(path));
+      emu_data_path("Saves", ".brm", 0, path, sizeof(path));
       write_file_atomic(path, scd.bram, 0x2000);
     }
 
     if (scd.cartridge.id &&
         !memcmp(scd.cartridge.area + scd.cartridge.mask + 1 - 0x20, brm_format + 0x20, 0x20))
     {
-      gui_snprintf(path, (int)sizeof(path), "%s\\cart.brm", osd_path("saves"));
+      cart_brm_path(path, (int)sizeof(path), 0);
       write_file_atomic(path, scd.cartridge.area, (size_t)scd.cartridge.mask + 1);
     }
   }
 
   if (sram.on)
   {
-    emu_data_path("saves", ".srm", 0, path, sizeof(path));
+    emu_data_path("Saves", ".srm", 0, path, sizeof(path));
     write_file_atomic(path, sram.sram, 0x10000);
   }
 
@@ -1474,9 +1736,24 @@ static void load_backup_ram(void)
   FILE *fp;
   char path[GUI_PATH_LEN];
 
+  if (pico_active())
+  {
+    size_t n;
+    unsigned char *p = pico_save_ram(&n);
+    if (p)
+    {
+      emu_data_path("Saves", ".srm", 1, path, sizeof(path));
+      fp = fopen(path, "rb");
+      if (fp) { backup_read(path, p, n, fp); fclose(fp); }
+    }
+    bram_saved_hash = backup_ram_hash();
+    bram_hash_valid = 1;
+    return;
+  }
+
   if (system_hw == SYSTEM_MCD)
   {
-    emu_data_path("saves", ".brm", 1, path, sizeof(path));
+    emu_data_path("Saves", ".brm", 1, path, sizeof(path));
     fp = fopen(path, "rb");
     if (fp) { backup_read(path, scd.bram, 0x2000, fp); fclose(fp); }
 
@@ -1491,7 +1768,7 @@ static void load_backup_ram(void)
 
     if (scd.cartridge.id)
     {
-      gui_snprintf(path, (int)sizeof(path), "%s\\cart.brm", osd_path("saves"));
+      cart_brm_path(path, (int)sizeof(path), 1);
       fp = fopen(path, "rb");
       if (fp) { backup_read(path, scd.cartridge.area, scd.cartridge.mask + 1, fp); fclose(fp); }
 
@@ -1510,7 +1787,7 @@ static void load_backup_ram(void)
 
   if (sram.on)
   {
-    emu_data_path("saves", ".srm", 1, path, sizeof(path));
+    emu_data_path("Saves", ".srm", 1, path, sizeof(path));
     fp = fopen(path, "rb");
     if (fp) { backup_read(path, sram.sram, 0x10000, fp); fclose(fp); }
   }
@@ -1529,6 +1806,11 @@ void cheats_save_current(void)
   if (rom_base[0]) cheats_save_for_rom(rom_base);
 }
 
+void cheats_sync_current(void)
+{
+  if (rom_base[0]) cheats_sync_with_disk(rom_base);
+}
+
 /****************************************************************************
  * Save states
  ****************************************************************************/
@@ -1539,7 +1821,7 @@ void state_path(int slot, char *out, int out_len)
   char ext[16];
 
   wsprintfA(ext, ".gp%d", slot);
-  emu_data_path("states", ext, 1, out, out_len);
+  emu_data_path("States", ext, 1, out, out_len);
 }
 
 void thumb_path(int slot, char *out, int out_len)
@@ -1547,7 +1829,7 @@ void thumb_path(int slot, char *out, int out_len)
   char ext[24];
 
   wsprintfA(ext, ".gp%d.bmp", slot);
-  emu_data_path("states", ext, 1, out, out_len);
+  emu_data_path("States", ext, 1, out, out_len);
 }
 
 /* Removes a slot's state and thumbnail, including any copy under an older
@@ -1588,8 +1870,27 @@ int state_file_time(const char *path, char *out, int out_len)
   return 1;
 }
 
+/* A state is the Genesis Plus GX core's, or, for a 32X game, PicoDrive's (which sizes its states itself). */
+static size_t host_state_cap(void)
+{
+  return pico_active() ? pico_state_max() : (size_t)STATE_SIZE;
+}
+
+static int host_state_save(uint8 *buf)
+{
+  return pico_active() ? pico_state_save(buf, pico_state_max()) : state_save(buf);
+}
+
+static int host_state_load(uint8 *buf, size_t len)
+{
+  video_deinterlace_reset();       /* the picture is not the one after the last frame */
+  return pico_active() ? pico_state_load(buf, len) : state_load(buf);
+}
+
 #define AUTO_SLOT 10   /* the "resume where you left off" state: not one of the ten slots of the menu */
 static int resume_prompt_blocked;   /* set when the command line asked for a state of its own */
+static char resume_marker[GUI_PATH_LEN];     /* see emu_load_rom: the file that says a resume point is being used */
+static int  resume_marker_frames;
 
 /* What a slot held before the last save, so that save can be undone. */
 static uint8 *usave_state, *usave_thumb;
@@ -1650,16 +1951,16 @@ void emu_save_state(int slot)
 
   if (!emu_running) return;
 
-  buffer = (uint8 *)malloc(STATE_SIZE);
+  buffer = (uint8 *)malloc(host_state_cap());
   if (!buffer) { gui_notify("Not enough memory to save the state"); return; }
 
-  len = state_save(buffer);
+  len = host_state_save(buffer);
 
-  emu_ensure_data_dir("states");
+  emu_ensure_data_dir("States");
   {
     char ext[16];
     wsprintfA(ext, ".gp%d", slot);
-    emu_data_path("states", ext, 0, path, sizeof(path));
+    emu_data_path("States", ext, 0, path, sizeof(path));
   }
 
   /* Keep what the slot holds now, so this save can be undone. */
@@ -1679,6 +1980,7 @@ void emu_save_state(int slot)
 
   if (len > 0 && write_file_atomic(path, buffer, (size_t)len))
   {
+    gui_log(slot == AUTO_SLOT ? "State saved: the resume point (%d bytes)" : "State saved: slot %d", slot == AUTO_SLOT ? len : slot);
     if (slot != AUTO_SLOT) usave_valid = 1;
     /* state_path() now finds the new file, so the thumbnail lands beside it. */
     thumb_path(slot, path, sizeof(path));
@@ -1695,14 +1997,28 @@ void emu_save_state(int slot)
 
 /* The game as it was just before the last successful state load. */
 static uint8 *undo_state;
+static size_t undo_cap, undo_len;
 static int    undo_valid;
+
+static int undo_buffer(void)
+{
+  size_t need = host_state_cap();
+
+  if (!undo_state || undo_cap < need)
+  {
+    free(undo_state);
+    undo_state = (uint8 *)malloc(need);
+    undo_cap = undo_state ? need : 0;
+  }
+  return undo_state != NULL;
+}
 
 void emu_undo_load_state(void)
 {
   if (!emu_running || !undo_valid || !undo_state) return;
 
   undo_valid = 0;
-  if (state_load(undo_state))
+  if (host_state_load(undo_state, undo_len))
   {
     cheat_search_invalidate();
     emu_apply_sms_border();
@@ -1742,7 +2058,7 @@ static void load_state_path(const char *path, int slot)
     return;
   }
 
-  buffer = (uint8 *)malloc(STATE_SIZE);
+  buffer = (uint8 *)malloc(host_state_cap());
   if (!buffer) { fclose(fp); gui_notify("Not enough memory to load the state"); return; }
 
   /* state_save() writes only the bytes it actually used (bufferptr), which is
@@ -1753,22 +2069,30 @@ static void load_state_path(const char *path, int slot)
      state_load() uninitialized heap memory; state_load() has no way to know
      how much fread() actually filled in and walks the whole STATE_SIZE region
      regardless (see core/state.h's load_param). */
-  memset(buffer, 0, STATE_SIZE);
+  memset(buffer, 0, host_state_cap());
 
-  got = fread(buffer, 1, STATE_SIZE, fp);
+  got = fread(buffer, 1, host_state_cap(), fp);
   fclose(fp);
 
   if (got > 0)
   {
     /* Keep the game as it is now, so a load pressed by mistake can be undone. */
-    if (!undo_state) undo_state = (uint8 *)malloc(STATE_SIZE);
-    if (undo_state && state_save(undo_state) > 0) have_undo = 1;
+    if (undo_buffer())
+    {
+      int n = host_state_save(undo_state);
+      if (n > 0) { undo_len = (size_t)n; have_undo = 1; }
+    }
 
-    loaded = state_load(buffer) ? 1 : 0;
+    loaded = host_state_load(buffer, got) ? 1 : 0;
+
+    /* A 32X state that was refused can leave the machine half loaded: what it was before goes back. */
+    if (!loaded && have_undo && pico_active())
+      host_state_load(undo_state, undo_len);
   }
 
   if (loaded)
   {
+    gui_log(slot == STATE_FILE ? "State loaded from a file" : slot == AUTO_SLOT ? "State loaded: the resume point" : "State loaded: slot %d", slot);
     cheat_search_invalidate();
     undo_valid = have_undo;
     emu_apply_sms_border();
@@ -1813,9 +2137,9 @@ void emu_save_state_file(const char *path)
   int len;
 
   if (!emu_running) return;
-  buffer = (uint8 *)malloc(STATE_SIZE);
+  buffer = (uint8 *)malloc(host_state_cap());
   if (!buffer) { gui_notify("Not enough memory to save the state"); return; }
-  len = state_save(buffer);
+  len = host_state_save(buffer);
   if (len > 0 && write_file_atomic(path, buffer, (size_t)len)) gui_notify("State saved to the file");
   else gui_notify("Could not write the state file");
   free(buffer);
@@ -1827,7 +2151,7 @@ static void backup_path(int k, char *out, int len)
 {
   char ext[16];
   wsprintfA(ext, ".bk%d", k + 1);
-  emu_data_path("states", ext, 1, out, len);
+  emu_data_path("States", ext, 1, out, len);
 }
 
 /* The menu asks often (every refresh of it): the disk is looked at again after a second, for another game, or after a
@@ -1864,9 +2188,9 @@ static void backup_state_save(void)
 
   bk_stamp = 0;                 /* the menu looks at the disk again */
 
-  buffer = (uint8 *)malloc(STATE_SIZE);
+  buffer = (uint8 *)malloc(host_state_cap());
   if (!buffer) return;
-  len = state_save(buffer);
+  len = host_state_save(buffer);
   if (len > 0)
   {
     for (k = 2; k > 0; k--)                   /* older ones move down one place */
@@ -1908,7 +2232,7 @@ static void backup_state_load(int k)
 
 /* The Nuked core can behave as a YM2612 (early consoles: status readable only
    at the first port) or as a YM3438 (later ones: readable at any port). The
-   core default is the YM3438 behaviour. */
+   core default is the YM3438 behavior. */
 /* Master System only. Unless the side borders are shown, hides the 8-pixel side borders (the column games blank to
    hide scrolling) by cropping 8 pixels off each side of the picture, the same
    way the Game Gear's smaller screen is produced. The core resets this on every
@@ -1938,7 +2262,7 @@ void emu_apply_fm_settings(void)
 {
   if (!emu_running) return;
 
-  audio_init(gui.sample_rate, 0);
+  audio_init(run_rate_now(), 0);
   sound_init();
   sound_reset();
   audio_reset();
@@ -1955,11 +2279,11 @@ void emu_apply_audio_settings(void)
 
   /* Only touch the device when the format actually changed -- reopening it
      on every ROM load produces an audible click for no reason. */
-  if (waveout_rate() != gui.sample_rate)
+  if (waveout_rate() != run_rate_now())
   {
     waveout_close();
 
-    if (!waveout_open(gui.sample_rate))
+    if (!waveout_open(run_rate_now()))
     {
       gui.sound_enabled = 0;
       gui_status("No audio device available, sound is off");
@@ -1973,7 +2297,7 @@ void emu_apply_audio_settings(void)
   {
     /* Only audio_init() -- it's the one that actually depends on the
        sample rate (it rebuilds the blip buffers to match). sound_init()
-       does not: reading its implementation directly shows its behaviour
+       does not: reading its implementation directly shows its behavior
        depends purely on which FM core is configured (config.ym2612/
        config.ym3438), never on the sample rate. Calling it here anyway
        was unnecessarily wiping the FM/PSG chip's entire register/channel
@@ -1983,7 +2307,7 @@ void emu_apply_audio_settings(void)
        anything had changed. That's what "missing instruments until a
        reset" was: not a timing bug, but real state being thrown away for
        a change that never needed to touch it. */
-    audio_init(gui.sample_rate, 0);
+    audio_init(run_rate_now(), 0);
   }
 }
 
@@ -2045,6 +2369,7 @@ void emu_apply_region(void)
      rate from it, and rebuilding first kept the old (60 Hz / 50 Hz) rate. */
   audio_init(snd.sample_rate, 0);
 
+  cheats_hold_for_boot();
   cheats_apply();
   waveout_flush();
   video_viewport_changed();
@@ -2087,10 +2412,30 @@ static void load_boot_rom(void)
   }
 }
 
+/* The program and machine, and the settings that matter most: written when the log starts and when it is switched on, so a
+   log sent with a bug report says what it came from. */
+static void log_system_info(void)
+{
+  typedef LONG (WINAPI *rtl_version_fn)(OSVERSIONINFOW *);
+  rtl_version_fn rtl = (rtl_version_fn)(void *)GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlGetVersion");
+  OSVERSIONINFOW vi;
+  char exe[MAX_PATH];
+
+  ZeroMemory(&vi, sizeof(vi));
+  vi.dwOSVersionInfoSize = sizeof(vi);
+  if (rtl) rtl(&vi);
+  if (!GetModuleFileNameA(NULL, exe, sizeof(exe))) exe[0] = '\0';
+  gui_log("Version %s, Windows %lu.%lu build %lu, %s", APP_VERSION, (unsigned long)vi.dwMajorVersion, (unsigned long)vi.dwMinorVersion, (unsigned long)vi.dwBuildNumber, exe);
+  gui_log("Settings: renderer %d, %s style, theme %d, %s interface, display scale %d%%, sound rate %d", gui.renderer, gui.ui_style ? "Modern" : "Classic",
+          gui.theme_mode, gui.large_ui ? "larger" : "normal", gui_dpi * 100 / 96, gui.sample_rate);
+}
+
 void emu_close_rom(void)
 {
   gui_combos_release();
   if (!emu_running) return;
+
+  gui_log("Game closed: %s", rom_base);
 
   cheat_search_close();
   fast_osd_state = 0;
@@ -2108,6 +2453,7 @@ void emu_close_rom(void)
   }
   skip_autosave_once = 0;
 
+  if (resume_marker[0]) { DeleteFileA(resume_marker); resume_marker[0] = '\0'; }       /* closed in the normal way */
   record_stop();
   netplay_disconnect(NULL);
   history_game_ended();
@@ -2118,6 +2464,7 @@ void emu_close_rom(void)
 
   save_backup_ram();
   bram_hash_valid = 0;
+  pico_unload();             /* a 32X game: the library is let go (its battery memory has just been written) */
   audio_shutdown();
   waveout_flush();
 
@@ -2137,6 +2484,7 @@ void emu_close_rom(void)
 
   update_title();
   gui_update_menu();
+  status_set_fps(0);                       /* no frame rate or speed once nothing runs */
   gui_status_persistent("Open a ROM to start, or drop one on this window");
 
   /* Back to the window size the Video > Window Size setting asks for, rather
@@ -2323,6 +2671,21 @@ static int resume_ask(void)
 
 static char patch_override[GUI_PATH_LEN];     /* a patched copy of the game to load instead of the file (File > Apply Patch) */
 
+/* A game with a "SEGA 32X" header that Genesis Plus GX has just loaded: PicoDrive is started for it (the file may be
+   the extracted copy of an archive, so this runs before that is deleted). Returns 0, after telling the player why, when
+   it could not be started; 1 when it was started or the game is not a 32X one. */
+static int start_32x_if_needed(const char *file)
+{
+  char err[1000], msg[GUI_PATH_LEN + 1100];
+
+  if (!pico_rom_is_32x()) return 1;
+  if (pico_load(file, err, sizeof(err))) return 1;
+
+  wsprintfA(msg, "Could not start this 32X game.\n\n%s", err[0] ? err : "PicoDrive could not start it.");
+  MessageBoxA(g_hwnd, msg, APP_NAME, MB_OK | MB_ICONWARNING);
+  return 0;
+}
+
 int emu_load_rom(const char *path)
 {
   gui_combos_release();
@@ -2390,14 +2753,26 @@ int emu_load_rom(const char *path)
       return 0;
     }
 
+    ports_for_new_game();
     if (patch_override[0])
     {
       loaded = load_rom(patch_override) ? 1 : 0;       /* File > Apply Patch: the patched copy */
+      if (loaded && !start_32x_if_needed(patch_override)) loaded = -1;
       DeleteFileA(patch_override);
       patch_override[0] = '\0';
     }
-    else loaded = load_rom(load_path) ? 1 : 0;
+    else
+    {
+      loaded = load_rom(load_path) ? 1 : 0;
+      if (loaded && !start_32x_if_needed(load_path)) loaded = -1;
+    }
     if (from_7z) DeleteFileA(load_path);
+
+    if (loaded < 0)                    /* a 32X game that PicoDrive could not start (it has said why) */
+    {
+      gui_status("Loading failed");
+      return 0;
+    }
 
     if (!loaded)
     {
@@ -2414,6 +2789,7 @@ int emu_load_rom(const char *path)
   lstrcpynA(rom_path, attempt, sizeof(rom_path));
   split_basename(rom_path, rom_base, sizeof(rom_base));
   identify_rom();
+  ports_fit_system();
   np_no_save = 0;
   np_rom_sha_ready = 0;
 
@@ -2436,6 +2812,10 @@ int emu_load_rom(const char *path)
   cheats_load_for_rom(rom_base);
   video_viewport_changed();
 
+  input_press_logged = 0;
+  gui_log("Input: port A device %d, port B device %d, devices %d %d %d %d %d %d %d %d", (int)input.system[0], (int)input.system[1],
+          (int)input.dev[0], (int)input.dev[1], (int)input.dev[2], (int)input.dev[3], (int)input.dev[4], (int)input.dev[5], (int)input.dev[6], (int)input.dev[7]);
+  gui_log("Game file: %s (%u KB)", rom_path, (unsigned)(cart.romsize / 1024));
   gui_log("Game loaded: %s (hardware %d, region %d, %s, FM chip %s, sample rate %d, renderer %d)", rom_base, (int)system_hw, (int)region_code,
           vdp_pal ? "PAL" : "NTSC", config.ym3438 ? "Nuked" : "YM2612", snd.sample_rate, gui.renderer);
   config_add_recent(rom_path);
@@ -2467,16 +2847,31 @@ int emu_load_rom(const char *path)
     rf = fopen(sp, "rb");
     if (rf)
     {
+      char mk[GUI_PATH_LEN];
+
       fclose(rf);
-      if (resume_ask())
+      /* While a resume point is in use a small marker file lies next to it (it goes after a couple of seconds of play). One
+         still there at the next start means the program ended right after resuming: that resume point is dropped, so a bad
+         one cannot keep the game from starting. */
+      gui_snprintf(mk, (int)sizeof(mk), "%s.resuming", sp);
+      if (file_exists(mk))
       {
+        DeleteFileA(mk);
+        state_delete(AUTO_SLOT);
+        gui_log("The resume point of this game was dropped: the program ended right after using it last time");
+        gui_notify("The saved resume point was dropped (the program ended right after using it last time)");
+      }
+      else if (resume_ask())
+      {
+        FILE *mf = fopen(mk, "wb");
+        if (mf) { fputc('1', mf); fclose(mf); lstrcpynA(resume_marker, mk, sizeof(resume_marker)); resume_marker_frames = 0; }
         emu_load_state(AUTO_SLOT);
         resumed = 1;
       }
     }
   }
 
-  /* Skip Intro When a Game Starts: runs the first seconds at full speed (a press of a game button ends it). */
+  /* Skip Intro on Launch: runs the first seconds at full speed (a press of a game button ends it). */
   if (!resumed && !resume_prompt_blocked && gui.skip_len > 0 && netplay_state() == NP_IDLE)
   {
     static const int secs[6] = { 5, 10, 15, 20, 25, 30 };
@@ -2516,6 +2911,7 @@ int emu_peek_rom(const char *path)
     lstrcpynA(load_path, attempt, sizeof(load_path));
     if (from_7z && !extract_7z_rom(attempt, load_path, sizeof(load_path))) return 0;
 
+    ports_for_new_game();
     loaded = load_rom(load_path) ? 1 : 0;
     if (from_7z) DeleteFileA(load_path);
     if (!loaded) return 0;
@@ -2524,6 +2920,7 @@ int emu_peek_rom(const char *path)
   lstrcpynA(rom_path, attempt, sizeof(rom_path));
   split_basename(rom_path, rom_base, sizeof(rom_base));
   identify_rom();
+  ports_fit_system();
 
   cheats_load_for_rom(rom_base);
 
@@ -2563,7 +2960,7 @@ void win32_cd_tray_callback(void)
 
   if (!gui_pick_file(g_hwnd, GUI_PICK_ROM, "Insert Disc",
         "Mega CD / Sega CD\0*.cue;*.iso;*.chd\0"
-        "All files\0*.*\0\0",
+        "All Files\0*.*\0\0",
         dir[0] ? dir : NULL, path, sizeof(path)))
     return;
 
@@ -2576,7 +2973,7 @@ void win32_cd_tray_callback(void)
   gui_status("Disc changed");
 }
 
-/* Emulation > Insert Disc: swaps the Mega CD disc by hand, for games that do not ask for one themselves.
+/* File > Insert Disc: swaps the Mega CD disc by hand, for games that do not ask for one themselves.
    The tray is treated as closed again afterwards, as when a game asks for the next disc. */
 void emu_insert_disc(void)
 {
@@ -2591,7 +2988,7 @@ void emu_insert_disc(void)
   if (slash) *slash = '\0'; else dir[0] = '\0';
 
   if (!gui_pick_file(g_hwnd, GUI_PICK_ROM, "Insert Disc",
-        "Mega CD / Sega CD\0*.cue;*.iso;*.chd\0All files\0*.*\0\0", dir[0] ? dir : NULL, path, sizeof(path)))
+        "Mega CD / Sega CD\0*.cue;*.iso;*.chd\0All Files\0*.*\0\0", dir[0] ? dir : NULL, path, sizeof(path)))
     return;
 
   if (cdd_load(path, (char *)cart.rom) != 1)
@@ -2618,6 +3015,20 @@ void emu_reset(int hard)
 {
   if (!emu_running) return;
 
+  gui_log("Game %s", hard ? "hard reset" : "reset");
+
+  if (pico_active())                    /* a 32X game: PicoDrive starts over (it has no difference between the two) */
+  {
+    cheats_suspend();                   /* the game must find its own ROM when it starts over */
+    pico_reset();
+    undo_valid = 0;
+    cheats_hold_for_boot();
+    cheats_apply();
+    waveout_flush();
+    gui_notify(hard ? "Hard reset" : "Reset");
+    return;
+  }
+
   cheat_search_invalidate();
   cheats_suspend();
 
@@ -2634,6 +3045,7 @@ void emu_reset(int hard)
   undo_valid = 0;   /* the state "Undo Load State" would restore no longer matches this machine */
 
   emu_apply_sms_border();
+  cheats_hold_for_boot();
   cheats_apply();
   waveout_flush();
   gui_notify(hard ? "Hard reset" : "Reset");
@@ -2662,12 +3074,13 @@ static void browse_for_rom(void)
   if (is_directory(gui.rom_dir)) start_dir = gui.rom_dir;
 
   if (gui_pick_file(g_hwnd, GUI_PICK_ROM, "Open ROM",
-        "All supported files\0*.zip;*.7z;*.gz;*.md;*.gen;*.bin;*.smd;*.mdx;*.sms;*.gg;*.sg;*.68k;*.cue;*.iso;*.chd\0"
-        "Mega Drive / Genesis\0*.md;*.gen;*.bin;*.smd;*.mdx;*.68k\0"
+        "All Supported Files\0*.zip;*.7z;*.gz;*.md;*.gen;*.bin;*.smd;*.mdx;*.sms;*.gg;*.sg;*.68k;*.32x;*.cue;*.iso;*.chd\0"
+        "Mega Drive / Genesis / Sega Pico\0*.md;*.gen;*.bin;*.smd;*.mdx;*.68k\0"
+        "32X\0*.32x\0"
         "Master System / Game Gear / SG-1000\0*.sms;*.gg;*.sg\0"
         "Mega CD / Sega CD\0*.cue;*.iso;*.chd\0"
         "Archives\0*.zip;*.7z;*.gz\0"
-        "All files\0*.*\0\0",
+        "All Files\0*.*\0\0",
         start_dir, file, sizeof(file)))
   {
     emu_load_rom(file);
@@ -2694,11 +3107,6 @@ static int np_preflight(char *err, int err_len)
     lstrcpynA(err, "Netplay supports cartridge games only, not Sega CD.", err_len);
     return 0;
   }
-  if (cheats_effective() > 0)
-  {
-    lstrcpynA(err, "Turn off your cheats first (Tools > Cheats). They would put the two games out of sync.", err_len);
-    return 0;
-  }
   if (gui_input_p2_slot() < 0)
   {
     lstrcpynA(err, "Netplay needs a plain Control Pad on both ports (Input > Port A / Port B Device).", err_len);
@@ -2723,33 +3131,39 @@ static void np_collect(np_info *info)
      does, so the connection is refused (and the name shown) if it does. */
   if (!np_rom_sha_ready)
   {
+    cheats_suspend();                       /* the ROM as it is in the file, not with a code in it */
     np_sha256(cart.rom, (size_t)cart.romsize, np_rom_sha);
+    cheats_apply();
     np_rom_sha_ready = 1;
   }
   memcpy(info->rom_sha, np_rom_sha, 32);
 
+  np_add(info, "Cheats (both PCs need the same ones switched on)", cheats_fingerprint());
+  np_add(info, "32X Game",            (unsigned)pico_active());
+  np_add(info, "Low-Pass Filter",     (unsigned)(config.filter == 1 ? config.lp_range : 0));
   np_add(info, "Console",             config.system);
   np_add(info, "Region",              config.region_detect);
-  np_add(info, "Detected region",     region_code);
-  np_add(info, "TV standard (PAL)",   vdp_pal);
-  np_add(info, "System hardware",     system_hw);
-  np_add(info, "Force VDP mode",      config.vdp_mode);
-  np_add(info, "Master clock",        config.master_clock);
+  np_add(info, "Detected Region",     region_code);
+  np_add(info, "TV Standard (PAL)",   vdp_pal);
+  np_add(info, "System Hardware",     system_hw);
+  np_add(info, "Force VDP Mode",      config.vdp_mode);
+  np_add(info, "Interlaced Mode",     config.render);       /* Single Field keeps the interlace field flag still, which the game can read */
+  np_add(info, "Master Clock",        config.master_clock);
   np_add(info, "DTACK",               config.force_dtack);
-  np_add(info, "Address errors",      config.addr_error);
+  np_add(info, "Address Errors",      config.addr_error);
   np_add(info, "Boot from BIOS",      config.bios);
-  np_add(info, "Lock-on cartridge",   config.lock_on);
+  np_add(info, "Lock-on Cartridge",   config.lock_on);
   np_add(info, "Add-on",              config.add_on);
-  np_add(info, "Hot swap",            config.hot_swap);
-  np_add(info, "FM chip",             (unsigned)config.ym2612 | ((unsigned)config.ym3438 << 8) |
+  np_add(info, "Hot Swap",            config.hot_swap);
+  np_add(info, "FM Chip",             (unsigned)config.ym2612 | ((unsigned)config.ym3438 << 8) |
                                       ((unsigned)config.ym2413 << 16) | ((unsigned)config.opll << 24));
-  np_add(info, "Nuked FM chip type",  (unsigned)gui.nuked_ym2612);
-  np_add(info, "High-quality PSG",    config.hq_psg);
-  np_add(info, "Sample rate",         (unsigned)snd.sample_rate);
-  np_add(info, "Port A device",       input.system[0]);
-  np_add(info, "Port B device",       input.system[1]);
-  np_add(info, "Pad type, player 1",  config.input[0].padtype);
-  np_add(info, "Pad type, player 2",  config.input[1].padtype);
+  np_add(info, "Nuked FM Chip Type",  (unsigned)gui.nuked_ym2612);
+  np_add(info, "High-Quality PSG / FM", (unsigned)config.hq_psg | ((unsigned)config.hq_fm << 8));
+  np_add(info, "Sample Rate",         (unsigned)snd.sample_rate);
+  np_add(info, "Port A Device",       input.system[0]);
+  np_add(info, "Port B Device",       input.system[1]);
+  np_add(info, "Pad Type, Player 1",  config.input[0].padtype);
+  np_add(info, "Pad Type, Player 2",  config.input[1].padtype);
 }
 
 /* The VDP's 4-entry write FIFO is not cleared by a reset (vdp_reset() leaves it alone), so it keeps what the game
@@ -2842,6 +3256,13 @@ static void np_log_start_state(void)
   const struct z80_irq_daisy_chain *keep_daisy = Z80.daisy;
 
   if (!gui.log_on) return;
+  if (pico_active())
+  {
+    unsigned long long hh = pico_state_hash();
+    gui_log("Netplay start: 32X game, state fingerprint %08X%08X", (unsigned)(hh >> 32), (unsigned)hh);
+    pico_state_log_pieces();
+    return;
+  }
   Z80.irq_callback = NULL;
   Z80.daisy = NULL;
   memset(buf, 0, STATE_SIZE);
@@ -2877,19 +3298,35 @@ static void np_log_start_state(void)
   }
 }
 
+static void np_message(const char *text, int level);
+
 static void np_begin(void)
 {
   /* Both machines start from the same power-on state. The backup RAM comes
      out at its defaults (nothing is loaded from disk), and saving is blocked
      until a game is loaded or hard-reset normally. */
   cheats_suspend();
-  system_init();
-  system_reset();
-  np_normalize_vdp_fifo();
-  np_normalize_m68k_regs();
-  np_normalize_fm_phase();
+  if (pico_active())
+  {
+    /* A 32X game: PicoDrive is started again (a new copy of the library, so nothing of what was played is left in it), which
+       puts both PCs at the same point: the start-up frames run with no button pressed. */
+    if (!pico_restart())
+    {
+      np_message("The 32X game could not be started again for netplay.", 1);
+      netplay_disconnect(NULL);
+      return;
+    }
+  }
+  else
+  {
+    system_init();
+    system_reset();
+    np_normalize_vdp_fifo();
+    np_normalize_m68k_regs();
+    np_normalize_fm_phase();
+  }
   undo_valid = 0;   /* the state "Undo Load State" would restore no longer matches this machine */
-  emu_apply_sms_border();
+  if (!pico_active()) emu_apply_sms_border();
   waveout_flush();
   emu_paused = 0;
   auto_paused_by_focus = 0;
@@ -2897,6 +3334,8 @@ static void np_begin(void)
   np_no_save = 1;
   rewind_reset();
   next_frame_time = 0.0;
+  cheats_hold_for_boot();
+  cheats_apply();                           /* the cheats that are on (the same on both PCs: they were compared) */
   np_log_start_state();
 
   gui_update_menu();
@@ -2917,6 +3356,7 @@ static unsigned long long np_state_hash(void)
   unsigned long long h = 14695981039346656037ULL;
   int i, len;
 
+  if (pico_active()) return pico_state_hash();
   if (!buf) buf = (uint8 *)malloc(STATE_SIZE);
   if (!buf) return 0;
 
@@ -2951,6 +3391,7 @@ static const char *np_game_title(void)
    the GUI starts the audio with a frame rate of 0, which leaves it at 0. */
 double emu_frame_rate(void)
 {
+  if (pico_active()) return pico_fps();
   if (lines_per_frame < 1 || system_clock < 1) return 60.0;
   return (double)system_clock / ((double)MCYCLES_PER_LINE * (double)lines_per_frame);
 }
@@ -3029,7 +3470,6 @@ static void frame_clock_restart(void)
 static void record_stop_ex(int async)
 {
   char path[GUI_PATH_LEN], err[256];
-  const char *name;
   int failed;
 
   if (!recorder_active()) return;
@@ -3043,9 +3483,6 @@ static void record_stop_ex(int async)
 
   status_apply_prefixes();
   gui_update_menu();
-
-  name = strrchr(path, '\\');
-  name = name ? name + 1 : path;
 
   if (failed)
   {
@@ -3069,22 +3506,14 @@ static void record_stop(void)
 static void record_start(int mode)
 {
   char path[GUI_PATH_LEN];
-  SYSTEMTIME st;
 
   if (!emu_running || recorder_active()) return;
 
-  {
-    /* Each kind in a folder of its own inside recordings. */
-    const char *sub = (mode == REC_VIDEO) ? "recordings\\Video" : (mode == REC_GIF) ? "recordings\\GIF" : "recordings\\Audio";
-    ensure_dir("recordings");
-    ensure_dir(sub);
-    GetLocalTime(&st);
-    gui_snprintf(path, (int)sizeof(path), "%s\\%s_%04d%02d%02d_%02d%02d%02d.%s",
-            osd_path(sub), rom_base,
-            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
-            (mode == REC_VIDEO) ? "mp4" : (mode == REC_GIF) ? "gif" : "wav");
-  }
+  /* Each kind in a folder of its own inside recordings, and in it a folder for the console. */
+  recording_file_path((mode == REC_VIDEO) ? "Video" : (mode == REC_GIF) ? "GIF" : "Audio",
+                      (mode == REC_VIDEO) ? "mp4" : (mode == REC_GIF) ? "gif" : "wav", path, (int)sizeof(path));
 
+  recorder_set_video_options(gui.rec_scale + 1, gui.rec_quality ? 2 << gui.rec_quality : 0, gui.rec_tv);
   if (!recorder_start(mode, path, (int)snd.sample_rate, emu_frame_rate()))
   {
     char msg[512];
@@ -3117,6 +3546,7 @@ static void set_vsync_allowed(void)
 
 static int skip_render;      /* run this frame without drawing it (frameskip) */
 
+
 /* What the taskbar button shows: rewind history left, fast forward, or a recording under way. */
 static void taskbar_update(int rewinding, int rewind_pct, int fast)
 {
@@ -3144,30 +3574,83 @@ static void run_one_frame(int present_video, int record)
      seldom do, so the level is pushed in here: every frame while muted, once on un-muting. */
   {
     static int psg_was_muted;
-    if (gui.mute_psg || psg_was_muted)
+    if (!pico_active() && (gui.mute_psg || psg_was_muted))
       psg_config(0, gui.mute_psg ? 0 : (unsigned)keep_psg,
                  ((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? 0xff : io_reg[6]);
     psg_was_muted = gui.mute_psg;
   }
 
-  /* RAM patches are overwritten by the game, so they go back in each frame. */
-  cheats_ram_update();
-
-  if (system_hw == SYSTEM_MCD)              system_frame_scd(skip_render);
-  else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD) system_frame_gen(skip_render);
-  else                                      system_frame_sms(skip_render);
-
-  if (skip_render) present_video = 0;
-
-  if (bitmap.viewport.changed & 1)
+  if (pico_active())
   {
-    bitmap.viewport.changed &= ~1;
-    video_viewport_changed();
-  }
+    /* A 32X game: PicoDrive runs the frame and hands over the picture (into the frame buffer) and the sound. A change
+       of the picture setting is dealt with first: clearing the buffer afterwards would blank the frame just drawn. */
+    if (bitmap.viewport.changed & 1)
+    {
+      bitmap.viewport.changed &= ~1;
+      video_viewport_changed();
+    }
+    cheats_ram_update();                    /* RAM cheats go back in each frame (the 68000's work RAM of the library) */
+    samples = pico_run_frame(soundframe, (int)(sizeof(soundframe) / sizeof(soundframe[0]) / 2));
+    if (pico_take_rate_change()) emu_apply_audio_settings();      /* Sample Rate was changed: the sound output takes the new rate */
+    if (config.filter == 2 && samples > 0)  /* the 3-Band EQ (the library has none of its own): the same filter the Genesis Plus GX core uses */
+    {
+      static EQSTATE eq32[2];
+      static int eq_sig;
+      int sig = config.low_freq * 31 + config.high_freq * 17 + config.lg * 7 + config.mg * 13 + config.hg * 29 + pico_sample_rate(), j;
 
-  /* audio_update must run every frame or the blip buffers overrun, even
-     when the samples are then thrown away. */
-  samples = audio_update(soundframe);
+      if (sig != eq_sig)
+      {
+        init_3band_state(&eq32[0], config.low_freq, config.high_freq, pico_sample_rate());
+        init_3band_state(&eq32[1], config.low_freq, config.high_freq, pico_sample_rate());
+        eq32[0].lg = eq32[1].lg = (double)config.lg / 100.0;
+        eq32[0].mg = eq32[1].mg = (double)config.mg / 100.0;
+        eq32[0].hg = eq32[1].hg = (double)config.hg / 100.0;
+        eq_sig = sig;
+      }
+      for (j = 0; j < 2 * samples; j++)
+      {
+        int v = (int)do_3band(&eq32[j & 1], soundframe[j]);
+        soundframe[j] = (int16)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+      }
+    }
+    if (config.mono)                        /* Mono Output (the Genesis Plus GX core does this for its own games) */
+    {
+      int j;
+      for (j = 0; j < samples; j++)
+      {
+        int m = (soundframe[2 * j] + soundframe[2 * j + 1]) / 2;
+        soundframe[2 * j] = soundframe[2 * j + 1] = (int16)m;
+      }
+    }
+    if (skip_render) present_video = 0;
+  }
+  else
+  {
+    /* RAM patches are overwritten by the game, so they go back in each frame. */
+    cheats_ram_update();
+
+    if (system_hw == SYSTEM_MCD)              system_frame_scd(skip_render);
+    else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD) system_frame_gen(skip_render);
+    else                                      system_frame_sms(skip_render);
+
+    /* Single Field: the same field every frame. The core draws the other one in turn (and the lines of one are half a line off the
+       other's), so a picture of the two shakes, its text flickering between two looks. It flips the flag at the start of a frame:
+       left set, the next frame is the even field again. */
+    if (interlaced && !config.render && ((system_hw & SYSTEM_PBC) == SYSTEM_MD)) odd_frame = 1;
+
+    if (skip_render) present_video = 0;
+    else video_deinterlace();
+
+    if (bitmap.viewport.changed & 1)
+    {
+      bitmap.viewport.changed &= ~1;
+      video_viewport_changed();
+    }
+
+    /* audio_update must run every frame or the blip buffers overrun, even
+       when the samples are then thrown away. */
+    samples = audio_update(soundframe);
+  }
 
   config.fm_preamp  = (int16)keep_fm;
   config.psg_preamp = (int16)keep_psg;
@@ -3197,7 +3680,7 @@ static void run_one_frame(int present_video, int record)
         int j;
         n_out = (int)(samples * 100.0 / eff + 0.5);
         if (n_out > 4200) n_out = 4200;
-        for (j = 0; j < n_out; j++)          /* linear interpolation between neighbouring samples */
+        for (j = 0; j < n_out; j++)          /* linear interpolation between neighboring samples */
         {
           double pos = (double)j * (double)samples / (double)n_out;
           int a = (int)pos, b = (a + 1 < samples) ? a + 1 : a;
@@ -3250,6 +3733,12 @@ static void run_one_frame(int present_video, int record)
   }
 
   frames_this_second++;
+
+  if (resume_marker[0] && ++resume_marker_frames >= 120)      /* the resumed game has run for a while: the resume point is fine */
+  {
+    DeleteFileA(resume_marker);
+    resume_marker[0] = '\0';
+  }
 
   /* A frame that was skipped was never drawn, so its picture is stale. */
   vgm_frame_end();
@@ -3371,7 +3860,7 @@ static void tick_cursor_hide(void)
     }
   }
 
-  if (limit == 0 || !over_game || in_modal_loop)
+  if (limit == 0 || !over_game || in_modal_loop || menu_loop_active || gui_cursor_depth > 0)    /* (a window that asked for the pointer is open) */
   {
     last_move = now;
     if (hidden) { while (ShowCursor(TRUE) < 0) { } hidden = 0; }
@@ -3384,6 +3873,8 @@ static void tick_cursor_hide(void)
     last = p;
     last_move = now;
     if (hidden) { while (ShowCursor(TRUE) < 0) { } hidden = 0; }
+    else if (ShowCursor(TRUE) < 1) { while (ShowCursor(TRUE) < 0) { } }      /* hidden by something else (a window's own count): moving shows it */
+    else ShowCursor(FALSE);                                                   /* it was visible: the count goes back */
   }
   else if (!hidden && now - last_move >= (DWORD)limit)
   {
@@ -3403,7 +3894,7 @@ static void tick_fullscreen_menu_hover(void)
   RECT rc;
 
   if (!gui.fullscreen) return;
-  if (in_modal_loop) return;             /* a menu or dialog is open: the person is using the mouse */
+  if (in_modal_loop || menu_loop_active) return;             /* a menu or dialog is open: the person is using the mouse */
   if (!GetCursorPos(&p) || !GetWindowRect(g_hwnd, &rc)) return;
 
   if (GetMenu(g_hwnd)) theme_paint_menubar(g_hwnd, 0);   /* the item under the mouse lights up */
@@ -3421,6 +3912,13 @@ static void tick_fullscreen_menu_hover(void)
   {
     browser_fullscreen_toolbar(0);
     set_fullscreen_menu(0);
+  }
+  else
+  {
+    static DWORD last_refresh;
+    DWORD now = GetTickCount();
+
+    if (now - last_refresh > 400) { last_refresh = now; browser_fullscreen_toolbar_refresh(); }
   }
 }
 
@@ -3484,7 +3982,7 @@ static int audio_pacing_lost(void)
     last_try = now;
     gui_log("Sound: the device is lost, trying to open it again");
     waveout_close();
-    if (waveout_open(gui.sample_rate))
+    if (waveout_open(run_rate_now()))
     {
       waveout_set_volume(gui.volume);
       return 0;
@@ -3511,7 +4009,7 @@ static void audio_recover(void)
   else
   {
     waveout_close();                       /* then reopen the device */
-    if (waveout_open(gui.sample_rate)) waveout_set_volume(gui.volume);
+    if (waveout_open(run_rate_now())) waveout_set_volume(gui.volume);
     else gui_status("The sound device is not responding; running without it for now");
   }
 }
@@ -3536,6 +4034,8 @@ static void emulation_step(void);
  ****************************************************************************/
 
 #define WM_APP_PACE (WM_APP + 41)
+#define WM_APP_FSBAR (WM_APP + 42)           /* fullscreen: paint the menu bar dark again */
+static int fs_bar_sel = -1;              /* the title of the menu bar that is open (fullscreen) */
 
 static HANDLE pace_ev, pace_thr;
 static volatile LONG pace_quit, pace_pending;
@@ -3627,6 +4127,30 @@ void gui_run_step(void)
 
 /* Settings-window choices that have no menu item: a base command plus one per item,
    each backed by one number in gui. */
+/* The menus are drawn by the program (with the Modern font) or by the system: after the Style changed. */
+static void apply_menu_font(void)
+{
+  HMENU old = g_menu;
+  int attached = GetMenu(g_hwnd) != NULL;               /* (not in fullscreen: the bar is detached then) */
+
+  if (gui.large_ui) return;                              /* (The Large interface draws the menus itself, in either style) */
+
+  /* A new menu is made, as at the start: changing the items of the old one in place left the sizes Windows had worked out for them. */
+  g_menu = LoadMenuA(g_inst, MAKEINTRESOURCEA(IDR_MAINMENU));
+  if (!g_menu) { g_menu = old; return; }
+  theme_set_menu_bar(g_menu);
+  if (theme_menus_owner()) theme_ownerdraw_menu(g_menu);
+  theme_menu_icons(g_menu);
+  hotkeys_apply_menu();
+  if (attached) SetMenu(g_hwnd, g_menu);
+  rebuild_recent_menu();
+  rebuild_filter_menu();
+  gui_update_menu();
+  DrawMenuBar(g_hwnd);
+  theme_unconvert_menu(old);                             /* (gives back the strings and pictures the owner-drawn items held) */
+  DestroyMenu(old);
+}
+
 static const struct { int base, n; int *val; } setgroups[] =
 {
   { IDM_SET_STEREO_BASE,    4, &gui.stereo_idx },
@@ -3636,13 +4160,14 @@ static const struct { int base, n; int *val; } setgroups[] =
   { IDM_SET_BARCOLOR_BASE,  7, &gui.bar_color },
   { IDM_SET_FSMODE_BASE,    2, &gui.fs_exclusive },
   { IDM_SET_COVERSHAPE_BASE, 3, &gui.cover_shape },
-  { IDM_SET_ACCENT_BASE,    9, &gui.accent },       /* the ninth is a hidden one (eggs.c) */
+  { IDM_SET_ACCENT_BASE,    GUI_ACCENT_HIDDEN + 1, &gui.accent },       /* the last is a hidden one (eggs.c) */
   { IDM_SET_TBSIZE_BASE,    3, &gui.toolbar_size },
   { IDM_SET_CURSORIDLE_BASE, 5, &gui.cursor_idle },
   { IDM_SET_FRAMECAP_BASE,  5, &gui.frame_cap },
   { IDM_SET_BASS_BASE,      4, &gui.bass },
   { IDM_SET_AUTOSAVE_BASE,  5, &gui.autosave_min },
   { IDM_SET_SKIPLEN_BASE,   7, &gui.skip_len },
+  { IDM_SET_REWINDSPEED_BASE, 4, &gui.rewind_speed },
   { IDM_SET_OSDPOS_BASE,    4, &gui.osd_pos },
   { IDM_SET_OSDTIME_BASE,   7, &gui.osd_time },
   { IDM_SET_BACKEND_BASE,   4, &gui.audio_backend },
@@ -3672,7 +4197,7 @@ static int model_current(void)
   return -1;
 }
 
-/* Settings-window sliders: the command id of each, the number it sets, and its range. */
+/* The Picture Adjustments sliders: the command id of each, the number it sets, and its range. */
 static const struct { int id; int *val; int lo, hi, def; } sliders[] =
 {
   { IDM_SET_CONTRAST_BASE, &gui.adj_contrast, 50, 150, 100 },
@@ -3717,20 +4242,20 @@ void gui_slider_commit(void)
 }
 
 /* The entries of a drop-down filled at run time; returns how many, and which is chosen. */
-int gui_dyn_list(int base, char names[][64], int max, int *cur)
+int gui_dyn_list(int base, char names[][96], int max, int *cur)
 {
   int n = 0, i;
 
   *cur = 0;
   if (base == IDM_SET_DEVICE_BASE)
   {
-    char dev[16][32];
+    char dev[16][96];
     int nd = waveout_list_devices(dev, 16);
     lstrcpyA(names[n++], "Windows Default");
     for (i = 0; i < nd && n < max; i++)
     {
-      lstrcpynA(names[n], dev[i], 64);
-      if (!lstrcmpA(gui.audio_device, dev[i])) *cur = n;
+      lstrcpynA(names[n], dev[i], 96);
+      if (gui.audio_device[0] && !*cur && !strncmp(dev[i], gui.audio_device, strlen(gui.audio_device))) *cur = n;      /* (a name saved earlier may be cut short) */
       n++;
     }
   }
@@ -3767,6 +4292,10 @@ int gui_setgroup_state(int id)
   /* choices that are no longer in a menu */
   if (id >= IDM_EMU_LOCKON_BASE && id < IDM_EMU_LOCKON_BASE + 4) return config.lock_on == id - IDM_EMU_LOCKON_BASE;
   if (id >= IDM_TOOLS_SHOT_BASE && id < IDM_TOOLS_SHOT_BASE + 3) return gui.shot_mode == id - IDM_TOOLS_SHOT_BASE;
+  if (id >= IDM_TOOLS_SHOTSIZE_BASE && id < IDM_TOOLS_SHOTSIZE_BASE + 4) return gui.shot_size == id - IDM_TOOLS_SHOTSIZE_BASE;
+  if (id >= IDM_SET_RECSIZE_BASE && id < IDM_SET_RECSIZE_BASE + 4) return gui.rec_scale == id - IDM_SET_RECSIZE_BASE;
+  if (id >= IDM_SET_RECQUAL_BASE && id < IDM_SET_RECQUAL_BASE + 5) return gui.rec_quality == id - IDM_SET_RECQUAL_BASE;
+  if (id >= IDM_SET_RECSHAPE_BASE && id < IDM_SET_RECSHAPE_BASE + 3) return gui.rec_tv == id - IDM_SET_RECSHAPE_BASE;
   if (id >= IDM_EMU_REWINDMEM_BASE && id < IDM_EMU_REWINDMEM_BASE + 4) return gui.rewind_memory == id - IDM_EMU_REWINDMEM_BASE;       /* the Rewind submenu is gone: Settings asks here */
 
   /* the FM chip and the sample rate are no longer in the Audio menu, so Settings asks here */
@@ -3796,7 +4325,7 @@ static void stereo_apply(void)
 static BOOL CALLBACK redraw_all_cb(HWND w, LPARAM lp)
 {
   (void)lp;
-  RedrawWindow(w, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);      /* the program's windows, with the new accent colour */
+  RedrawWindow(w, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);      /* the program's windows, with the new accent color */
   return TRUE;
 }
 
@@ -3821,7 +4350,7 @@ int gui_setgroup_set(int id)
         if (gui.sound_enabled)
         {
           waveout_close();
-          if (waveout_open(gui.sample_rate)) waveout_set_volume(gui.volume);
+          if (waveout_open(run_rate_now())) waveout_set_volume(gui.volume);
           else gui_status("That sound output is not available; sound is off");
         }
       }
@@ -3834,6 +4363,8 @@ int gui_setgroup_set(int id)
       else if (setgroups[k].base == IDM_SET_STYLE_BASE)
       {
         theme_apply_to_window(g_hwnd);                  /* the window frame, controls and fonts at once (Settings follows itself) */
+        if (menu_loop_active) { menu_rebuild_pending = 1; EndMenu(); }     /* (the open menu belongs to the menu bar that is replaced: it closes, and the new one is made) */
+        else apply_menu_font();
         RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
       }
       return 1;
@@ -4031,11 +4562,14 @@ static void emulation_step(void)
        every single frame (see rewind.c), so popping one every 60th of a
        second reads as real-time-speed reverse motion instead of jumping. */
     double now = now_seconds();
-    double period = 1.0 / 60.0;
+    double period = (gui.rewind_speed == 0 ? 2.0 : 1.0) / 60.0;         /* slow: a step every other 60th of a second */
+    int steps = gui.rewind_speed == 2 ? 2 : gui.rewind_speed == 3 ? 4 : 1;      /* fast: two steps at a time, very fast: four */
+    int rewind_ok, k;
 
     if (next_rewind_time == 0.0 || now - next_rewind_time > 0.5)
     {
       next_rewind_time = now;
+      rewind_bar_ref = 0;                 /* a new rewind: its bar starts full */
     }
     else if (now < next_rewind_time)
     {
@@ -4044,7 +4578,9 @@ static void emulation_step(void)
     }
     next_rewind_time += period;
 
-    if (rewind_step())
+    rewind_ok = rewind_step();
+    for (k = 1; rewind_ok && k < steps; k++) if (!rewind_step()) break;       /* (the last step's picture and sound are the ones shown) */
+    if (rewind_ok)
     {
       int audio_frames;
       const int16 *audio;
@@ -4052,10 +4588,10 @@ static void emulation_step(void)
       rewind_hit_limit_notified = 0;
 
       {
-        int left, peak;
-        rewind_status(&left, &peak);
-        taskbar_update(1, peak > 0 ? left * 100 / peak : 0, 0);
-        if (gui.osd) video_show_rewind(peak > 0 ? left * 1000 / peak : 0, left * 10 / (vdp_pal ? 50 : 60));
+        int left = rewind_status();
+        if (left > rewind_bar_ref) rewind_bar_ref = left;
+        taskbar_update(1, rewind_bar_ref > 0 ? left * 100 / rewind_bar_ref : 0, 0);
+        if (gui.osd) video_show_rewind(rewind_bar_ref > 0 ? left * 1000 / rewind_bar_ref : 0, left * 10 / (int)(emu_frame_rate() + 0.5));
       }
 
       /* rewind_step() already restored bitmap.data directly -- no
@@ -4190,14 +4726,14 @@ int gui_shader_available(void)
 
   if (!shader_chain_available())
   {
-    MessageBoxA(g_hwnd, "librashader.dll was not found next to the exe.\n\n"
-                        "GPU shader presets need it -- see the README.",
-                APP_NAME, MB_OK | MB_ICONWARNING);
+    char text[MAX_PATH + 400];
+    shader_chain_missing_text(text, (int)sizeof(text));
+    MessageBoxA(g_hwnd, text, APP_NAME, MB_OK | MB_ICONWARNING);
     return 0;
   }
   if (gui.renderer != RENDERER_D3D11 || !d3d11_get_frame_resources(&device, NULL, NULL))
   {
-    MessageBoxA(g_hwnd, "GPU shaders need the Direct3D 11 renderer.\n\n"
+    MessageBoxA(g_hwnd, "Shaders need the Direct3D 11 renderer.\n\n"
                         "Pick it under Video > Renderer first.",
                 APP_NAME, MB_OK | MB_ICONWARNING);
     return 0;
@@ -4244,7 +4780,7 @@ static int cli_fullscreen = -1;    /* -1: as set in the program */
 static int cli_exit_on_close;
 static int cli_state = -1;
 static int cli_help;
-static int cli_restarted;       /* --restarted: started by Larger UI's restart, so not handed to the copy that is closing */
+static int cli_restarted;       /* --restarted: started by the Large interface's restart, so not handed to the copy that is closing */
 static int restart_closing;     /* this copy is closing for that restart: no "stop the game?" question */
 static int cli_mute, cli_paused, cli_scale = -1;
 static char cli_state_file[GUI_PATH_LEN];
@@ -4322,6 +4858,12 @@ static void on_command(int id)
 
 static void on_command_inner(int id)
 {
+  if (gui_pico_unsupported(id))
+  {
+    gui_notify("Not available for 32X games");
+    return;
+  }
+
   if (np_command_locked(id))
   {
     gui_notify("Not available during netplay");
@@ -4345,25 +4887,16 @@ static void on_command_inner(int id)
     return;
   }
 
-  if (id == IDM_VIDEO_ADJ_RESET)
-  {
-    gui.adj_contrast = gui.adj_sat = gui.adj_gamma = 100; gui.adj_hue = 0;
-    video_adjust_changed();
-    gui_update_menu();
-    config_save();
-    return;
-  }
-
   if (id >= IDM_SET_DEVICE_BASE && id < IDM_SET_DEVICE_BASE + 40)
   {
-    char names[16][32];
+    char names[16][96];
     int n = waveout_list_devices(names, 16), k = id - IDM_SET_DEVICE_BASE;
 
     lstrcpynA(gui.audio_device, (k >= 1 && k <= n) ? names[k - 1] : "", sizeof(gui.audio_device));
     if (gui.sound_enabled)
     {
       waveout_close();
-      if (waveout_open(gui.sample_rate)) waveout_set_volume(gui.volume);
+      if (waveout_open(run_rate_now())) waveout_set_volume(gui.volume);
       else gui_status("That sound device is not available; sound is off");
     }
     config_save();
@@ -4420,7 +4953,8 @@ static void on_command_inner(int id)
   if (id >= IDM_EMU_VDPMODE_BASE && id < IDM_EMU_VDPMODE_BASE + 3)
   {
     config.vdp_mode = (uint8)(id - IDM_EMU_VDPMODE_BASE);
-    emu_apply_region();
+    if (pico_active()) pico_settings_changed();       /* a 32X game: the library takes it as a region (NTSC = US, PAL = Europe) */
+    else emu_apply_region();
     gui_update_menu();
     config_save();
     return;
@@ -4429,7 +4963,8 @@ static void on_command_inner(int id)
   if (id >= IDM_EMU_REGION_BASE && id < IDM_EMU_REGION_BASE + 5)
   {
     config.region_detect = (uint8)(id - IDM_EMU_REGION_BASE);
-    emu_apply_region();
+    if (pico_active()) pico_settings_changed();       /* a 32X game: the library reads the region itself */
+    else emu_apply_region();
     gui_update_menu();
     config_save();
     return;
@@ -4500,6 +5035,17 @@ static void on_command_inner(int id)
     return;
   }
 
+  if (id >= IDM_TOOLS_SHOTSIZE_BASE && id < IDM_TOOLS_SHOTSIZE_BASE + 4)
+  {
+    gui.shot_size = id - IDM_TOOLS_SHOTSIZE_BASE;
+    config_save();
+    return;
+  }
+
+  if (id >= IDM_SET_RECSIZE_BASE && id < IDM_SET_RECSIZE_BASE + 4)   { gui.rec_scale = id - IDM_SET_RECSIZE_BASE; config_save(); return; }
+  if (id >= IDM_SET_RECQUAL_BASE && id < IDM_SET_RECQUAL_BASE + 5)   { gui.rec_quality = id - IDM_SET_RECQUAL_BASE; config_save(); return; }
+  if (id >= IDM_SET_RECSHAPE_BASE && id < IDM_SET_RECSHAPE_BASE + 3) { gui.rec_tv = id - IDM_SET_RECSHAPE_BASE; config_save(); return; }
+
   if (id >= IDM_TOOLS_SHOT_BASE && id < IDM_TOOLS_SHOT_BASE + 3)
   {
     gui.shot_mode = id - IDM_TOOLS_SHOT_BASE;
@@ -4512,8 +5058,7 @@ static void on_command_inner(int id)
   if (id >= IDM_VIDEO_INTERLACE_BASE && id < IDM_VIDEO_INTERLACE_BASE + 2)
   {
     config.render = (uint8)(id - IDM_VIDEO_INTERLACE_BASE);
-    if (emu_running) bitmap.viewport.changed = 3;
-    video_viewport_changed();
+    if (emu_running && !pico_active()) { bitmap.viewport.changed = 3; video_viewport_changed(); }       /* (a 32X game has no such mode: it is kept for the other games) */
     gui_update_menu();
     config_save();
     return;
@@ -4522,7 +5067,7 @@ static void on_command_inner(int id)
   /* LCD ghosting: how much of a bright pixel lingers into the next frame. */
   if (id >= IDM_VIDEO_LCD_BASE && id < IDM_VIDEO_LCD_BASE + 4)
   {
-    static const uint8 lcd_rate[4] = { 0, 96, 160, 224 };
+    static const uint8 lcd_rate[4] = { 0, 128, 160, 192 };      /* Light was 96 (hardly to be seen), Heavy 224 (too much) */
     config.lcd = lcd_rate[id - IDM_VIDEO_LCD_BASE];
     gui_update_menu();
     config_save();
@@ -4540,9 +5085,12 @@ static void on_command_inner(int id)
   if (id >= IDM_VIDEO_OVERSCAN_BASE && id < IDM_VIDEO_OVERSCAN_BASE + 4)
   {
     config.overscan = (uint8)(id - IDM_VIDEO_OVERSCAN_BASE);
-    emu_apply_sms_border();
-    if (emu_running) bitmap.viewport.changed = 3;
-    video_viewport_changed();
+    if (!pico_active())                                  /* (a 32X game has no borders to show: it is kept for the other games) */
+    {
+      emu_apply_sms_border();
+      if (emu_running) bitmap.viewport.changed = 3;
+      video_viewport_changed();
+    }
     gui_update_menu();
     config_save();
     return;
@@ -4561,7 +5109,7 @@ static void on_command_inner(int id)
   {
     theme_set_mode(id - IDM_VIDEO_THEME_BASE);
     theme_apply_to_window(g_hwnd);
-    theme_menu_icons(g_menu);                    /* the pictures follow the text colour of the theme */
+    theme_menu_icons(g_menu);                    /* the pictures follow the text color of the theme */
     RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
     gui_update_menu();
     config_save();
@@ -4620,7 +5168,7 @@ static void on_command_inner(int id)
   {
     char msg[96];
     int n = coverart_clear_cache();
-    wsprintfA(msg, n ? "Removed %d saved covers." : "There were no saved covers.", n);
+    wsprintfA(msg, n ? "Removed %d saved cover%s." : "There were no saved covers.", n, n == 1 ? "" : "s");
     MessageBoxA(g_hwnd, msg, APP_NAME, MB_OK | MB_ICONINFORMATION);
     return;
   }
@@ -4683,10 +5231,20 @@ static void on_command_inner(int id)
     return;
   }
 
+  if (id == IDM_OPT_COLORICONS)
+  {
+    gui.color_icons = !gui.color_icons;
+    theme_menu_icons(g_menu);                    /* the menu pictures again, in color or black and white */
+    gui_update_menu();
+    RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_UPDATENOW);      /* the toolbar and the star of the list */
+    config_save();
+    return;
+  }
+
   if (id == IDM_OPT_LOG || id == IDM_OPT_PAUSEPAD || id == IDM_OPT_NORMALIZE ||
       id == IDM_OPT_OVERDRIVE || id == IDM_OPT_OSDOPTS)
   {
-    if (id == IDM_OPT_LOG) { gui.log_on = !gui.log_on; if (gui.log_on) gui_log("Logging switched on"); }
+    if (id == IDM_OPT_LOG) { gui.log_on = !gui.log_on; if (gui.log_on) { gui_log("Logging switched on"); log_system_info(); } }
     else if (id == IDM_OPT_PAUSEPAD) gui.pause_pad = !gui.pause_pad;
     else if (id == IDM_OPT_NORMALIZE) gui.normalize = !gui.normalize;
     else if (id == IDM_OPT_OVERDRIVE) gui.overdrive = !gui.overdrive;
@@ -4770,7 +5328,7 @@ static void on_command_inner(int id)
   if (id == IDM_VIEW_FINDSEARCH)
   {
     if (!browser_panel_visible()) return;
-    /* Ctrl+F never changes the saved View > Show Search Bar setting: the bar comes and goes for this run only. */
+    /* Ctrl+F never changes the saved View > Toolbars > Show Search Bar setting: the bar comes and goes for this run only. */
     if (browser_search_shown()) browser_hide_search_now();                    /* shown -> hidden */
     else browser_focus_search();                                              /* hidden -> shown, ready to type; goes away again when left empty */
     gui_update_menu();
@@ -4811,7 +5369,7 @@ static void on_command_inner(int id)
 
     if (MessageBoxA(g_hwnd,
           "Genesis Plus EX needs to restart for this to take effect.\n\nRestart now?",
-          "Larger UI", MB_YESNO | MB_ICONQUESTION) == IDYES)
+          "Interface Size", MB_YESNO | MB_ICONQUESTION) == IDYES)
     {
       char exe_path[GUI_PATH_LEN];
       char cmdline[GUI_PATH_LEN * 2 + 16];
@@ -4851,13 +5409,14 @@ static void on_command_inner(int id)
   if (id >= IDM_SET_MODEL_BASE && id <= IDM_SET_MODEL_BASE + 2)
   {
     int mdl = id - IDM_SET_MODEL_BASE;
-    static const char *const names[3] = { "Console model: Default", "Console model: Genesis Model 1", "Console model: Genesis Model 2" };
+    static const char *const names[3] = { "Console Model: Default", "Console Model: Genesis Model 1", "Console Model: Genesis Model 2" };
 
     model_pick = mdl;
     on_command(IDM_AUDIO_FMCORE_BASE + (mdl == 2 ? 1 : 0));       /* YM2612 / YM3438 */
     config.filter = (uint8)(mdl == 1 ? 1 : 0);       /* only Model 1 has the low-pass filter */
     if (mdl == 1) config.lp_range = 0x9999;
     if (emu_running) audio_set_equalizer();
+    if (pico_active()) pico_settings_changed();
     gui_update_menu();
     config_save();
     gui_notify("%s", names[mdl]);
@@ -4875,10 +5434,18 @@ static void on_command_inner(int id)
     if (choice <= 1) gui.nuked_ym2612 = (choice == 0);
     emu_apply_nuked_type();
 
+    if (pico_active())                       /* a 32X game: PicoDrive has its own FM chip, told the type through its option */
+    {
+      pico_settings_changed();
+      gui_update_menu();
+      config_save();
+      return;
+    }
+
     if (emu_running)
     {
       /* Unlike Sample Rate, Enable Sound, HQPSG, or Region -- none of
-         which actually need sound_init() at all, since its behaviour
+         which actually need sound_init() at all, since its behavior
          depends purely on which FM core is configured, confirmed by
          reading it -- this menu is the one place that genuinely changes
          that configuration, so sound_init() actually has to run here.
@@ -4897,7 +5464,7 @@ static void on_command_inner(int id)
          naturally re-triggers them (a new area, a menu, etc.) or the game
          is reset. That part is inherent to swapping cores mid-run, not a
          bug this sequence can paper over. */
-      audio_init(gui.sample_rate, 0);
+      audio_init(run_rate_now(), 0);
       sound_init();
       sound_reset();
 
@@ -4939,7 +5506,8 @@ static void on_command_inner(int id)
   {
     static const int rates[3] = { 22050, 44100, 48000 };
     gui.sample_rate = rates[id - IDM_AUDIO_RATE_BASE];
-    emu_apply_audio_settings();
+    if (pico_active()) pico_settings_changed();                   /* the library changes its rate; the sound output follows after the next frame */
+    else emu_apply_audio_settings();
     gui_update_menu();
     config_save();
     return;
@@ -5012,7 +5580,7 @@ static void on_command_inner(int id)
       char p[GUI_PATH_LEN];
       if (!emu_running) break;
       if (gui_pick_file(g_hwnd, GUI_PICK_STATE, "Load State from File",
-                        "Genesis Plus EX state\0*.gpstate;*.gp0;*.gp1;*.gp2;*.gp3;*.gp4;*.gp5;*.gp6;*.gp7;*.gp8;*.gp9\0All files\0*.*\0\0",
+                        "Genesis Plus EX State\0*.gpstate;*.gp0;*.gp1;*.gp2;*.gp3;*.gp4;*.gp5;*.gp6;*.gp7;*.gp8;*.gp9\0All Files\0*.*\0\0",
                         NULL, p, sizeof(p)))
         emu_load_state_file(p);
       break;
@@ -5023,16 +5591,11 @@ static void on_command_inner(int id)
       char p[GUI_PATH_LEN], suggest[GUI_PATH_LEN];
       if (!emu_running) break;
       wsprintfA(suggest, "%s.gpstate", rom_base);
-      if (gui_save_file(g_hwnd, "Save State to File", "Genesis Plus EX state\0*.gpstate\0All files\0*.*\0\0",
+      if (gui_save_file(g_hwnd, "Save State to File", "Genesis Plus EX State\0*.gpstate\0All Files\0*.*\0\0",
                         "gpstate", suggest, p, sizeof(p)))
         emu_save_state_file(p);
       break;
     }
-
-    case IDM_OPT_RUNINDIALOGS:
-      gui.run_in_dialogs = !gui.run_in_dialogs;
-      config_save();
-      break;
 
     case IDM_FILE_APPLYPATCH:
     {
@@ -5040,7 +5603,7 @@ static void on_command_inner(int id)
 
       if (!emu_running) { gui_notify("Open a game first"); break; }
       lstrcpynA(target, rom_path, sizeof(target));
-      if (!gui_pick_file(g_hwnd, GUI_PICK_STATE, "Apply a Patch", "Patches (.ips, .bps, .zip, .7z)\0*.ips;*.bps;*.zip;*.7z\0All files\0*.*\0\0", osd_path("."), patch, sizeof(patch))) break;
+      if (!gui_pick_file(g_hwnd, GUI_PICK_STATE, "Apply a Patch", "Patches (.ips, .bps, .zip, .7z)\0*.ips;*.bps;*.zip;*.7z\0All Files\0*.*\0\0", osd_path("."), patch, sizeof(patch))) break;
       {
         /* A game in a .7z archive is unpacked to a temporary file first; the patched copy is what gets loaded. */
         char unpacked[GUI_PATH_LEN] = "";
@@ -5091,21 +5654,16 @@ static void on_command_inner(int id)
       /* Started like the other recordings (a file named after the game and the time, in the VGM folder inside recordings) and ended
          with Stop Recording. */
       char f[GUI_PATH_LEN];
-      SYSTEMTIME st;
       if (!emu_running) { gui_notify("Open a game first"); break; }
       if (vgm_active() || recorder_active()) break;
-      ensure_dir("recordings");
-      ensure_dir("recordings\\VGM");
-      GetLocalTime(&st);
-      gui_snprintf(f, (int)sizeof(f), "%s\\%s_%04d%02d%02d_%02d%02d%02d.vgm", osd_path("recordings\\VGM"), rom_base,
-                   st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+      recording_file_path("VGM", "vgm", f, (int)sizeof(f));
       if (vgm_start(f))
       {
         const char *n = strrchr(f, '\\');
         lstrcpynA(vgm_name, n ? n + 1 : f, sizeof(vgm_name));
         gui_notify("Recording the sound chips (VGM)");
       }
-      else MessageBoxA(g_hwnd, "The file could not be created.", APP_NAME, MB_OK | MB_ICONWARNING);
+      else MessageBoxA(g_hwnd, pico_active() ? "The file could not be created.\n\nFor a 32X game the library in the Plugins folder must be the one from the newest zip (an older picodrive_libretro DLL cannot record). Replace it and start the program again." : "The file could not be created.", APP_NAME, MB_OK | MB_ICONWARNING);
       gui_update_menu();
       break;
     }
@@ -5114,20 +5672,23 @@ static void on_command_inner(int id)
     case IDM_TOOLS_MOVIE_PLAY:
     case IDM_TOOLS_MOVIE_STOP:
     {
-      char f[GUI_PATH_LEN], err[120];
+      char f[GUI_PATH_LEN], err[120], start[GUI_PATH_LEN];
 
       if (id == IDM_TOOLS_MOVIE_STOP) { movie_stop(); break; }
       if (!emu_running) { gui_notify("Open a game first"); break; }
       if (id == IDM_TOOLS_MOVIE_REC)
       {
-        char sug[160];
-        snprintf(sug, sizeof(sug), "%s.gpm", rom_base);
-        if (gui_save_file(g_hwnd, "Record Input", "Input recordings\0*.gpm\0\0", "gpm", sug, f, sizeof(f)) && !movie_record(f))
-          MessageBoxA(g_hwnd, "The recording could not be started.", APP_NAME, MB_OK | MB_ICONWARNING);
+        /* Like the other recordings: a file named after the game and the time, in the Input folder inside recordings. */
+        recording_file_path("Input", "gpm", f, (int)sizeof(f));
+        if (!movie_record(f)) MessageBoxA(g_hwnd, "The recording could not be started.", APP_NAME, MB_OK | MB_ICONWARNING);
+        else gui_notify("Recording the input");
       }
-      else if (gui_pick_file(g_hwnd, GUI_PICK_STATE, "Play Input Recording", "Input recordings\0*.gpm\0\0", osd_path("."), f, sizeof(f)))
+      else
       {
-        if (!movie_play(f, err, sizeof(err))) MessageBoxA(g_hwnd, err, APP_NAME, MB_OK | MB_ICONWARNING);
+        input_recordings_dir(start, sizeof(start));
+        if (gui_pick_file(g_hwnd, GUI_PICK_STATE, "Play Input Recording", "Input Recordings\0*.gpm\0\0", start, f, sizeof(f)) &&
+            !movie_play(f, err, sizeof(err)))
+          MessageBoxA(g_hwnd, err, APP_NAME, MB_OK | MB_ICONWARNING);
       }
       break;
     }
@@ -5141,7 +5702,7 @@ static void on_command_inner(int id)
     case IDM_VIDEO_BEZEL:
     {
       char f[GUI_PATH_LEN];
-      if (gui_pick_file(g_hwnd, GUI_PICK_COVER, "Choose a Bezel Image", "Images\0*.png;*.jpg;*.bmp\0All files\0*.*\0\0", osd_path("bezels"), f, sizeof(f)))
+      if (gui_pick_file(g_hwnd, GUI_PICK_COVER, "Choose a Bezel Image", "Images\0*.png;*.jpg;*.bmp\0All Files\0*.*\0\0", osd_path("Bezels"), f, sizeof(f)))
       {
         lstrcpynA(gui.bezel_path, f, sizeof(gui.bezel_path));
         video_adjust_changed();
@@ -5290,6 +5851,13 @@ static void on_command_inner(int id)
       config_save();
       break;
 
+    case IDM_AUDIO_MUTE_PWM:
+      gui.mute_pwm = !gui.mute_pwm;
+      gui_notify(gui.mute_pwm ? "PWM sound muted" : "PWM sound unmuted");
+      gui_update_menu();
+      config_save();
+      break;
+
     case IDM_AUDIO_MUTE_PSG:
       gui.mute_psg = !gui.mute_psg;
       gui_notify(gui.mute_psg ? "PSG sound muted" : "PSG sound unmuted");
@@ -5339,7 +5907,7 @@ static void on_command_inner(int id)
       break;
 
     case IDM_EMU_CHEATS:
-      if (!emu_running) break;
+      if (!emu_running) { browser_edit_cheats(); break; }
       dlg_cheats(g_hwnd);
       break;
 
@@ -5517,10 +6085,10 @@ static void on_command_inner(int id)
          own remembered-state slot) on its own. */
       if (!gui_shader_available()) break;
 
-      if (gui_pick_file(g_hwnd, GUI_PICK_SHADER, "Open GPU Shader Preset",
-            "Slang shader presets\0*.slangp\0"
-            "All files\0*.*\0\0",
-            osd_path("shaders"), path, sizeof(path)))
+      if (gui_pick_file(g_hwnd, GUI_PICK_SHADER, "Open Shader Preset",
+            "Slang Shader Presets\0*.slangp\0"
+            "All Files\0*.*\0\0",
+            osd_path("Shaders"), path, sizeof(path)))
       {
         char name[GUI_PATH_LEN], *dot;
         const char *slash;
@@ -5568,6 +6136,10 @@ static void on_command_inner(int id)
       dlg_audio(g_hwnd);
       break;
 
+    case IDM_VIDEO_PICTUREADJ:
+      dlg_picture_adjust(g_hwnd);
+      break;
+
     case IDM_AUDIO_MONO:
       config.mono = (uint8)(!config.mono);
       gui_update_menu();
@@ -5576,13 +6148,15 @@ static void on_command_inner(int id)
 
     case IDM_AUDIO_HQFM:
       config.hq_fm = (uint8)(!config.hq_fm);
+      if (pico_active()) pico_settings_changed();
       gui_update_menu();
       config_save();
       break;
 
     case IDM_AUDIO_LOWPASS:
       config.filter = (uint8)(config.filter == 1 ? 0 : 1);       /* from the 3-Band EQ it switches to the low-pass filter */
-      if (emu_running) audio_set_equalizer();
+      if (pico_active()) pico_settings_changed();                /* a 32X game: the library has its own low-pass filter */
+      else if (emu_running) audio_set_equalizer();
       gui_update_menu();
       config_save();
       break;
@@ -5590,13 +6164,14 @@ static void on_command_inner(int id)
     case IDM_AUDIO_EQ:
       config.filter = (uint8)(config.filter == 2 ? 0 : 2);
       if (emu_running) audio_set_equalizer();
+      if (pico_active()) pico_settings_changed();                /* the library's low-pass filter goes off with it */
       gui_update_menu();
       config_save();
       break;
 
     case IDM_AUDIO_HQPSG:
       config.hq_psg = (uint8)(!config.hq_psg);
-      if (emu_running)
+      if (emu_running && !pico_active())
       {
         /* Direct psg_init() call, not sound_init() -- sound_init() always
            reinitializes the FM chip too as an inseparable part of the same
@@ -5642,7 +6217,10 @@ static BOOL CALLBACK repaint_menu_popup_cb(HWND w, LPARAM lp)
   char cls[16];
   (void)lp;
   if (IsWindowVisible(w) && GetClassNameA(w, cls, sizeof(cls)) && !lstrcmpA(cls, "#32768"))
+  {
+    theme_menu_frame(w);
     RedrawWindow(w, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
+  }
   return TRUE;
 }
 
@@ -5661,7 +6239,8 @@ static int menu_stays_open(int id)
          id == IDM_VIEW_COL_FAV || (id >= IDM_VIEW_COL_BASE && id < IDM_VIEW_COL_BASE + 2) || (id >= IDM_VIEW_COL_EXTRA && id < IDM_VIEW_COL_EXTRA + 4) ||
          id == IDM_VIEW_FAVONLY || id == IDM_VIEW_SORT_RECENT || id == IDM_VIEW_CLEANNAMES || id == IDM_VIEW_GRIDLINES ||
          id == IDM_VIEW_GROUPCONSOLE || id == IDM_VIEW_AZSTRIP || (id >= IDM_SET_COVERSIZE_BASE && id < IDM_SET_COVERSIZE_BASE + 7) ||
-         (id >= IDM_SET_TBSIZE_BASE && id < IDM_SET_TBSIZE_BASE + 3);
+         (id >= IDM_SET_TBSIZE_BASE && id < IDM_SET_TBSIZE_BASE + 3) ||
+         (id >= IDM_SET_STYLE_BASE && id < IDM_SET_STYLE_BASE + 2) || (id >= IDM_VIDEO_THEME_BASE && id < IDM_VIDEO_THEME_BASE + 3);
 }
 
 /* Switches the check (or the radio dot) of a View menu choice in the menu that is open, before its command has run. */
@@ -5669,7 +6248,8 @@ static void menu_flip_mark(int id)
 {
   static const struct { int base, n; } radios[] =
   {
-    { IDM_VIEW_LIST, 2 }, { IDM_SET_COVERSIZE_BASE, 7 }, { IDM_VIEW_DENSITY_BASE, 3 }, { IDM_SET_TBSIZE_BASE, 3 }
+    { IDM_VIEW_LIST, 2 }, { IDM_SET_COVERSIZE_BASE, 7 }, { IDM_VIEW_DENSITY_BASE, 3 }, { IDM_SET_TBSIZE_BASE, 3 },
+    { IDM_SET_STYLE_BASE, 2 }, { IDM_VIDEO_THEME_BASE, 3 }
   };
   int i;
 
@@ -5733,8 +6313,6 @@ static void handle_dropped_file(const char *path)
 
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
-  if (gui_msgbox_blocks(msg, wp, lp)) return 0;
-
   switch (msg)
   {
     case WM_COMMAND:
@@ -5796,6 +6374,26 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       return TRUE;
 
     case WM_TIMER:
+      if (wp == 9100)
+      {
+        /* A menu is open: the game keeps running behind it, unless "Pause When Inactive" is on (then it waits while a drop-down is
+           open; the bar alone, opened with Alt or F10, does not stop it). */
+        if (menu_loop_active && emu_running && !emu_paused &&
+            (!gui.pause_on_focus_loss || (menu_keyboard_mode && menu_popups_open == 0)))
+        {
+          int rep;
+          in_modal_loop = 0;
+          for (rep = 0; rep < 2; rep++) gui_run_step();      /* (a timer tick comes about every 16 ms: two steps keep a 60 Hz game at speed) */
+          in_modal_loop = 1;
+        }
+        return 0;
+      }
+      if (wp == 9004)
+      {
+        KillTimer(hwnd, 9004);
+        if (menu_rebuild_pending) { menu_rebuild_pending = 0; apply_menu_font(); }
+        return 0;
+      }
       if (wp == 9003)
       {
         KillTimer(hwnd, 9003);
@@ -5809,6 +6407,12 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         EnumThreadWindows(GetCurrentThreadId(), repaint_menu_popup_cb, 0);
         return 0;
       }
+      if (wp == 9101)
+      {
+        KillTimer(hwnd, 9101);
+        if (gui.fullscreen && GetMenu(hwnd)) theme_paint_menubar_selected(hwnd, fs_bar_sel);
+        return 0;
+      }
       if (wp == 9001)
       {
         KillTimer(hwnd, 9001);
@@ -5820,8 +6424,18 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_NCPAINT:
     case WM_NCACTIVATE:
     {
-      /* Fullscreen has no title bar: the system paints the menu bar light then, so it is painted dark here. */
-      LRESULT r = DefWindowProc(hwnd, msg, wp, lp);
+      /* Fullscreen has no title bar and no frame: the only thing in the non-client area is the menu bar, and the system
+         paints it light. Painting it dark afterwards left the light one on the screen for a moment (the white flash), so
+         in fullscreen the system is not asked to paint it at all (WM_NCACTIVATE with lParam -1 means "do not repaint"). */
+      LRESULT r;
+      if (gui.fullscreen && GetMenu(hwnd) && theme_is_dark())
+      {
+        if (msg == WM_NCACTIVATE) r = DefWindowProc(hwnd, msg, wp, (LPARAM)-1);
+        else r = 0;
+        theme_paint_menubar(hwnd, 1);
+        return r;
+      }
+      r = DefWindowProc(hwnd, msg, wp, lp);
       if (gui.fullscreen) theme_paint_menubar(hwnd, 1);
       else theme_paint_menu_line(hwnd, NULL);
       return r;
@@ -5829,29 +6443,24 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_NCMOUSEMOVE:
     case WM_NCMOUSELEAVE:
+    case 0x02A0:   /* WM_NCMOUSEHOVER */
     case WM_NCLBUTTONUP:
       if (gui.fullscreen && GetMenu(hwnd))
       {
-        /* The system lights the item under the mouse white when the bar has no title bar above it (fullscreen):
-           paint the bar dark again right after it has done so. Only when the item under the mouse changes (or the mouse
-           leaves, or clicks), not at every move, so the bar does not flicker. */
-        static int last_hot = -2;
-        int hot = -1;
-        LRESULT r = DefWindowProc(hwnd, msg, wp, lp);
-
-        if (msg == WM_NCMOUSEMOVE)
+        /* The system lights the item under the mouse white when the bar has no title bar above it (fullscreen). Letting it
+           do so and painting the bar dark again afterwards showed as a flash, so the pointer moving over the bar (or
+           leaving it) is not passed on at all: the bar is painted here, dark, with the title under the pointer lit. The
+           bar is also painted at every tick of the hover timer, which covers a pointer that left without a message. */
+        if (msg == WM_NCMOUSELEAVE || ((msg == WM_NCMOUSEMOVE || msg == 0x02A0) && wp == HTMENU))
         {
-          POINT pt;
-          pt.x = (int)(short)LOWORD(lp);
-          pt.y = (int)(short)HIWORD(lp);
-          hot = MenuItemFromPoint(hwnd, GetMenu(hwnd), pt);
+          theme_paint_menubar(hwnd, 0);
+          return 0;
         }
-        if (msg != WM_NCMOUSEMOVE || hot != last_hot)
         {
-          last_hot = (msg == WM_NCMOUSEMOVE) ? hot : -2;
+          LRESULT r = DefWindowProc(hwnd, msg, wp, lp);
           theme_paint_menubar(hwnd, 1);
+          return r;
         }
-        return r;
       }
       break;
 
@@ -5863,12 +6472,17 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       if (theme_draw_menu_item(lp)) return 0;
       break;
 
+    case WM_UNINITMENUPOPUP:
+      if (menu_popups_open > 0) menu_popups_open--;
+      break;
+
     case WM_INITMENUPOPUP:
     {
+      if (!HIWORD(lp)) menu_popups_open++;
       /* A menu opened right after another program's menu was dismissed (a second copy of this program, say)
          could stay unpainted (white) until the mouse moved over it: repaint the popup a moment after it shows. */
       SetTimer(hwnd, 9002, 30, NULL);
-      /* Refresh the slot timestamps each time the Save Slot menu opens. */
+      /* Refresh the slot timestamps each time the state slot menus opens. */
       int base = slot_menu_base((HMENU)wp);
       if (base)
       {
@@ -5880,11 +6494,13 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_MEASUREITEM:
+      if (theme_combo_measure((MEASUREITEMSTRUCT *)lp)) return TRUE;
       if (theme_measure_menu_ownerdraw(lp)) return TRUE;
       break;
 
     case WM_DRAWITEM:
       if (tb_draw((const DRAWITEMSTRUCT *)lp)) return TRUE;
+      if (theme_combo_draw((const DRAWITEMSTRUCT *)lp)) return TRUE;
       if (theme_draw_menu_ownerdraw(lp)) return TRUE;
       break;
 
@@ -5984,7 +6600,6 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_MOVE:
       capture_window_geometry();
-      gui_msgbox_follow();
       return 0;
 
     case 0x02E0:   /* WM_DPICHANGED, not in every mingw headers version */
@@ -5993,6 +6608,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
          resize ourselves when the window moves to a different-DPI display. */
       RECT *suggested = (RECT *)lp;
 
+      dpi_changed(hwnd, LOWORD(wp));
       if (suggested && !gui.fullscreen)
       {
         SetWindowPos(hwnd, NULL,
@@ -6023,14 +6639,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       /* Clicking into the Cheat Search window is not leaving the program: the game keeps running. */
       if (!active && (HWND)lp != NULL && (HWND)lp == cheat_search_hwnd()) { next_frame_time = 0.0; return 0; }
 
-      /* Keep Running While Windows Are Open wins over Pause When Inactive: going to one of the program's own windows
-         (Settings, Controls ...) is not leaving the program. */
-      if (!active && gui.run_in_dialogs && (HWND)lp != NULL)
-      {
-        DWORD pid = 0;
-        GetWindowThreadProcessId((HWND)lp, &pid);
-        if (pid == GetCurrentProcessId()) { next_frame_time = 0.0; return 0; }
-      }
+      if (!active && menu_keyboard_mode) { next_frame_time = 0.0; return 0; }          /* (the menu bar taking the focus) */
 
       if (!active && gui.pause_on_focus_loss && emu_running && !emu_paused && !netplay_active())
       {
@@ -6053,12 +6662,30 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       return 0;
     }
 
+    case WM_APP_FSBAR:
+      if (gui.fullscreen && GetMenu(hwnd)) theme_paint_menubar_selected(hwnd, fs_bar_sel);
+      return 0;
+
+    case WM_APP_PICOSCAN:
+      browser_pico_done(lp);
+      return 0;
+
     case WM_APP_PACE:
       InterlockedExchange(&pace_pending, 0);
       if (pace_depth > 0) gui_run_step();      /* a window of this program is open: the game goes on behind it */
       return 0;
 
     case WM_MENUSELECT:
+      if (gui.fullscreen && GetMenu(hwnd))
+      {
+        /* Fullscreen has no title bar, so the system paints the title of the menu that opens (and, as the pointer moves along
+           the bar, the next one) white. Which title is open is known here: paint the bar dark again, with that one lit, right
+           after the system has painted it (a posted message and a short timer, the system paints a moment after this one). */
+        if ((HIWORD(wp) & MF_POPUP) && (HMENU)lp == GetMenu(hwnd)) fs_bar_sel = (int)LOWORD(wp);
+        else if (HIWORD(wp) == 0xFFFF && !lp) fs_bar_sel = -1;
+        PostMessage(hwnd, WM_APP_FSBAR, 0, 0);
+        SetTimer(hwnd, 9101, 25, NULL);
+      }
       /* Which command is highlighted in the open menu (-1: none, a submenu title or a separator). */
       if (HIWORD(wp) == 0xFFFF && !lp) menu_sel_id = -1;
       else if (HIWORD(wp) & (MF_POPUP | MF_SEPARATOR | MF_GRAYED | MF_DISABLED)) menu_sel_id = -1;
@@ -6069,6 +6696,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_ENTERSIZEMOVE:
       in_modal_loop = 1;
       waveout_flush();
+      if (msg == WM_ENTERMENULOOP) { menu_popups_open = 0; menu_loop_active = 1; SetTimer(hwnd, 9100, 8, NULL); }
       if (msg == WM_ENTERMENULOOP && !menu_hook)
       {
         menu_sel_id = -1;
@@ -6078,7 +6706,21 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_EXITMENULOOP:
     case WM_EXITSIZEMOVE:
+      if (msg == WM_EXITMENULOOP) { fs_bar_sel = -1; if (gui.fullscreen && GetMenu(hwnd)) PostMessage(hwnd, WM_APP_FSBAR, 0, 0); }
       if (msg == WM_EXITMENULOOP && menu_hook) { UnhookWindowsHookEx(menu_hook); menu_hook = NULL; menu_sel_id = -1; }
+      if (msg == WM_EXITMENULOOP)
+      {
+        menu_keyboard_mode = 0;
+        menu_popups_open = 0;
+        menu_loop_active = 0;
+        KillTimer(hwnd, 9100);
+        if (menu_rebuild_pending) SetTimer(hwnd, 9004, 1, NULL);        /* (not inside the menu's own shutdown) */
+        if (auto_paused_by_focus && GetForegroundWindow() == hwnd)       /* a pause the focus change made while the menu was open ends with it */
+        {
+          auto_paused_by_focus = 0;
+          if (emu_running && emu_paused) { emu_paused = 0; gui_update_menu(); }
+        }
+      }
       in_modal_loop = 0;
       next_frame_time = 0.0;
       return 0;
@@ -6134,16 +6776,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (emu_running && !emu_paused) return 0;
       }
 
-      /* F10's default behavior is to activate the menu bar the same way
-         Alt does -- both arrive here as SC_KEYMENU, distinguished by lp
-         being 0 for F10 specifically (not a character key) versus the
-         actual letter code for an Alt+letter mnemonic, which must still
-         work normally. Left alone, F10 briefly deactivates the window
-         while entering that menu mode, which triggers "Pause emulation
-         when in background" as an unintended side effect -- there was
-         never an actual F10-to-pause binding, just this indirect path
-         through a feature that has nothing to do with F10 itself. */
-      if ((wp & 0xFFF0) == SC_KEYMENU && lp == 0) return 0;
+      /* F10 and Alt open the menu bar for the keyboard (SC_KEYMENU). That briefly takes the focus from the game window, which
+         would trigger "Pause emulation when in background" and leave the game paused; while the bar is open the game waits
+         anyway (the menu loop), so the focus change is not counted as leaving the program, and when the bar closes the game
+         carries on. */
+      if ((wp & 0xFFF0) == SC_KEYMENU && GetMenu(hwnd)) menu_keyboard_mode = 1;
 
       break;
 
@@ -6225,8 +6862,9 @@ static int create_main_window(void)
     if (mw > rc.right - rc.left) rc.right = rc.left + mw;
   }
 
-  if (gui.large_ui) theme_ownerdraw_menu(g_menu);
-  else theme_menu_icons(g_menu);
+  theme_set_menu_bar(g_menu);
+  if (theme_menus_owner()) theme_ownerdraw_menu(g_menu);
+  theme_menu_icons(g_menu);                 /* the pictures (in the Large interface the owner-drawn items paint them themselves) */
   hotkeys_apply_menu();   /* the labels show the shortcuts as they are set now */
 
   /*
@@ -6265,7 +6903,6 @@ static int create_main_window(void)
                              WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                              0, 0, 0, 0, g_hwnd, NULL, g_inst, NULL);
   SendMessage(g_status, WM_SETFONT, (WPARAM)gui_get_ui_font(), TRUE);
-  if (gui.large_ui) SendMessage(g_status, SB_SETMINHEIGHT, 30, 0);
   if (gui.hide_statusbar) ShowWindow(g_status, SW_HIDE);
 
   browser_panel_create(g_hwnd);
@@ -6283,7 +6920,7 @@ static int create_main_window(void)
        client area can be sized to give exactly the requested scale. */
     gui_resize_to_scale(gui.scale);
 
-    /* A big scale (3x to start with) can be taller than a small screen: take it down until the
+    /* A big scale (3x by default) can be taller than a small screen: take it down until the
        window fits the work area. */
     {
       MONITORINFO fit;
@@ -6436,8 +7073,13 @@ static LONG WINAPI crash_logger(EXCEPTION_POINTERS *ep)
   n = GetModuleFileNameA(NULL, dir, sizeof(dir));
   if (n == 0 || n >= sizeof(dir)) lstrcpyA(dir, ".\\");
   else if ((slash = strrchr(dir, '\\')) != NULL) slash[1] = '\0';
-  wsprintfA(txt, "%sgenesis-plus-ex-crash.txt", dir);
-  wsprintfA(dmp, "%sgenesis-plus-ex-crash.dmp", dir);
+  {
+    char logs[MAX_PATH + 8];
+    wsprintfA(logs, "%sLogs", dir);
+    CreateDirectoryA(logs, NULL);                                             /* the "Logs" folder next to the program */
+  }
+  wsprintfA(txt, "%sLogs\\genesis-plus-ex-crash.txt", dir);
+  wsprintfA(dmp, "%sLogs\\genesis-plus-ex-crash.dmp", dir);
 
   if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)a, &hm) && hm)
     GetModuleFileNameA(hm, mod, sizeof(mod));
@@ -6566,6 +7208,8 @@ static int hand_over_to_running_copy(void)
   return 0;          /* no window turned up: carry on as a copy of our own */
 }
 
+static int folder_readonly;   /* the program's own folder cannot be written to (settings, saves and covers would be lost) */
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 {
   INITCOMMONCONTROLSEX icc;
@@ -6576,6 +7220,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
   (void)cmdline;
 
   g_inst = inst;
+  dpi_init();
 
   QueryPerformanceFrequency(&perf_freq);
   timing_boost();
@@ -6588,24 +7233,44 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
   error_init();
   config_load();
   if (hand_over_to_running_copy()) return 0;
+  {
+    HANDLE t = CreateFileA(osd_path("gpex-write-test.tmp"), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+    if (t == INVALID_HANDLE_VALUE) folder_readonly = 1;
+    else CloseHandle(t);
+  }
   SetUnhandledExceptionFilter(crash_logger);
   gui_log("Genesis Plus EX started (%s)", sizeof(void *) == 8 ? "64-bit" : "32-bit");
+  log_system_info();
   history_load();
   netplay_init(&np_iface);
   emu_apply_nuked_type();
   gui.fullscreen = 0;   /* never restored across runs -- see the note near WinMain's end */
 
-  ensure_dir("saves");
-  ensure_dir("states");
-  ensure_dir("screenshots");
-  ensure_dir("bios");
-  ensure_dir("cheats");
-  ensure_dir("covers");
-  ensure_dir("recordings");
-  ensure_dir("bezels");
+  ensure_dir("Saves");
+  ensure_dir("States");
+  ensure_dir("Screenshots");
+  ensure_dir("BIOS");
+  ensure_dir("Cheats");
+  ensure_dir("Covers");
+  ensure_dir("Recordings");
+  ensure_dir("Bezels");
+  ensure_dir("Plugins");
 #ifdef _WIN64
-  ensure_dir("shaders");
+  ensure_dir("Shaders");
 #endif
+  {
+    /* The console folders of the cheats and the covers (files you put there yourself), made at once (not when a game of that console is first opened). */
+    static const char *const per_console[] = { "Cheats", "Covers" };
+    size_t k, c;
+
+    for (k = 0; k < sizeof(per_console) / sizeof(per_console[0]); k++)
+      for (c = 0; c < sizeof(console_folders) / sizeof(console_folders[0]) - 1; c++)       /* (not "Other": made when a game that is no known console needs it) */
+      {
+        char dir[GUI_PATH_LEN];
+        wsprintfA(dir, "%s\\%s", osd_path(per_console[k]), console_folders[c]);
+        CreateDirectoryA(dir, NULL);
+      }
+  }
 
   /* Before create_main_window(), not after -- that call loads and
      attaches the menu resource, and the app-wide dark mode preference
@@ -6662,6 +7327,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
   ShowWindow(g_hwnd, gui.window_maximized ? SW_MAXIMIZE : show);
   UpdateWindow(g_hwnd);
   apply_always_on_top();
+  if (folder_readonly)
+  {
+    char msg[GUI_PATH_LEN + 300];
+    wsprintfA(msg,
+      "The program cannot write to its own folder:\n%s\n\nYour settings, hotkeys, saves and covers would not be kept. "
+      "Move the program to a folder you can write to, such as Documents or the Desktop (not Program Files), and start it from there.",
+      osd_path(""));
+    MessageBoxA(g_hwnd, msg, "Folder Not Writable", MB_OK | MB_ICONWARNING);
+  }
 
   /* Confirmed by direct testing: any real resize (either direction)
      fixes a stale-paint artifact that's otherwise present from first
@@ -6670,7 +7344,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
      to happen to resize the window themselves. */
   SendMessage(g_hwnd, WM_SIZE, 0, 0);
 
-  /* Confirmed by direct testing (Larger UI + a dark theme, a window narrow
+  /* Confirmed by direct testing (the Large interface + a dark theme, a window narrow
      enough that the owner-drawn menu bar wraps to more than one row): some
      of the bar's own titles -- not popup items, the top-level titles
      themselves -- come up blank on the very first paint and stay that way

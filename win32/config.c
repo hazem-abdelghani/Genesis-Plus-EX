@@ -13,6 +13,9 @@
 
 #include "shared.h"
 #include "gui.h"
+#include "netplay.h"
+
+uint8 gui_user_ports[2] = { SYSTEM_GAMEPAD, SYSTEM_GAMEPAD };       /* the devices of the two ports as the user chose them (input.system may differ for the running game) */
 
 t_config     config;
 t_gui_config gui;
@@ -157,10 +160,14 @@ void set_config_defaults(void)
   gui.brighten            = 0;
   gui.background_input    = 0;
   gui.frameskip           = 0;
-  gui.shot_mode           = 2;
+  gui.shot_mode           = 1;
+  gui.shot_size           = 0;
+  gui.rec_scale           = 1;   /* 2x */
+  gui.rec_quality         = 0;
+  gui.rec_tv              = 0;
   gui.sms_show_border     = 0;
   gui.nuked_ym2612        = 1;   /* as a YM2612 */
-  gui.np_port             = 55455;
+  gui.np_port             = NP_DEFAULT_PORT;
   gui.np_delay            = 2;
   gui.np_addr[0]          = '\0';
   gui.filter_console[0] = gui.filter_genre[0] = gui.filter_region[0] = '\0';
@@ -169,18 +176,19 @@ void set_config_defaults(void)
   gui.browser_col_extra   = 0;
   gui.clean_names         = 1;
   gui.browser_gridlines   = 0;
-  gui.turbo_rate          = 2;   /* Normal: 15 presses a second */
+  gui.turbo_rate          = 2;   /* Medium: 15 presses a second */
   gui.confirm_exit        = 1;
   gui.single_instance     = 0;
   gui.accent              = 0;
   gui.crash_report        = 0;
   gui.cover_card          = 0;
+  gui.color_icons         = 0;
   gui.cover_cache         = 1;
   gui.toolbar_size        = 1;
   gui.toolbar_labels      = 1;
   gui.keep_awake          = 1;
   gui.cursor_idle = 2; gui.frame_cap = 0; gui.bass = 0; gui.log_on = 0; gui.pause_pad = 0; gui.keep_aspect = 1;
-  gui.normalize = 0; gui.autosave_min = 0; gui.skip_len = 0; gui.np_upnp = 0; gui.overdrive = 0;
+  gui.normalize = 0; gui.autosave_min = 0; gui.skip_len = 0; gui.rewind_speed = 1; gui.np_upnp = 0; gui.overdrive = 0;
   gui.osd_opts = 1; gui.osd_pos = 2; gui.osd_time = 2; gui.osd_size = 1; gui.fps_pos = 0; gui.osd_color = 0; gui.osd_lines = 2;
   gui.mute_unfocused      = 0;
   gui.row_density         = 1;
@@ -229,6 +237,8 @@ void set_config_defaults(void)
   }
   gui.mute_fm             = 0;
   gui.mute_psg            = 0;
+  gui.mute_pwm            = 0;
+  gui.pwm_level           = 100;
   gui.autosave            = 1;
   gui.resume_choice       = 0;
   gui.osd                 = 1;
@@ -483,6 +493,10 @@ void config_load(void)
   gui.background_input = ini_get("input", "background_input", gui.background_input) ? 1 : 0;
   gui.frameskip        = clampi(ini_get("video", "frameskip", gui.frameskip), 0, 5);
   gui.shot_mode        = clampi(ini_get("video", "screenshot_output", gui.shot_mode), 0, 2);
+  gui.shot_size        = clampi(ini_get("video", "screenshot_size", gui.shot_size), 0, 3);
+  gui.rec_scale        = clampi(ini_get("video", "recording_size", gui.rec_scale), 0, 3);
+  gui.rec_quality      = clampi(ini_get("video", "recording_quality", gui.rec_quality), 0, 4);
+  gui.rec_tv           = clampi(ini_get("video", "recording_tv_shape", gui.rec_tv), 0, 2);
   /* Was stored the other way round ("sms_hide_side_border") until the option
      was inverted; carry an old "hide" choice over. */
   gui.sms_show_border  = ini_get("video", "sms_show_side_border",
@@ -529,13 +543,13 @@ void config_load(void)
     ini_get_str("input", "combos", gui.combo_text, sizeof(gui.combo_text));
     gui.group_console  = ini_get("general", "group_by_console", 0) ? 1 : 0;
     gui.az_strip       = ini_get("general", "az_strip", gui.az_strip) ? 1 : 0;
-    gui.run_in_dialogs = ini_get("general", "run_in_dialogs", 0) ? 1 : 0;
     gui.padhk_hold_on  = ini_get("input", "padhk_hold_on", 0) ? 1 : 0;
     gui.padhk_hold[0]  = ini_get("input", "padhk_hold_button", 0);
     gui.padhk_hold[1]  = ini_get("input", "padhk_hold_button_di", 0);
     gui.cover_shape    = clampi(ini_get("general", "cover_shape", 0), 0, 2);
     gui.cover_round    = ini_get("general", "cover_round", 0) ? 1 : 0;
     gui.cover_card     = ini_get("general", "cover_card", 0) ? 1 : 0;
+    gui.color_icons    = ini_get("general", "color_icons", 0) ? 1 : 0;
     gui.cover_caption  = clampi(ini_get("general", "cover_caption", 0), 0, 1);
     gui.rom_extra_n    = clampi(ini_get("folders", "count", 0), 0, 6);
     for (k = 0; k < gui.rom_extra_n; k++)
@@ -638,8 +652,8 @@ void config_load(void)
     {
       for (k = 0; k < hotkeys_count(); k++)
       {
-        if (!lstrcmpA(hotkey_name(k), "Fast Forward (hold)")) gui.hotkey[k] = ini_get("input", "key_fast_forward", hotkey_default(k));
-        if (!lstrcmpA(hotkey_name(k), "Rewind (hold)"))       gui.hotkey[k] = ini_get("input", "key_rewind", hotkey_default(k));
+        if (!lstrcmpA(hotkey_name(k), "Fast Forward (Hold)")) gui.hotkey[k] = ini_get("input", "key_fast_forward", hotkey_default(k));
+        if (!lstrcmpA(hotkey_name(k), "Rewind (Hold)"))       gui.hotkey[k] = ini_get("input", "key_rewind", hotkey_default(k));
       }
     }
     /* Record Animated GIF got Ctrl+F12 after it was saved with no key. */
@@ -656,7 +670,7 @@ void config_load(void)
     /* Newer default keys: applied once to settings saved with the older ones. */
     if (ini_get("hotkeys", "rev", 0) < 4)
     {
-      static const char *const moved[] = { "Reset", "Hard Reset", "ROMs Directory", "Mute FM Sound", "Mute PSG Sound",
+      static const char *const moved[] = { "Reset", "Hard Reset", "ROM Directory", "Mute FM Sound", "Mute PSG Sound",
                                            "Show / Hide the Search Bar", "Undo Load State", "Undo Save State" };
       int m, j;
       for (m = 0; m < (int)(sizeof(moved) / sizeof(moved[0])); m++)
@@ -682,6 +696,8 @@ void config_load(void)
   }
   gui.mute_fm  = ini_get("audio", "mute_fm", gui.mute_fm) ? 1 : 0;
   gui.mute_psg = ini_get("audio", "mute_psg", gui.mute_psg) ? 1 : 0;
+  gui.mute_pwm = ini_get("audio", "mute_pwm", gui.mute_pwm) ? 1 : 0;
+  gui.pwm_level = clampi(ini_get("audio", "pwm_level", gui.pwm_level), 0, 200);
   gui.autosave = ini_get("general", "autosave", gui.autosave) ? 1 : 0;
   gui.resume_choice = ini_get("general", "resume_choice", gui.resume_choice);
   if (gui.resume_choice < 0 || gui.resume_choice > 2) gui.resume_choice = 0;
@@ -697,8 +713,13 @@ void config_load(void)
      rev 4 (which includes everyone the rev-2 check ever touched) moves to
      single field once; anything chosen afterwards is kept regardless. */
   if (ini_get("general", "defaults_rev", 0) < 4) config.render = 0;
+  /* The default video recording size is 2x (rev 5): settings saved before hold the old default whether or not it was a choice, so a 1x
+     moves across once; anything chosen afterwards is kept. */
+  if (ini_get("general", "defaults_rev", 0) < 5 && gui.rec_scale == 0) gui.rec_scale = 1;
   config.gg_extra= (uint8)(ini_get("video", "gg_extended_screen", config.gg_extra) ? 1 : 0);
   config.lcd     = (uint8)clampi(ini_get("video", "lcd_ghosting", config.lcd), 0, 255);
+  if (config.lcd == 96) config.lcd = 128;          /* the old Light and Heavy strengths (96, 224) became 128 and 192 */
+  else if (config.lcd == 224) config.lcd = 192;
 
   /* --- window geometry --- */
   gui.window_x         = ini_get("window", "x", gui.window_x);
@@ -791,7 +812,7 @@ void config_load(void)
   config.invert_mouse  = (uint8)(ini_get("input", "invert_mouse", config.invert_mouse) ? 1 : 0);
   config.gun_cursor[0] = config.gun_cursor[1] = (uint8)(ini_get("input", "gun_cursor", config.gun_cursor[0]) ? 1 : 0);
 
-  /* --- behaviour --- */
+  /* --- behavior --- */
   gui.pause_on_focus_loss = ini_get("general", "pause_on_focus_loss", gui.pause_on_focus_loss) ? 1 : 0;
   gui.always_on_top       = ini_get("general", "always_on_top", gui.always_on_top) ? 1 : 0;
   gui.rewind              = ini_get("general", "rewind_enabled", gui.rewind) ? 1 : 0;
@@ -810,12 +831,26 @@ void config_load(void)
   /* --- ports --- */
   input.system[0] = (uint8)clampi(ini_get("input", "port_a", input.system[0]), 0, 14);
   input.system[1] = (uint8)clampi(ini_get("input", "port_b", input.system[1]), 0, 14);
+  gui_user_ports[0] = input.system[0];
+  gui_user_ports[1] = input.system[1];
 
-  gui.turbo_rate       = clampi(ini_get("input", "turbo_rate", gui.turbo_rate), 0, 3);
+  {
+    /* Five speeds now (7.5, 10, 15, 22.5 and 30 presses a second): "turbo_rate" of older settings had four (7.5, 10, 15, 30), so its 3 is the new 4. */
+    int old = ini_get("input", "turbo_rate", -1);
+    gui.turbo_rate     = clampi(ini_get("input", "turbo_speed", old < 0 ? gui.turbo_rate : (old == 3 ? 4 : old)), 0, 4);
+  }
   gui.confirm_exit     = ini_get("general", "confirm_exit", gui.confirm_exit) ? 1 : 0;
   gui.keep_awake       = ini_get("general", "keep_awake", gui.keep_awake) ? 1 : 0;
   gui.single_instance  = ini_get("general", "single_instance", gui.single_instance) ? 1 : 0;
-  gui.accent           = clampi(ini_get("general", "accent", 0), 0, 8);
+  gui.accent           = clampi(ini_get("general", "accent", 0), 0, GUI_ACCENT_HIDDEN);
+  {
+    /* The list used to be in another order (and the hidden color was number 14): the number saved then is turned into today's. */
+    static const unsigned char by_name[19] = { 0, 16, 5, 13, 12, 14, 11, 4, 6, 15, 7, 3, 8, 1, 18, 2, 17, 9, 10 };
+    int rev = ini_get("general", "accent_rev", 0);
+
+    if (rev < 2 && gui.accent == 14) gui.accent = GUI_ACCENT_HIDDEN;
+    if (rev < 3 && gui.accent >= 0 && gui.accent < 19) gui.accent = by_name[gui.accent];
+  }
   gui.crash_report     = ini_get("general", "crash_report", gui.crash_report) ? 1 : 0;
   gui.cover_cache      = ini_get("general", "cover_cache", gui.cover_cache) ? 1 : 0;
   gui.toolbar_size     = clampi(ini_get("general", "toolbar_size", gui.toolbar_size), 0, 2);
@@ -828,6 +863,7 @@ void config_load(void)
   gui.normalize        = ini_get("audio", "normalize", gui.normalize) ? 1 : 0;
   gui.autosave_min     = clampi(ini_get("general", "state_backup", gui.autosave_min), 0, 4);
   gui.skip_len         = clampi(ini_get("general", "skip_intro_choice", gui.skip_len), 0, 6);
+  gui.rewind_speed     = clampi(ini_get("general", "rewind_speed", gui.rewind_speed), 0, 3);
   gui.np_upnp          = ini_get("netplay", "upnp", gui.np_upnp) ? 1 : 0;
   gui.overdrive        = ini_get("audio", "overdrive", gui.overdrive) ? 1 : 0;
   gui.osd_opts         = ini_get("osd", "option_messages", gui.osd_opts) ? 1 : 0;
@@ -902,7 +938,7 @@ void config_load(void)
 
     /* Player 1's keyboard defaults changed (A S D / Q W E  ->  Z X C / A S D).
        A saved config that still holds exactly the old defaults was never
-       customised, so move it to the new layout; anything else is left alone. */
+       customized, so move it to the new layout; anything else is left alone. */
     if (player == 0)
     {
       t_pad_map *p = &gui.pad[0];
@@ -959,6 +995,10 @@ void config_save(void)
   ini_put("input", "background_input", gui.background_input);
   ini_put("video", "frameskip", gui.frameskip);
   ini_put("video", "screenshot_output", gui.shot_mode);
+  ini_put("video", "screenshot_size", gui.shot_size);
+  ini_put("video", "recording_size", gui.rec_scale);
+  ini_put("video", "recording_quality", gui.rec_quality);
+  ini_put("video", "recording_tv_shape", gui.rec_tv);
   ini_put("video", "sms_show_side_border", gui.sms_show_border);
   ini_put("netplay", "port", gui.np_port);
   ini_put("netplay", "delay", gui.np_delay);
@@ -1010,7 +1050,6 @@ void config_save(void)
       lstrcatA(key, "_di");
       ini_put("input", key, gui.padhk_di[k]);
     }
-    ini_put("input", "padhk_rev", 1);
   }
   {
     int k;
@@ -1024,6 +1063,8 @@ void config_save(void)
   }
   ini_put("audio", "mute_fm", gui.mute_fm);
   ini_put("audio", "mute_psg", gui.mute_psg);
+  ini_put("audio", "mute_pwm", gui.mute_pwm);
+  ini_put("audio", "pwm_level", gui.pwm_level);
   ini_put("general", "autosave", gui.autosave);
   ini_put("general", "resume_choice", gui.resume_choice);
   ini_put("general", "osd", gui.osd);
@@ -1032,7 +1073,7 @@ void config_save(void)
   ini_put("video", "ntsc_filter", config.ntsc);
   ini_put("video", "overscan", config.overscan);
   ini_put("video", "interlaced_double_height", config.render);
-  ini_put("general", "defaults_rev", 4);
+  ini_put("general", "defaults_rev", 5);
   ini_put("video", "gg_extended_screen", config.gg_extra);
   ini_put("video", "lcd_ghosting", config.lcd);
 
@@ -1088,13 +1129,14 @@ void config_save(void)
   ini_put_str("general", "rom_dir", gui.rom_dir);
   ini_put_str("general", "shader_preset_path", gui.shader_preset_path);
 
-  ini_put("input", "port_a", input.system[0]);
-  ini_put("input", "port_b", input.system[1]);
-  ini_put("input", "turbo_rate", gui.turbo_rate);
+  ini_put("input", "port_a", gui_user_ports[0]);           /* what was chosen, not what a game put there for itself */
+  ini_put("input", "port_b", gui_user_ports[1]);
+  ini_put("input", "turbo_speed", gui.turbo_rate);
   ini_put("general", "confirm_exit", gui.confirm_exit);
   ini_put("general", "keep_awake", gui.keep_awake);
   ini_put("general", "single_instance", gui.single_instance);
   ini_put("general", "accent", gui.accent);
+  ini_put("general", "accent_rev", 3);
   ini_put("general", "crash_report", gui.crash_report);
   ini_put("general", "cover_cache", gui.cover_cache);
   ini_put("general", "toolbar_size", gui.toolbar_size);
@@ -1107,6 +1149,7 @@ void config_save(void)
   ini_put("audio", "normalize", gui.normalize);
   ini_put("general", "state_backup", gui.autosave_min);
   ini_put("general", "skip_intro_choice", gui.skip_len);
+  ini_put("general", "rewind_speed", gui.rewind_speed);
   ini_put("netplay", "upnp", gui.np_upnp);
   ini_put("audio", "overdrive", gui.overdrive);
   ini_put("osd", "option_messages", gui.osd_opts);
@@ -1144,13 +1187,13 @@ void config_save(void)
     ini_put_str("input", "combos", gui.combo_text);
     ini_put("general", "group_by_console", gui.group_console);
     ini_put("general", "az_strip", gui.az_strip);
-    ini_put("general", "run_in_dialogs", gui.run_in_dialogs);
     ini_put("input", "padhk_hold_on", gui.padhk_hold_on);
     ini_put("input", "padhk_hold_button", gui.padhk_hold[0]);
     ini_put("input", "padhk_hold_button_di", gui.padhk_hold[1]);
     ini_put("general", "cover_shape", gui.cover_shape);
     ini_put("general", "cover_round", gui.cover_round);
     ini_put("general", "cover_card", gui.cover_card);
+    ini_put("general", "color_icons", gui.color_icons);
     ini_put("general", "cover_caption", gui.cover_caption);
     ini_put("folders", "count", gui.rom_extra_n);
     for (k = 0; k < gui.rom_extra_n; k++)

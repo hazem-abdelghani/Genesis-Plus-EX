@@ -4,9 +4,9 @@
  *  filters.h -- built-in ("native") render filters.
  *
  *  Every filter takes an RGB565 frame and writes an RGB565 frame that is
- *  exactly `scale` times larger in both directions. Nothing in here touches
- *  Windows, so the whole module builds and tests on any platform, and it is
- *  identical for 32-bit and 64-bit builds.
+ *  exactly `scale` times larger in both directions. The module builds and tests
+ *  on any platform and is identical for 32-bit and 64-bit builds; the only use of
+ *  Windows is the threads that share the work of CRT Geom (filters.c, #ifdef _WIN32).
  ****************************************************************************/
 
 #ifndef _FILTERS_H_
@@ -38,7 +38,6 @@ typedef void (*filter_fn)(const uint16_t *src, int src_pitch, int w, int h,
                           uint16_t *dst, int dst_pitch);
 
 #define FILTER_NEEDS_XBRZ 1   /* holds xBRZ's 64 MB table while active */
-#define FILTER_SEP_BEFORE 2   /* menu: draw a separator above this entry */
 
 typedef struct
 {
@@ -46,6 +45,7 @@ typedef struct
   int         scale;  /* output size / input size, 2..FILTER_MAX_SCALE */
   filter_fn   run;
   int         flags;  /* FILTER_* */
+  const char *group;  /* the sub-menu it is listed in (Video > Render Filter); NULL: directly in the menu */
 } filter_def_t;
 
 int                 filter_count(void);

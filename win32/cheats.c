@@ -35,6 +35,8 @@
 #include "gui.h"
 #include "theme.h"
 #include "resource.h"
+#include "picocore.h"
+#include "netplay.h"
 
 #define CHEAT_CODE_LEN  24
 #define CHEAT_DESC_LEN  128
@@ -45,10 +47,12 @@ typedef struct
   char   desc[CHEAT_DESC_LEN];
   int    enabled;
   int    valid;        /* the code decoded against the current system */
+  int    num;          /* the number shown in the list; it stays with the cheat when the list is sorted */
 
   uint32 address;
   uint16 data;
   uint16 old;          /* 16-bit: original word. 8-bit: reference byte (0 = no check) */
+  int    applied;      /* 16-bit: the patch is in the ROM now (so it is put back when removed) */
   uint8  orig;         /* 8-bit: the byte that was at *prev before it was patched */
   uint8 *prev;         /* patched location in the banked 8-bit ROM window */
 } t_cheat;
@@ -60,6 +64,14 @@ static int     cheat_count;
 static unsigned short cheat_index[CHEAT_MAX];
 static int   ram_patches;
 static int   rom_patches;
+
+/* Frames left in which ROM patches are held back after a game starts or is reset: a game checks its ROM when it starts and
+   shows a red screen when a code has changed it. The codes go in after BOOT_HOLD_MIN frames once a button is pressed, or
+   after BOOT_HOLD_MAX frames if none is (in netplay always after BOOT_HOLD_MIN: both PCs must patch on the same frame).
+   RAM codes are not held. */
+#define BOOT_HOLD_MIN 120                            /* two seconds */
+#define BOOT_HOLD_MAX 1200                           /* twenty seconds */
+static int   boot_hold;
 
 static int   patches_live;   /* patches are currently written into memory */
 
@@ -108,7 +120,39 @@ static uint32 decode_cheat_to(const char *input, uint32 *out_address, uint16 *ou
   {
     /* ---- 16-bit systems ---- */
 
+    /* 32X (a 32X game only): a byte or a word in the SH-2 processors' SDRAM, 06aaaaaa:dd or 06aaaaaa:dddd (the cache-through
+       copy, 26aaaaaa, is the same memory) */
+    if (strlen(string) >= 11 && string[8] == ':')
+    {
+      const char *q = string;
+      uint32 a32 = 0;
+      int nd, dl;
+
+      for (i = 0; i < 8; i++)
+      {
+        p = valid_char(arvalidchars, *q++);
+        if (!p) { a32 = 0xFFFFFFFF; break; }
+        a32 |= (uint32)((int)(p - arvalidchars) & 0xF) << ((7 - i) * 4);
+      }
+      if (a32 != 0xFFFFFFFF)
+      {
+        q++;
+        for (nd = 0; q[nd] && nd < 4; nd++) ;
+        dl = nd >= 4 ? 4 : (nd >= 2 ? 2 : 0);
+        if (!pico_active() || ((a32 >> 24) != 0x06 && (a32 >> 24) != 0x26) || (a32 & 0x00FC0000) || !dl) return 0;
+        for (i = 0; i < dl; i++)
+        {
+          p = valid_char(arvalidchars, *q++);
+          if (!p) return 0;
+          data |= (uint16)(((int)(p - arvalidchars) & 0xF) << ((dl - 1 - i) * 4));
+        }
+        if (*q) return 0;
+        address = 0x06000000 | (a32 & 0x3FFFF);
+        len = 9 + (uint32)dl;
+      }
+    }
     /* Game Genie: ABCD-EFGH */
+    else
     if ((strlen(string) >= 9) && (string[4] == '-'))
     {
       for (i = 0; i < 8; i++)
@@ -152,6 +196,28 @@ static uint32 decode_cheat_to(const char *input, uint32 *out_address, uint16 *ou
         data |= (uint16)(n << ((3 - i) * 4));
       }
       len = 11;
+    }
+    /* Work RAM byte: aaaaaa:dd (RAM only: a byte in the ROM cannot be patched, the patch is a whole word) */
+    else if ((strlen(string) >= 9) && (string[6] == ':'))
+    {
+      for (i = 0; i < 6; i++)
+      {
+        p = valid_char(arvalidchars, *string++);
+        if (!p) return 0;
+        n = (int)(p - arvalidchars) & 0xF;
+        address |= (uint32)n << ((5 - i) * 4);
+      }
+
+      string++;
+      for (i = 0; i < 2; i++)
+      {
+        p = valid_char(arvalidchars, *string++);
+        if (!p) return 0;
+        n = (int)(p - arvalidchars) & 0xF;
+        data |= (uint16)(n << ((1 - i) * 4));
+      }
+      if (address < 0xFF0000 || *string) return 0;
+      len = 9;
     }
   }
   else
@@ -331,6 +397,37 @@ int cheats_wordram_1m(void)
   return (scd.regs[0x03 >> 1].byte.l & 0x04) != 0;
 }
 
+/* While a 32X game runs, PicoDrive (not the Genesis Plus GX core) holds the memory the game plays in: the cheats then
+   work on the library's ROM and work RAM. The system is a Mega Drive as far as the codes go. */
+static uint8 *cheat_rom(uint32 *size)
+{
+  if (pico_active())
+  {
+    unsigned n = 0;
+    uint8 *p = pico_memory(0, &n);
+    *size = p ? n : 0;
+    return p;
+  }
+  *size = cart.romsize;
+  return cart.rom;
+}
+
+static uint8 *cheat_wram(void)
+{
+  if (pico_active()) return pico_memory(1, NULL);
+  return work_ram;
+}
+
+static int cheat_md(void)
+{
+  return pico_active() || (system_hw & SYSTEM_PBC) == SYSTEM_MD;
+}
+
+static int cheat_mcd(void)
+{
+  return !pico_active() && system_hw == SYSTEM_MCD && !scd.cartridge.boot;
+}
+
 /****************************************************************************
  * Applying and removing patches
  ****************************************************************************/
@@ -347,15 +444,23 @@ static void write_patches(void)
 
   for (i = 0; i < cheat_count; i++)
   {
+    uint32 rom_size;
+    uint8 *rom = cheat_rom(&rom_size);
+
     if (!cheats[i].enabled || !cheats[i].valid) continue;
 
+    /* 32X: the SH-2 processors' SDRAM */
+    if ((cheats[i].address >> 24) == 0x06)
+    {
+      if (pico_active() && pico_memory(2, NULL)) cheat_index[ram_patches++] = (unsigned short)i;
+    }
     /* Work RAM */
-    if (cheats[i].address >= 0xFF0000)
+    else if (cheats[i].address >= 0xFF0000)
     {
       cheat_index[ram_patches++] = (unsigned short)i;
     }
     /* Mega CD RAM areas */
-    else if ((system_hw == SYSTEM_MCD) && !scd.cartridge.boot)
+    else if (cheat_mcd())
     {
       if (cheats[i].address < 0x80000)
       {
@@ -367,13 +472,15 @@ static void write_patches(void)
       }
     }
     /* Cartridge ROM */
-    else if (cheats[i].address < cart.romsize)
+    else if (boot_hold > 0) { }
+    else if (rom && cheats[i].address < rom_size)
     {
-      if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
+      if (cheat_md())
       {
+        cheats[i].applied = 1;
         /* Keep the original word so the patch can be undone. */
-        cheats[i].old = *(uint16 *)(cart.rom + (cheats[i].address & 0xFFFFFE));
-        *(uint16 *)(cart.rom + (cheats[i].address & 0xFFFFFE)) = cheats[i].data;
+        cheats[i].old = *(uint16 *)(rom + (cheats[i].address & 0xFFFFFE));
+        *(uint16 *)(rom + (cheats[i].address & 0xFFFFFE)) = cheats[i].data;
       }
       else
       {
@@ -417,20 +524,24 @@ static void remove_patches(void)
   if (!emu_running) return;
 
   /* Mega CD games get no ROM patches, so there is nothing to undo. */
-  if ((system_hw == SYSTEM_MCD) && !scd.cartridge.boot) return;
+  if (cheat_mcd()) return;
 
   /* Reverse order, in case two patches share an address. */
   i = cheat_count;
   while (i > 0)
   {
+    uint32 rom_size;
+    uint8 *rom = cheat_rom(&rom_size);
+
     i--;
 
     if (!cheats[i].enabled || !cheats[i].valid) continue;
-    if (cheats[i].address >= cart.romsize) continue;
+    if (!rom || cheats[i].address >= rom_size) continue;
 
-    if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
+    if (cheat_md())
     {
-      *(uint16 *)(cart.rom + (cheats[i].address & 0xFFFFFE)) = cheats[i].old;
+      if (cheats[i].applied) *(uint16 *)(rom + (cheats[i].address & 0xFFFFFE)) = cheats[i].old;
+      cheats[i].applied = 0;
     }
     else if (cheats[i].prev != NULL)
     {
@@ -467,15 +578,45 @@ void cheats_suspend(void)
 }
 
 /* Called once per frame: RAM patches are overwritten by the game otherwise. */
+void cheats_hold_for_boot(void)
+{
+  boot_hold = BOOT_HOLD_MAX;
+}
+
 void cheats_ram_update(void)
 {
   uint8 *base;
   uint32 mask;
-  int index, cnt = ram_patches;
+  int index, cnt;
+
+  if (boot_hold > 0)
+  {
+    int pressed = --boot_hold <= BOOT_HOLD_MAX - BOOT_HOLD_MIN && netplay_state() == NP_IDLE && (input.pad[0] || input.pad[4]);
+
+    if (boot_hold == 0 || pressed)
+    {
+      if (cheat_count) gui_log("Cheats: ROM codes go in %s (%d frames after the start)", pressed ? "after a button press" : "after the waiting time", BOOT_HOLD_MAX - boot_hold);
+      boot_hold = 0;
+      cheats_apply();                                 /* the game has started (it is being played): the ROM codes go in now */
+    }
+  }
+  cnt = ram_patches;
 
   while (cnt)
   {
     index = cheat_index[--cnt];
+
+    if ((cheats[index].address >> 24) == 0x06)         /* the 32X SDRAM: 256 KB, kept like the 68000's memory (every pair of bytes swapped) */
+    {
+      unsigned sdsize = 0;
+      uint8 *sd = pico_memory(2, &sdsize);
+      uint32 off = cheats[index].address & 0x3FFFF;
+
+      if (!sd || sdsize < 0x40000) continue;
+      if (cheats[index].data & 0xFF00) *(uint16 *)(sd + (off & 0x3FFFE)) = cheats[index].data;
+      else sd[off ^ 1] = (uint8)cheats[index].data;
+      continue;
+    }
 
     switch ((cheats[index].address >> 20) & 0xF)
     {
@@ -490,10 +631,11 @@ void cheats_ram_update(void)
         break;
 
       default:    /* Work RAM, 64 KB */
-        base = work_ram;
+        base = cheat_wram();
         mask = 0xfffe;
         break;
     }
+    if (!base) continue;
 
     if (cheats[index].data & 0xFF00)
     {
@@ -510,9 +652,9 @@ void cheats_ram_update(void)
       /* On the 16-bit consoles the core keeps its RAM with every pair of bytes
          swapped on a little-endian PC, so byte N lives at N ^ 1 (the word
          writes above already come out right). Without this a byte code such as
-         FFFE12:0009 wrote to the neighbouring address. The 8-bit consoles' RAM
+         FFFE12:0009 wrote to the neighboring address. The 8-bit consoles' RAM
          is a plain array and is left alone. */
-      if ((system_hw & SYSTEM_PBC) == SYSTEM_MD) offset ^= 1;
+      if (cheat_md()) offset ^= 1;
 #endif
 
       base[offset] = (uint8)cheats[index].data;
@@ -570,6 +712,26 @@ int cheats_effective(void)
   return gui.cheats_enabled ? cheats_active() : 0;
 }
 
+/* One number for the codes that are really changing the game (the same on two PCs with the same list switched on, whatever
+   the order), so the two PCs of a netplay game can tell that they play with the same cheats. 0: none. */
+unsigned cheats_fingerprint(void)
+{
+  unsigned sum = 0;
+  int i;
+
+  if (!gui.cheats_enabled) return 0;
+  for (i = 0; i < cheat_count; i++)
+  {
+    unsigned h = 2166136261u;
+    const char *c;
+
+    if (!cheats[i].enabled || !cheats[i].valid) continue;
+    for (c = cheats[i].code; *c; c++) { h ^= (unsigned char)*c; h *= 16777619u; }
+    sum += h | 1u;
+  }
+  return sum;
+}
+
 int cheats_active(void)
 {
   int i, n = 0;
@@ -580,8 +742,8 @@ int cheats_active(void)
   return n;
 }
 
-/* Normalises to upper case and strips spaces so pasted codes just work. */
-static void normalise_code(const char *in, char *out, int out_len)
+/* Normalizes to upper case and strips spaces so pasted codes just work. */
+static void normalize_code(const char *in, char *out, int out_len)
 {
   int n = 0;
 
@@ -604,7 +766,7 @@ int cheats_add(const char *code, const char *desc)
   if (!code || !code[0]) return -1;
   if (cheat_count >= CHEAT_MAX) return -1;
 
-  normalise_code(code, clean, sizeof(clean));
+  normalize_code(code, clean, sizeof(clean));
   if (!clean[0]) return -1;
 
   /* A code that is already in the list is added again as a new row (for
@@ -618,6 +780,7 @@ int cheats_add(const char *code, const char *desc)
   lstrcpynA(cheats[index].code, clean, CHEAT_CODE_LEN);
   lstrcpynA(cheats[index].desc, (desc && desc[0]) ? desc : "Unnamed", CHEAT_DESC_LEN);
   cheats[index].enabled = 1;
+  { int k, top = 0; for (k = 0; k < index; k++) if (cheats[k].num > top) top = cheats[k].num; cheats[index].num = top + 1; }
 
   if (!defer_apply) cheats_apply();
   return index;
@@ -670,7 +833,7 @@ static int cheats_update_entry(int index, const char *code, const char *desc)
   if (index < 0 || index >= cheat_count) return -1;
   if (!code || !code[0]) return -1;
 
-  normalise_code(code, clean, sizeof(clean));
+  normalize_code(code, clean, sizeof(clean));
   if (!clean[0]) return -1;
 
   /* (A code already in the list is allowed here too, as it is for Add.) */
@@ -709,7 +872,7 @@ static void cheat_file_path(const char *rom_base, int for_read, char *out)
 {
   (void)rom_base;   /* the loaded (or inspected) game's own name is used */
   (void)for_read;
-  emu_console_file_path("cheats", ".cht", out, GUI_PATH_LEN);
+  emu_console_file_path("Cheats", ".cht", out, GUI_PATH_LEN);
 }
 
 /* Reads cheat lines ("<0|1> <code> <name>") from an open file into the list; returns how many were added.
@@ -819,7 +982,7 @@ static int cheats_library_find(char *out, int out_len)
 
   if (!crc || system_hw == SYSTEM_MCD) return 0;
   gui_snprintf(want, sizeof(want), "%08lX", crc);
-  gui_snprintf(dir, sizeof(dir), "%s\\library", osd_path("cheats"));
+  gui_snprintf(dir, sizeof(dir), "%s\\library", osd_path("Cheats"));
   gui_snprintf(out, out_len, "%s\\%s.cht", dir, want);
   if (GetFileAttributesA(out) != INVALID_FILE_ATTRIBUTES) return 1;
 
@@ -857,26 +1020,75 @@ static int cheats_library_find(char *out, int out_len)
 
 static char cheats_game_base[128];
 
+/* What the game's cheat file looked like when the list was last read from it or written to it. The list in memory is
+   the working copy, so a file that is added, changed or deleted by hand while a game runs is noticed by comparing. */
+static FILETIME cheats_stamp_time;
+static DWORD cheats_stamp_size;
+static int cheats_stamp_known;
+
+static int cheats_file_info(const char *rom_base, FILETIME *t, DWORD *size)
+{
+  char path[GUI_PATH_LEN];
+  WIN32_FILE_ATTRIBUTE_DATA d;
+
+  cheat_file_path(rom_base, 1, path);
+  if (!GetFileAttributesExA(path, GetFileExInfoStandard, &d)) return 0;
+  *t = d.ftLastWriteTime;
+  *size = d.nFileSizeLow;
+  return 1;
+}
+
+static void cheats_stamp(const char *rom_base)
+{
+  cheats_stamp_known = cheats_file_info(rom_base, &cheats_stamp_time, &cheats_stamp_size);
+}
+
+/* Whether a file is a RetroArch .cht file (a cheat file of the game's own name put in the cheats folder may be one). */
+static int cheats_file_is_retroarch(FILE *fp)
+{
+  char line[256];
+  int retro = 0;
+
+  while (fgets(line, sizeof(line), fp))
+    if (strstr(line, "cheat0_") || strstr(line, "cheats =") || strstr(line, "cheats=")) { retro = 1; break; }
+  rewind(fp);
+  return retro;
+}
+
+int cheats_import_retroarch_cht(const char *path);
+
 void cheats_load_for_rom(const char *rom_base)
 {
   char path[GUI_PATH_LEN];
   FILE *fp;
 
   cheats_remove_all();
+  cheats_stamp_known = 0;
+  boot_hold = BOOT_HOLD_MAX;
 
   if (!rom_base || !rom_base[0]) { cheats_game_base[0] = '\0'; return; }
   lstrcpynA(cheats_game_base, rom_base, sizeof(cheats_game_base));
+  cheats_stamp(rom_base);
 
   cheat_file_path(rom_base, 1, path);
   fp = fopen(path, "r");
   if (!fp && cheats_library_find(path, sizeof(path))) fp = fopen(path, "r");   /* no cheats of your own: the library's */
   if (!fp) return;
 
+  if (cheats_file_is_retroarch(fp))
+  {
+    fclose(fp);
+    cheats_import_retroarch_cht(path);
+    gui_log("Cheats: %d code%s read from %s", cheat_count, cheat_count == 1 ? "" : "s", path);
+    return;
+  }
+
   defer_apply = 1;
   cheats_read_stream(fp);
   fclose(fp);
   defer_apply = 0;
   cheats_apply();
+  gui_log("Cheats: %d code%s read from %s", cheat_count, cheat_count == 1 ? "" : "s", path);
 }
 
 /****************************************************************************
@@ -1054,6 +1266,27 @@ int cheats_import_retroarch_cht(const char *path)
   return added;
 }
 
+/* Brings the list in line with the game's cheat file when that was changed outside the program while the game ran: a
+   file put there is loaded, a changed one is read again, a deleted one empties the list. */
+void cheats_sync_with_disk(const char *rom_base)
+{
+  FILETIME t;
+  DWORD size;
+
+  if (!rom_base || !rom_base[0]) return;
+
+  if (cheats_file_info(rom_base, &t, &size))
+  {
+    if (!cheats_stamp_known || CompareFileTime(&t, &cheats_stamp_time) != 0 || size != cheats_stamp_size)
+      cheats_load_for_rom(rom_base);
+  }
+  else if (cheats_stamp_known)
+  {
+    cheats_remove_all();
+    cheats_stamp_known = 0;
+  }
+}
+
 void cheats_save_for_rom(const char *rom_base)
 {
   char path[GUI_PATH_LEN];
@@ -1062,7 +1295,8 @@ void cheats_save_for_rom(const char *rom_base)
 
   if (!rom_base || !rom_base[0]) return;
 
-  
+  /* A file copied in meanwhile must not be thrown away by saving the (empty) list that was loaded before it. */
+  cheats_sync_with_disk(rom_base);
 
   if (!cheat_count)
   {
@@ -1075,6 +1309,7 @@ void cheats_save_for_rom(const char *rom_base)
       if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) break;
       DeleteFileA(path);
     }
+    cheats_stamp(rom_base);
     return;
   }
 
@@ -1092,6 +1327,7 @@ void cheats_save_for_rom(const char *rom_base)
   }
 
   fclose(fp);
+  cheats_stamp(rom_base);
 }
 
 /* Adds the cheats of a file to the list: a RetroArch .cht file or this program's own plain text lines
@@ -1125,65 +1361,106 @@ int cheats_import_file(const char *path)
  * Cheat code converter: a code in one form shown in the others
  ****************************************************************************/
 
-static char *code_forms(const char *typed, char *out, int out_len)
+/* A code in each of its forms: the name of the form and the code, up to three. Returns how many (0: not a valid code). */
+#define CODE_FORMS_MAX 3
+
+static int code_forms(const char *typed, char form[CODE_FORMS_MAX][24], char text[CODE_FORMS_MAX][24])
 {
   char code[CHEAT_CODE_LEN];
   uint32 address = 0;
   uint16 data = 0;
   uint8 ref = 0;
-  char *o = out;
-  int i;
+  int i, n = 0;
 
-  normalise_code(typed, code, sizeof(code));
+  normalize_code(typed, code, sizeof(code));
   /* Action Replay codes are often written as ten digits, FFFE120009 */
   if ((system_hw & SYSTEM_PBC) == SYSTEM_MD && strlen(code) == 10 && code[6] != ':')
   {
     memmove(code + 7, code + 6, 5);
     code[6] = ':';
   }
-  out[0] = '\0';
-  if (!decode_cheat_to(code, &address, &data, &ref)) return NULL;
+  if (!decode_cheat_to(code, &address, &data, &ref)) return 0;
 
   if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
   {
     char gg[16];
-    int n[8];
+    int g[8];
     uint32 a = address & 0xFFFFFF;
 
-    n[0] = (data >> 3) & 0x1F;
-    n[1] = ((data & 7) << 2) | ((a >> 14) & 3);
-    n[2] = (a >> 9) & 0x1F;
-    n[3] = ((a >> 20) & 0xF) | (((a >> 8) & 1) << 4);
-    n[4] = ((data >> 12) & 1) | (((a >> 16) & 0xF) << 1);
-    n[5] = ((data >> 15) & 1) | (((data >> 8) & 0xF) << 1);
-    n[6] = (((data >> 13) & 3) << 3) | ((a >> 5) & 7);
-    n[7] = a & 0x1F;
-    for (i = 0; i < 8; i++) gg[i < 4 ? i : i + 1] = ggvalidchars[n[i]];
+    g[0] = (data >> 3) & 0x1F;
+    g[1] = ((data & 7) << 2) | ((a >> 14) & 3);
+    g[2] = (a >> 9) & 0x1F;
+    g[3] = ((a >> 20) & 0xF) | (((a >> 8) & 1) << 4);
+    g[4] = ((data >> 12) & 1) | (((a >> 16) & 0xF) << 1);
+    g[5] = ((data >> 15) & 1) | (((data >> 8) & 0xF) << 1);
+    g[6] = (((data >> 13) & 3) << 3) | ((a >> 5) & 7);
+    g[7] = a & 0x1F;
+    for (i = 0; i < 8; i++) gg[i < 4 ? i : i + 1] = ggvalidchars[g[i]];
     gg[4] = '-';
     gg[9] = '\0';
-    o += snprintf(o, out_len, "Raw / Action Replay:  %06X:%04X\r\n", (unsigned)a, data);
-    snprintf(o, out_len - (int)(o - out), "Game Genie:  %s\r\n", gg);
+    lstrcpyA(form[n], "Raw / Action Replay");
+    snprintf(text[n++], 24, "%06X:%04X", (unsigned)a, data);
+    lstrcpyA(form[n], "Game Genie");
+    lstrcpynA(text[n++], gg, 24);
   }
   else
   {
     unsigned a16 = address >= 0xFF0000 ? (0xC000 | (address & 0x1FFF)) : (address & 0xFFFF);
     unsigned d = data & 0xFF;
 
-    if (!ref) o += snprintf(o, out_len, "Raw (RAM):  %04X:%02X\r\n", a16, d);
-    else o += snprintf(o, out_len, "Raw (ROM):  %02X%04X:%02X\r\n", ref, a16, d);
-    o += snprintf(o, out_len - (int)(o - out), "Action Replay:  00%02X-%02X%02X\r\n", a16 >> 8, a16 & 0xFF, d);
+    if (!ref)
+    {
+      lstrcpyA(form[n], "Raw (RAM)");
+      snprintf(text[n++], 24, "%04X:%02X", a16, d);
+    }
+    else
+    {
+      lstrcpyA(form[n], "Raw (ROM)");
+      snprintf(text[n++], 24, "%02X%04X:%02X", ref, a16, d);
+    }
+    lstrcpyA(form[n], "Action Replay");
+    snprintf(text[n++], 24, "00%02X-%02X%02X", a16 >> 8, a16 & 0xFF, d);
+    lstrcpyA(form[n], "Game Genie");
     if (ref)
     {
       unsigned r = (unsigned)(ref ^ 0xBA);
       r = ((r << 2) | (r >> 6)) & 0xFF;
-      snprintf(o, out_len - (int)(o - out), "Game Genie:  %X%X%X-%X%X%X-%X0%X\r\n", d >> 4, d & 15, (a16 >> 8) & 15,
-                   (a16 >> 4) & 15, a16 & 15, ((a16 >> 12) & 15) ^ 15, r >> 4, r & 15);
+      snprintf(text[n++], 24, "%X%X%X-%X%X%X-%X0%X", d >> 4, d & 15, (a16 >> 8) & 15,
+               (a16 >> 4) & 15, a16 & 15, ((a16 >> 12) & 15) ^ 15, r >> 4, r & 15);
     }
     else
-      snprintf(o, out_len - (int)(o - out), "Game Genie:  %X%X%X-%X%X%X\r\n", d >> 4, d & 15, (a16 >> 8) & 15,
-                   (a16 >> 4) & 15, a16 & 15, ((a16 >> 12) & 15) ^ 15);
+      snprintf(text[n++], 24, "%X%X%X-%X%X%X", d >> 4, d & 15, (a16 >> 8) & 15,
+               (a16 >> 4) & 15, a16 & 15, ((a16 >> 12) & 15) ^ 15);
   }
-  return out;
+  return n;
+}
+
+/* Fills the list of forms; the columns fit what they hold. */
+static void cheatconv_fill(HWND list, char form[CODE_FORMS_MAX][24], char text[CODE_FORMS_MAX][24], int n)
+{
+  LVITEMA item;
+  int i;
+
+  ListView_DeleteAllItems(list);
+  for (i = 0; i < n; i++)
+  {
+    ZeroMemory(&item, sizeof(item));
+    item.mask = LVIF_TEXT;
+    item.iItem = i;
+    item.pszText = form[i];
+    SendMessageA(list, LVM_INSERTITEMA, 0, (LPARAM)&item);
+    item.iSubItem = 1;
+    item.pszText = text[i];
+    SendMessageA(list, LVM_SETITEMTEXTA, (WPARAM)i, (LPARAM)&item);
+  }
+  {
+    RECT rc;
+
+    ListView_SetColumnWidth(list, 0, LVSCW_AUTOSIZE_USEHEADER);
+    GetClientRect(list, &rc);
+    ListView_SetColumnWidth(list, 1, rc.right - ListView_GetColumnWidth(list, 0));          /* the last column fills what is left */
+    InvalidateRect(list, NULL, TRUE);         /* (the lines between the columns are drawn again at their new places) */
+  }
 }
 
 static INT_PTR CALLBACK cheatconv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
@@ -1196,6 +1473,27 @@ static INT_PTR CALLBACK cheatconv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         "Type a code (Game Genie, Action Replay or raw, such as the ones Cheat Search makes) and Convert shows it in the other forms.");
       SendDlgItemMessage(dlg, IDC_CC_IN, EM_LIMITTEXT, CHEAT_CODE_LEN - 1, 0);
       EnableWindow(GetDlgItem(dlg, IDC_CC_ADD), FALSE);
+      {
+        HWND list = GetDlgItem(dlg, IDC_CC_LIST);
+        LVCOLUMNA col;
+
+        SendMessage(list, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_FULLROWSELECT, LVS_EX_FULLROWSELECT);
+        ZeroMemory(&col, sizeof(col));
+        col.mask = LVCF_TEXT | LVCF_WIDTH;
+        col.pszText = "Form";  col.cx = 120;
+        SendMessageA(list, LVM_INSERTCOLUMNA, 0, (LPARAM)&col);
+        {
+          RECT rc;
+
+          GetClientRect(list, &rc);
+          col.pszText = "Code";  col.cx = rc.right - col.cx;         /* the last column fills what is left */
+        }
+        SendMessageA(list, LVM_INSERTCOLUMNA, 1, (LPARAM)&col);
+        {
+          HWND header = ListView_GetHeader(list);
+          if (header && theme_is_dark()) { SetWindowTheme(header, L"ItemsView", NULL); InvalidateRect(header, NULL, TRUE); }
+        }
+      }
       return TRUE;
 
     case WM_CTLCOLORDLG:
@@ -1203,9 +1501,9 @@ static INT_PTR CALLBACK cheatconv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CTLCOLORBTN:
     case WM_CTLCOLOREDIT:
     {
-      /* the code box and the result box have the colour of the Name and Code boxes of the Cheats window */
+      /* the code box has the color of the Name and Code boxes of the Cheats window */
       int cid = GetDlgCtrlID((HWND)lp);
-      HBRUSH br = (cid == IDC_CC_IN || cid == IDC_CC_OUT) ? theme_ctlcolor_custom((HDC)wp, RGB(0x38, 0x38, 0x38), 1)
+      HBRUSH br = (cid == IDC_CC_IN) ? theme_ctlcolor_custom((HDC)wp, RGB(0x38, 0x38, 0x38), 1)
                                                           : theme_ctlcolor((HDC)wp);
       if (br) return (LRESULT)br;
       break;
@@ -1216,20 +1514,19 @@ static INT_PTR CALLBACK cheatconv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       {
         case IDC_CC_CONVERT:
         {
-          char in[CHEAT_CODE_LEN], text[512];
+          char in[CHEAT_CODE_LEN], form[CODE_FORMS_MAX][24], text[CODE_FORMS_MAX][24];
+          int n = 0;
 
           GetDlgItemTextA(dlg, IDC_CC_IN, in, sizeof(in));
+          SetDlgItemTextA(dlg, IDC_CC_OUT, "");
           if (!emu_running)
             SetDlgItemTextA(dlg, IDC_CC_OUT, "Open a game first: the code forms depend on the console.");
           else if (!in[0])
             SetDlgItemTextA(dlg, IDC_CC_OUT, "Type a code first.");
-          else if (!code_forms(in, text, sizeof(text)))
+          else if (!(n = code_forms(in, form, text)))
             SetDlgItemTextA(dlg, IDC_CC_OUT, "That is not a valid code for this console.");
-          else
-          {
-            SetDlgItemTextA(dlg, IDC_CC_OUT, text);
-            EnableWindow(GetDlgItem(dlg, IDC_CC_ADD), TRUE);
-          }
+          cheatconv_fill(GetDlgItem(dlg, IDC_CC_LIST), form, text, n);
+          EnableWindow(GetDlgItem(dlg, IDC_CC_ADD), n > 0);
           return TRUE;
         }
 
@@ -1265,12 +1562,21 @@ static void cheats_hint_text(char *out, int out_len)
   }
   else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
   {
-    lstrcpynA(out, "Accepted: Game Genie ABCD-EFGH, or Action Replay aaaaaa:dddd", out_len);
+    lstrcpynA(out, pico_active() ? "Accepted: Game Genie ABCD-EFGH, Action Replay aaaaaa:dddd, RAM byte aaaaaa:dd, or SH-2 06aaaaaa:dd" : "Accepted: Game Genie ABCD-EFGH, Action Replay aaaaaa:dddd, or RAM byte aaaaaa:dd", out_len);
   }
   else
   {
     lstrcpynA(out, "Accepted: Game Genie ABC-DEF(-GHI), Action Replay 00XX-YYYY, or aaaa:dd", out_len);
   }
+}
+
+/* A message under the buttons ("Loaded 3 codes ...", "Select a code to remove it."): it goes back to the usual hint after a few seconds
+   instead of staying there for good. */
+#define CHEATS_HINT_TIMER 7101
+static void cheats_hint(HWND dlg, const char *text)
+{
+  SetDlgItemTextA(dlg, IDC_CHEATS_HINT, text);
+  SetTimer(dlg, CHEATS_HINT_TIMER, 7000, NULL);
 }
 
 #define CHEATS_KEEP_SELECTION  (-2)   /* cheats_fill_list(): leave the selection as it is */
@@ -1294,57 +1600,54 @@ static HIMAGELIST hdr_images;
 
 static void cheats_make_header_images(void)
 {
-  static const COLORREF key = RGB(255, 0, 255);
   HDC screen = GetDC(NULL);
   HDC mem = CreateCompatibleDC(screen);
   HBITMAP bm = CreateCompatibleBitmap(screen, HDR_BOX * 2, HDR_BOX);
   HGDIOBJ old = SelectObject(mem, bm);
-  int dark = theme_is_dark();
-  COLORREF line = dark ? RGB(220, 220, 220) : RGB(51, 51, 51);
-  COLORREF fill = dark ? RGB(32, 32, 32)    : RGB(255, 255, 255);
-  HBRUSH kb = CreateSolidBrush(key), fb = CreateSolidBrush(fill), lb = CreateSolidBrush(line);
-  int i;
+  COLORREF bg = theme_is_dark() ? RGB(0x19, 0x19, 0x19) : RGB(255, 255, 255);        /* the color of a header cell */
 
-  {
-    RECT all = { 0, 0, HDR_BOX * 2, HDR_BOX };
-    FillRect(mem, &all, kb);
-  }
-
-  for (i = 0; i < 2; i++)
-  {
-    int x = i * HDR_BOX;
-    RECT box = { x + 1, 1, x + 14, 14 };
-    RECT inner = { x + 2, 2, x + 13, 13 };
-
-    FillRect(mem, &box, lb);
-    FillRect(mem, &inner, fb);
-
-    if (i == 1)
-    {
-      HPEN pen = CreatePen(PS_SOLID, 2, line);
-      HGDIOBJ op = SelectObject(mem, pen);
-
-      MoveToEx(mem, x + 4, 7, NULL);
-      LineTo(mem, x + 6, 10);
-      LineTo(mem, x + 11, 4);
-      SelectObject(mem, op);
-      DeleteObject(pen);
-    }
-  }
-
+  theme_draw_tickbox(mem, 0, 0, HDR_BOX, 0, bg);
+  theme_draw_tickbox(mem, HDR_BOX, 0, HDR_BOX, 1, bg);
   SelectObject(mem, old);
 
   if (hdr_images) ImageList_Destroy(hdr_images);
-  hdr_images = ImageList_Create(HDR_BOX, HDR_BOX, ILC_COLOR24 | ILC_MASK, 2, 0);
-  if (hdr_images) ImageList_AddMasked(hdr_images, bm, key);
+  hdr_images = ImageList_Create(HDR_BOX, HDR_BOX, ILC_COLOR24, 2, 0);
+  if (hdr_images) ImageList_Add(hdr_images, bm, NULL);
 
-  DeleteObject(kb); DeleteObject(fb); DeleteObject(lb);
   DeleteObject(bm);
   DeleteDC(mem);
   ReleaseDC(NULL, screen);
 }
 
-/* The state shown in the checkbox in the "Code" column header. */
+/* Two boxes (unticked, ticked) on a background color, as one picture, for the boxes of the rows. Made again when the color changes. */
+static HBITMAP cheats_row_boxes(HDC like, COLORREF bg)
+{
+  static HBITMAP strip;
+  static COLORREF made_for = CLR_INVALID;
+  static int made_dark = -1, made_accent = -1;
+
+  if (strip && made_for == bg && made_dark == theme_is_dark() && made_accent == gui.accent && made_for != CLR_INVALID) return strip;
+  if (strip) { DeleteObject(strip); strip = NULL; }
+  {
+    HDC mem = CreateCompatibleDC(like);
+    HBITMAP bm = CreateCompatibleBitmap(like, HDR_BOX * 2, HDR_BOX);
+
+    if (mem && bm)
+    {
+      HGDIOBJ old = SelectObject(mem, bm);
+      theme_draw_tickbox(mem, 0, 0, HDR_BOX, 0, bg);
+      theme_draw_tickbox(mem, HDR_BOX, 0, HDR_BOX, 1, bg);
+      SelectObject(mem, old);
+      strip = bm;
+      made_for = bg; made_dark = theme_is_dark(); made_accent = gui.accent;
+    }
+    else if (bm) DeleteObject(bm);
+    if (mem) DeleteDC(mem);
+  }
+  return strip;
+}
+
+/* The state shown in the checkbox in the header of the box column. */
 static void cheats_header_set_check(HWND list, int checked)
 {
   HWND header = ListView_GetHeader(list);
@@ -1353,11 +1656,11 @@ static void cheats_header_set_check(HWND list, int checked)
   if (!header || !hdr_images) return;
   memset(&hdi, 0, sizeof(hdi));
   hdi.mask = HDI_FORMAT | HDI_IMAGE;
-  if (!SendMessageA(header, HDM_GETITEMA, 0, (LPARAM)&hdi)) return;
+  if (!SendMessageA(header, HDM_GETITEMA, 1, (LPARAM)&hdi)) return;
 
   hdi.fmt |= HDF_IMAGE;
   hdi.iImage = checked ? 1 : 0;
-  SendMessageA(header, HDM_SETITEMA, 0, (LPARAM)&hdi);
+  SendMessageA(header, HDM_SETITEMA, 1, (LPARAM)&hdi);
 }
 
 static int cheats_all_enabled(void)
@@ -1375,7 +1678,64 @@ static int cheats_all_enabled(void)
    appearing or going away changes how much room there is. */
 static void cheats_fit_columns(HWND list)
 {
-  ListView_SetColumnWidth(list, 2, LVSCW_AUTOSIZE_USEHEADER);
+  ListView_SetColumnWidth(list, 4, LVSCW_AUTOSIZE_USEHEADER);
+}
+
+/* What the Status column says about a code. */
+static const char *cheat_status_text(const t_cheat *c)
+{
+  if (!emu_running) return "Game not running";
+  if (!gui.cheats_enabled) return "Cheats are off";
+  if (!c->valid) return "Code not valid for this system";
+  return c->enabled ? "Active" : "Off";
+}
+
+/* Clicking a column title sorts the list by it (a second click turns the order round). The list itself is put in order, so the
+   order is also the one saved. */
+static int cheats_sort_col = -1, cheats_sort_up = 1;
+
+static void cheats_sort_by(int col)
+{
+  int i, j;
+
+  if (cheat_count < 2 || col < 0 || col == 1 || col > 4) return;          /* (column 1 is the box) */
+  if (col == cheats_sort_col) cheats_sort_up = !cheats_sort_up;
+  else { cheats_sort_col = col; cheats_sort_up = 1; }
+
+  remove_patches();                                      /* (it goes by the places in the list) */
+  for (i = 1; i < cheat_count; i++)                      /* insertion sort: equal entries keep their order */
+  {
+    t_cheat key = cheats[i];
+    j = i - 1;
+    while (j >= 0 && (cheats_sort_col == 0 ? (cheats[j].num > key.num) - (cheats[j].num < key.num) : cheats_sort_col == 2 ? lstrcmpiA(cheats[j].code, key.code) : cheats_sort_col == 3 ? lstrcmpiA(cheats[j].desc, key.desc) :
+                      lstrcmpiA(cheat_status_text(&cheats[j]), cheat_status_text(&key))) * (cheats_sort_up ? 1 : -1) > 0)
+    {
+      cheats[j + 1] = cheats[j];
+      j--;
+    }
+    cheats[j + 1] = key;
+  }
+  patches_live = 0;
+  cheats_apply();
+}
+
+static void cheats_sort_arrows(HWND list)
+{
+  HWND header = ListView_GetHeader(list);
+  int c;
+
+  if (!header) return;
+  for (c = 0; c < 5; c++)
+  {
+    HDITEMA hdi;
+
+    memset(&hdi, 0, sizeof(hdi));
+    hdi.mask = HDI_FORMAT;
+    if (!SendMessageA(header, HDM_GETITEMA, (WPARAM)c, (LPARAM)&hdi)) continue;
+    hdi.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+    if (c == cheats_sort_col) hdi.fmt |= cheats_sort_up ? HDF_SORTUP : HDF_SORTDOWN;
+    SendMessageA(header, HDM_SETITEMA, (WPARAM)c, (LPARAM)&hdi);
+  }
 }
 
 /* select: an index to select afterwards, -1 for none, or
@@ -1399,18 +1759,25 @@ static void cheats_fill_list(HWND dlg, int select)
     LVITEMA item;
 
     ZeroMemory(&item, sizeof(item));
+    char num[16];
+
     item.mask     = LVIF_TEXT;
     item.iItem    = i;
     item.iSubItem = 0;
-    item.pszText  = (LPSTR)cheats[i].code;
+    wsprintfA(num, "%d", cheats[i].num);
+    item.pszText  = num;
     SendMessageA(list, LVM_INSERTITEMA, 0, (LPARAM)&item);
 
-    item.iSubItem = 1;
+    item.iSubItem = 2;
+    item.pszText  = (LPSTR)cheats[i].code;
+    SendMessageA(list, LVM_SETITEMTEXTA, (WPARAM)i, (LPARAM)&item);
+
+    item.iSubItem = 3;
     item.pszText  = (LPSTR)cheats[i].desc;
     SendMessageA(list, LVM_SETITEMTEXTA, (WPARAM)i, (LPARAM)&item);
 
-    item.iSubItem = 2;
-    item.pszText  = (LPSTR)(cheats[i].valid ? "Active" : "Not valid here");
+    item.iSubItem = 4;
+    item.pszText  = (LPSTR)cheat_status_text(&cheats[i]);
     SendMessageA(list, LVM_SETITEMTEXTA, (WPARAM)i, (LPARAM)&item);
 
     ListView_SetCheckState(list, i, cheats[i].enabled ? TRUE : FALSE);
@@ -1446,9 +1813,10 @@ static void cheats_show_selected(HWND dlg, int index)
 
   SetDlgItemTextA(dlg, IDC_CHEATS_CODE, cheats[index].code);
   SetDlgItemTextA(dlg, IDC_CHEATS_DESC, cheats[index].desc);
-  SetDlgItemTextA(dlg, IDC_CHEATS_HINT, "Change the name or code, then press Save.");
+  cheats_hint(dlg, "Change the name or code, then press Save.");
 }
 
+#define WM_CHEATS_HDRMENU (WM_APP + 22)   /* lParam: where the header was right-clicked, on the screen */
 #define WM_CHEATS_ALL (WM_APP + 21)   /* wParam: 1 = tick every code, 0 = untick every code */
 
 /* The header has to be watched directly: a click on its checkbox is turned
@@ -1461,14 +1829,19 @@ static LRESULT CALLBACK cheats_header_proc(HWND hwnd, UINT msg, WPARAM wp, LPARA
     RECT r;
     int x = (int)(short)LOWORD(lp), y = (int)(short)HIWORD(lp);
 
-    /* On the box at the left of the first column's title. */
-    if (SendMessageA(hwnd, HDM_GETITEMRECT, 0, (LPARAM)&r) &&
-        x >= r.left && x < r.left + HDR_BOX + 8 && y >= r.top && y < r.bottom)
+    /* On the box in the title of the second column. */
+    if (SendMessageA(hwnd, HDM_GETITEMRECT, 1, (LPARAM)&r) &&
+        x >= r.left && x < r.right && y >= r.top && y < r.bottom)
     {
       if (gui.cheats_enabled)
         PostMessage((HWND)ref, WM_CHEATS_ALL, cheats_all_enabled() ? 0 : 1, 0);
       return 0;    /* the click is the checkbox's, not a column click */
     }
+  }
+  else if (msg == WM_CONTEXTMENU)
+  {
+    PostMessage((HWND)ref, WM_CHEATS_HDRMENU, 0, lp);          /* the same choice the game list's header offers */
+    return 0;
   }
   else if (msg == WM_NCDESTROY)
   {
@@ -1483,23 +1856,49 @@ static void cheats_init_list(HWND dlg)
   HWND list = GetDlgItem(dlg, IDC_CHEATS_LIST);
   LVCOLUMNA col;
 
+  /* No list checkboxes (the theme draws those left of the number): a cheat's on/off is kept in its state image and shown by
+     the box column, which the list's notifications below draw and toggle. */
   SendMessage(list, LVM_SETEXTENDEDLISTVIEWSTYLE,
-              LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT,
-              LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
+              LVS_EX_FULLROWSELECT,
+              LVS_EX_FULLROWSELECT);
 
   ZeroMemory(&col, sizeof(col));
   col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
 
-  col.iSubItem = 0; col.cx = 150; col.pszText = (LPSTR)"Code";
+  /* The number comes first, then the box (drawn in the list's custom draw, because the list's own box would stand left of the number),
+     then the code, name and status. The list's own box is made one pixel wide so it takes no room. */
+  {
+    HIMAGELIST st = ImageList_Create(1, 16, ILC_COLOR24 | ILC_MASK, 3, 0);
+    if (st)
+    {
+      HDC screen = GetDC(NULL), mem = CreateCompatibleDC(screen);
+      HBITMAP bm = CreateCompatibleBitmap(screen, 3, 16), old = (HBITMAP)SelectObject(mem, bm);
+      RECT all = { 0, 0, 3, 16 };
+      HBRUSH kb = CreateSolidBrush(RGB(255, 0, 255));
+      FillRect(mem, &all, kb);
+      SelectObject(mem, old);
+      ImageList_AddMasked(st, bm, RGB(255, 0, 255));
+      DeleteObject(kb); DeleteObject(bm); DeleteDC(mem); ReleaseDC(NULL, screen);
+      SendMessage(list, LVM_SETIMAGELIST, LVSIL_STATE, (LPARAM)st);
+    }
+  }
+
+  col.iSubItem = 0; col.cx = 44;  col.pszText = (LPSTR)"#";
   SendMessageA(list, LVM_INSERTCOLUMNA, 0, (LPARAM)&col);
 
-  col.iSubItem = 1; col.cx = 255; col.pszText = (LPSTR)"Description";
+  col.iSubItem = 1; col.cx = 30;  col.pszText = (LPSTR)"";
   SendMessageA(list, LVM_INSERTCOLUMNA, 1, (LPARAM)&col);
 
-  col.iSubItem = 2; col.cx = 90;  col.pszText = (LPSTR)"Status";   /* widened to fill by cheats_fit_columns() */
+  col.iSubItem = 2; col.cx = 150; col.pszText = (LPSTR)"Code";
   SendMessageA(list, LVM_INSERTCOLUMNA, 2, (LPARAM)&col);
 
-  /* A checkbox beside the "Code" title that ticks or unticks every code. */
+  col.iSubItem = 3; col.cx = 190; col.pszText = (LPSTR)"Description";
+  SendMessageA(list, LVM_INSERTCOLUMNA, 3, (LPARAM)&col);
+
+  col.iSubItem = 4; col.cx = 90;  col.pszText = (LPSTR)"Status";   /* widened to fill by cheats_fit_columns() */
+  SendMessageA(list, LVM_INSERTCOLUMNA, 4, (LPARAM)&col);
+
+  /* A checkbox in the title of the box column that ticks or unticks every code. */
   {
     HWND header = ListView_GetHeader(list);
 
@@ -1515,6 +1914,28 @@ static void cheats_init_list(HWND dlg)
   cheats_fit_columns(list);
 }
 
+/* Writes the list as a RetroArch .cht file (cheatN_desc, cheatN_code, cheatN_enable), which Load Cheat and other programs read.
+   Returns how many cheats were written, -1 when the file cannot be made. */
+static int cheats_export_retroarch_cht(const char *path)
+{
+  FILE *fp = fopen(path, "w");
+  int i;
+
+  if (!fp) return -1;
+  fprintf(fp, "cheats = %d\n\n", cheat_count);
+  for (i = 0; i < cheat_count; i++)
+  {
+    char desc[CHEAT_DESC_LEN], *q;
+
+    lstrcpynA(desc, cheats[i].desc, sizeof(desc));
+    for (q = desc; *q; q++) if (*q == '"') *q = '\'';           /* (a quote would end the text early) */
+    fprintf(fp, "cheat%d_desc = \"%s\"\ncheat%d_code = \"%s\"\ncheat%d_enable = %s\n\n", i, desc, i, cheats[i].code, i,
+            cheats[i].enabled ? "true" : "false");
+  }
+  fclose(fp);
+  return cheat_count;
+}
+
 static void cheats_do_add(HWND dlg)
 {
   char code[CHEAT_CODE_LEN] = "";
@@ -1526,7 +1947,7 @@ static void cheats_do_add(HWND dlg)
 
   if (!code[0])
   {
-    SetDlgItemTextA(dlg, IDC_CHEATS_HINT, "Type a code before adding it.");
+    cheats_hint(dlg, "Type a code before adding it.");
     return;
   }
 
@@ -1534,7 +1955,7 @@ static void cheats_do_add(HWND dlg)
 
   if (index < 0)
   {
-    SetDlgItemTextA(dlg, IDC_CHEATS_HINT,
+    cheats_hint(dlg,
                     (cheat_count >= CHEAT_MAX) ? "The list is full." : "That code could not be added.");
     return;
   }
@@ -1549,14 +1970,14 @@ static void cheats_do_add(HWND dlg)
   {
     /* Kept in the list rather than dropped: it may be a code for another
        console, and losing what the user typed is worse than showing it. */
-    SetDlgItemTextA(dlg, IDC_CHEATS_HINT,
+    cheats_hint(dlg,
                     "Added, but that code is not valid for the running game.");
   }
   else
   {
     char hint[128];
     cheats_hint_text(hint, sizeof(hint));
-    SetDlgItemTextA(dlg, IDC_CHEATS_HINT, hint);
+    cheats_hint(dlg, hint);
   }
 }
 
@@ -1573,7 +1994,7 @@ static void cheats_do_save(HWND dlg)
 
   if (sel < 0 || sel >= cheat_count)
   {
-    SetDlgItemTextA(dlg, IDC_CHEATS_HINT, "Select a code to edit it.");
+    cheats_hint(dlg, "Select a code to edit it.");
     return;
   }
 
@@ -1582,7 +2003,7 @@ static void cheats_do_save(HWND dlg)
 
   if (!code[0])
   {
-    SetDlgItemTextA(dlg, IDC_CHEATS_HINT, "Type a code before saving it.");
+    cheats_hint(dlg, "Type a code before saving it.");
     return;
   }
 
@@ -1590,7 +2011,7 @@ static void cheats_do_save(HWND dlg)
 
   if (result < 0)
   {
-    SetDlgItemTextA(dlg, IDC_CHEATS_HINT, "That code could not be saved.");
+    cheats_hint(dlg, "That code could not be saved.");
     return;
   }
 
@@ -1607,12 +2028,12 @@ static void cheats_do_save(HWND dlg)
 
   if (!cheats_is_valid(sel))
   {
-    SetDlgItemTextA(dlg, IDC_CHEATS_HINT, "Saved, but that code is not valid for the running game.");
+    cheats_hint(dlg, "Saved, but that code is not valid for the running game.");
   }
   else
   {
     cheats_hint_text(hint, sizeof(hint));
-    SetDlgItemTextA(dlg, IDC_CHEATS_HINT, hint);
+    cheats_hint(dlg, hint);
   }
 }
 
@@ -1636,12 +2057,13 @@ static void cheats_update_enable_state(HWND dlg)
   {
     EnableWindow(GetDlgItem(dlg, controlled[i]), on);
   }
-  if (!sim_n) ShowWindow(GetDlgItem(dlg, IDC_CHEATS_FILES), SW_HIDE);
+  EnableWindow(GetDlgItem(dlg, IDC_CHEATS_FILES), on && sim_n);       /* grayed, not hidden, when there are no similar files */
+  EnableWindow(GetDlgItem(dlg, IDC_CHEATS_FILES_LABEL), on && sim_n);
 
   /* The list is never disabled: a disabled list view keeps its normal text
-     colour in light mode and paints itself in system colours (white on
+     color in light mode and paints itself in system colors (white on
      white) in dark mode. Instead it stays enabled, is kept inert by refusing
-     its item changes (see cheats_proc), and is grayed out by its text colour
+     its item changes (see cheats_proc), and is grayed out by its text color
      on the same background as before. */
   {
     int dark = theme_is_dark();
@@ -1677,7 +2099,7 @@ static void cheats_find_similar(void)
   if (!key[0]) return;
   wsprintfA(self, "%s.cht", base);
 
-  { char f[GUI_PATH_LEN], *sl; emu_console_file_path("cheats", ".cht", f, sizeof(f)); sl = strrchr(f, '\\'); if (sl) *sl = '\0'; lstrcpynA(sim_dir, f, sizeof(sim_dir)); }
+  { char f[GUI_PATH_LEN], *sl; emu_console_file_path("Cheats", ".cht", f, sizeof(f)); sl = strrchr(f, '\\'); if (sl) *sl = '\0'; lstrcpynA(sim_dir, f, sizeof(sim_dir)); }
   wsprintfA(pat, "%s\\*.cht", sim_dir);
   h = FindFirstFileA(pat, &fd);
   if (h == INVALID_HANDLE_VALUE) return;
@@ -1699,6 +2121,7 @@ static INT_PTR CALLBACK cheats_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     {
       char hint[128];
 
+      cheats_sync_current();
       cheats_init_list(dlg);
       cheats_fill_list(dlg, -1);
       theme_apply_to_window(dlg);
@@ -1722,7 +2145,8 @@ static INT_PTR CALLBACK cheats_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           { IDC_CHEATS_REMOVE, NULL, "Remove the selected cheat." },
           { IDC_CHEATS_CLEAR, NULL, "Remove every cheat in the list (it asks first)." },
           { IDC_CHEATS_LOADCHT, NULL, "Load cheats from a RetroArch .cht file." },
-          { IDC_CHEATS_FILES, NULL, "Other cheat files in the cheats folder whose name starts like this game's. Choose one to add its cheats to the list." },
+          { IDC_CHEATS_FILES, NULL, "Other cheat files in the cheats folder whose name starts like this game's. Choose one to load its cheats, or to insert them among the ones in the list." },
+          { IDC_CHEATS_EXPORT, NULL, "Save the list as a RetroArch .cht file, to keep, share or use in another program (Load Cheat reads it back)." },
           { IDC_CHEATS_CONVERT, NULL, "Show a code in the other forms (Game Genie, Action Replay, raw)." },
           { IDOK, NULL, "Close this window." },
         };
@@ -1734,24 +2158,69 @@ static INT_PTR CALLBACK cheats_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       SendDlgItemMessage(dlg, IDC_CHEATS_DESC, EM_LIMITTEXT, CHEAT_DESC_LEN - 1, 0);
       cheats_update_enable_state(dlg);
       {
-        /* The drop-down of similar cheat files only exists when there are some. */
+        /* The drop-down of similar cheat files is always there, grayed out when there are none. */
         HWND box = GetDlgItem(dlg, IDC_CHEATS_FILES);
         int i;
 
         cheats_find_similar();
         SendMessage(box, CB_RESETCONTENT, 0, 0);
-        SendMessageA(box, CB_ADDSTRING, 0, (LPARAM)"Cheat files with a similar name...");
+        SendMessageA(box, CB_ADDSTRING, 0, (LPARAM)(sim_n ? "Choose a file..." : "None found"));
         for (i = 0; i < sim_n; i++) SendMessageA(box, CB_ADDSTRING, 0, (LPARAM)sim_files[i]);
         SendMessage(box, CB_SETCURSEL, 0, 0);
-        ShowWindow(box, sim_n ? SW_SHOW : SW_HIDE);
         EnableWindow(box, sim_n && gui.cheats_enabled);
+        EnableWindow(GetDlgItem(dlg, IDC_CHEATS_FILES_LABEL), sim_n && gui.cheats_enabled);
       }
       return TRUE;
     }
 
+    case WM_TIMER:
+      if (wp == CHEATS_HINT_TIMER)
+      {
+        char hint[128];
+
+        KillTimer(dlg, CHEATS_HINT_TIMER);
+        cheats_hint_text(hint, sizeof(hint));
+        SetDlgItemTextA(dlg, IDC_CHEATS_HINT, hint);
+        return TRUE;
+      }
+      break;
+
     case WM_DESTROY:
       if (hdr_images) { ImageList_Destroy(hdr_images); hdr_images = NULL; }
       return FALSE;
+
+    case WM_CHEATS_HDRMENU:
+    {
+      HWND list = GetDlgItem(dlg, IDC_CHEATS_LIST);
+      HMENU menu = CreatePopupMenu();
+      int cmd;
+
+      POINT mp;
+
+      mp.x = (short)LOWORD(lp); mp.y = (short)HIWORD(lp);
+      if (lp == (LPARAM)-1) GetCursorPos(&mp);                  /* (from the keyboard: where the pointer is) */
+      AppendMenuA(menu, MF_STRING, 2100, "Size All Columns to Fit");
+      if (theme_menus_owner()) theme_ownerdraw_menu(menu);
+      cmd = (int)gui_popup(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, mp.x, mp.y);       /* (the main window draws the owner-drawn items) */
+      DestroyMenu(menu);
+      if (cmd == 2100)
+      {
+        static const int cols[3] = { 0, 2, 3 };       /* the box column keeps its width; the last one fills what is left */
+        int k;
+
+        for (k = 0; k < 3; k++)
+        {
+          int w1, w2;
+          ListView_SetColumnWidth(list, cols[k], LVSCW_AUTOSIZE);
+          w1 = ListView_GetColumnWidth(list, cols[k]);
+          ListView_SetColumnWidth(list, cols[k], LVSCW_AUTOSIZE_USEHEADER);
+          w2 = ListView_GetColumnWidth(list, cols[k]);
+          ListView_SetColumnWidth(list, cols[k], (w1 > w2 ? w1 : w2) + 8);
+        }
+        cheats_fit_columns(list);
+      }
+      return TRUE;
+    }
 
     case WM_CHEATS_ALL:
       if (gui.cheats_enabled)
@@ -1791,9 +2260,86 @@ static INT_PTR CALLBACK cheats_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         return TRUE;
       }
 
+      if (hdr->idFrom == IDC_CHEATS_LIST && hdr->code == NM_CUSTOMDRAW)
+      {
+        NMLVCUSTOMDRAW *cd = (NMLVCUSTOMDRAW *)lp;
+        LRESULT rv = CDRF_DODEFAULT;
+
+        if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) rv = CDRF_NOTIFYITEMDRAW;
+        else if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) rv = CDRF_NOTIFYSUBITEMDRAW;
+        else if (cd->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM))
+          rv = (cd->iSubItem == 1) ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
+        else if (cd->nmcd.dwDrawStage == (CDDS_ITEMPOSTPAINT | CDDS_SUBITEM) && cd->iSubItem == 1 && hdr_images)
+        {
+          RECT cell;
+          int row = (int)cd->nmcd.dwItemSpec;
+
+          cell.top = 1; cell.left = LVIR_BOUNDS;
+          if (SendMessageA(hdr->hwndFrom, LVM_GETSUBITEMRECT, (WPARAM)row, (LPARAM)&cell))
+          {
+            /* The box of an ordinary row is blitted from two pictures made once on the list's own background; only a chosen or
+               hot row (whose color changes) has it drawn on the spot. (Drawing every box on the spot through the list's paint
+               surface gave black squares after the columns were resized.) */
+            int on = ListView_GetCheckState(hdr->hwndFrom, row) ? 1 : 0;
+            int y = (cell.top + cell.bottom - HDR_BOX) / 2;
+            COLORREF lbg = ListView_GetBkColor(hdr->hwndFrom);
+
+            if (lbg == CLR_NONE || lbg == CLR_INVALID) lbg = theme_is_dark() ? THEME_DARK_BG : GetSysColor(COLOR_WINDOW);
+            if (!(cd->nmcd.uItemState & (CDIS_SELECTED | CDIS_HOT)))
+            {
+              HDC src = CreateCompatibleDC(cd->nmcd.hdc);
+              HBITMAP strip = cheats_row_boxes(cd->nmcd.hdc, lbg);
+
+              if (src && strip)
+              {
+                HGDIOBJ old = SelectObject(src, strip);
+                BitBlt(cd->nmcd.hdc, cell.left + 7, y, HDR_BOX, HDR_BOX, src, on ? HDR_BOX : 0, 0, SRCCOPY);
+                SelectObject(src, old);
+              }
+              if (src) DeleteDC(src);
+            }
+            else
+            {
+              COLORREF bg = GetPixel(cd->nmcd.hdc, cell.left + 2, cell.top + 2);
+              if (bg == CLR_INVALID || bg == 0) bg = lbg;
+              theme_draw_tickbox(cd->nmcd.hdc, cell.left + 7, y, HDR_BOX, on, bg);
+            }
+          }
+        }
+        SetWindowLongPtr(dlg, DWLP_MSGRESULT, rv);
+        return TRUE;
+      }
+
+      if (hdr->idFrom == IDC_CHEATS_LIST && hdr->code == LVN_KEYDOWN && gui.cheats_enabled && ((NMLVKEYDOWN *)lp)->wVKey == VK_SPACE)
+      {
+        int sel = ListView_GetNextItem(hdr->hwndFrom, -1, LVNI_SELECTED);      /* the space bar ticks the selected cheat */
+        if (sel >= 0) ListView_SetCheckState(hdr->hwndFrom, sel, !ListView_GetCheckState(hdr->hwndFrom, sel));
+        return FALSE;
+      }
+
+      if (hdr->idFrom == IDC_CHEATS_LIST && hdr->code == NM_CLICK && gui.cheats_enabled)       /* a click on the drawn box */
+      {
+        NMITEMACTIVATE *ia = (NMITEMACTIVATE *)lp;
+        LVHITTESTINFO ht;
+
+        ZeroMemory(&ht, sizeof(ht));
+        ht.pt = ia->ptAction;
+        if (SendMessageA(hdr->hwndFrom, LVM_SUBITEMHITTEST, 0, (LPARAM)&ht) >= 0 && ht.iItem >= 0 && ht.iSubItem == 1)
+          ListView_SetCheckState(hdr->hwndFrom, ht.iItem, !ListView_GetCheckState(hdr->hwndFrom, ht.iItem));
+        return FALSE;
+      }
+
       /* With cheats switched off the list stays enabled (see
          cheats_update_enable_state), so it has to be kept inert here: refuse
          every change a click or key would make. Our own refills are exempt. */
+      if (hdr->idFrom == IDC_CHEATS_LIST && hdr->code == LVN_COLUMNCLICK)
+      {
+        cheats_sort_by(((NMLISTVIEW *)lp)->iSubItem);
+        cheats_fill_list(dlg, -1);
+        cheats_sort_arrows(GetDlgItem(dlg, IDC_CHEATS_LIST));
+        return TRUE;
+      }
+
       if (hdr->idFrom == IDC_CHEATS_LIST && hdr->code == LVN_ITEMCHANGING
           && !list_refilling && !gui.cheats_enabled)
       {
@@ -1851,13 +2397,32 @@ static INT_PTR CALLBACK cheats_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
               char path[GUI_PATH_LEN], msg[160];
               int n;
 
+              int merge = 0;
+
+              if (cheat_count)          /* the list has cheats: replace them with the file's, or put the file's among them */
+              {
+                HMENU menu = CreatePopupMenu();
+                RECT br;
+                int pick;
+
+                AppendMenuA(menu, MF_STRING, 1, "Load (Replace the List)");
+                AppendMenuA(menu, MF_STRING, 2, "Insert (Merge Into the List)");
+                if (theme_menus_owner()) theme_ownerdraw_menu(menu);
+                GetWindowRect(GetDlgItem(dlg, IDC_CHEATS_FILES), &br);
+                SendDlgItemMessage(dlg, IDC_CHEATS_FILES, CB_SETCURSEL, 0, 0);
+                pick = (int)gui_popup(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, br.left, br.bottom);
+                DestroyMenu(menu);
+                if (pick == 0) return TRUE;
+                merge = (pick == 2);
+              }
+              if (!merge) cheats_remove_all();
               wsprintfA(path, "%s\\%s", sim_dir, sim_files[k - 1]);
               n = cheats_import_file(path);
               cheats_fill_list(dlg, CHEATS_KEEP_SELECTION);
               if (n < 0) lstrcpynA(msg, "Couldn't open that file.", sizeof(msg));
               else if (n == 0) lstrcpynA(msg, "No cheats found in that file.", sizeof(msg));
               else wsprintfA(msg, "Loaded %d code%s from %s.", n, n == 1 ? "" : "s", sim_files[k - 1]);
-              SetDlgItemTextA(dlg, IDC_CHEATS_HINT, msg);
+              cheats_hint(dlg, msg);
               SendDlgItemMessage(dlg, IDC_CHEATS_FILES, CB_SETCURSEL, 0, 0);
             }
           }
@@ -1883,7 +2448,7 @@ static INT_PTR CALLBACK cheats_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           }
           else
           {
-            SetDlgItemTextA(dlg, IDC_CHEATS_HINT, "Select a code to remove it.");
+            cheats_hint(dlg, "Select a code to remove it.");
           }
           return TRUE;
         }
@@ -1905,11 +2470,11 @@ static INT_PTR CALLBACK cheats_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           int result;
 
           /* Always open in ./cheats (next to the exe). */
-          CreateDirectoryA(osd_path("cheats"), NULL);
-          lstrcpynA(cheat_dir, osd_path("cheats"), sizeof(cheat_dir));
+          CreateDirectoryA(osd_path("Cheats"), NULL);
+          lstrcpynA(cheat_dir, osd_path("Cheats"), sizeof(cheat_dir));
 
           if (!gui_pick_file(dlg, GUI_PICK_CHEAT, "Load Cheat File (RetroArch .cht format)",
-                             "RetroArch cheat files\0*.cht\0All files\0*.*\0\0",
+                             "RetroArch Cheat Files\0*.cht\0All Files\0*.*\0\0",
                              cheat_dir, file, sizeof(file)))
             return TRUE;
 
@@ -1918,19 +2483,35 @@ static INT_PTR CALLBACK cheats_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
           if (result < 0)
           {
-            SetDlgItemTextA(dlg, IDC_CHEATS_HINT, "Couldn't open that file.");
+            cheats_hint(dlg, "Couldn't open that file.");
           }
           else if (result == 0)
           {
-            SetDlgItemTextA(dlg, IDC_CHEATS_HINT,
+            cheats_hint(dlg,
                             "No cheats found -- expected RetroArch's cheatN_code format.");
           }
           else
           {
             char msg[96];
             wsprintfA(msg, "Loaded %d code%s from file.", result, result == 1 ? "" : "s");
-            SetDlgItemTextA(dlg, IDC_CHEATS_HINT, msg);
+            cheats_hint(dlg, msg);
           }
+          return TRUE;
+        }
+
+        case IDC_CHEATS_EXPORT:
+        {
+          char sug[GUI_PATH_LEN], file[GUI_PATH_LEN], msg[96];
+          int n;
+
+          if (!cheat_count) { cheats_hint(dlg, "Nothing to save: the list is empty."); return TRUE; }
+          CreateDirectoryA(osd_path("Cheats"), NULL);
+          gui_snprintf(sug, sizeof(sug), "%s\\%s.cht", osd_path("Cheats"), emu_rom_base() && emu_rom_base()[0] ? emu_rom_base() : "Cheats");
+          if (!gui_save_file(dlg, "Save Cheats As (RetroArch .cht format)", "RetroArch Cheat Files\0*.cht\0All Files\0*.*\0\0", "cht", sug, file, sizeof(file)))
+            return TRUE;
+          n = cheats_export_retroarch_cht(file);
+          if (n < 0) cheats_hint(dlg, "Couldn't write that file.");
+          else { gui_snprintf(msg, sizeof(msg), "Saved %d code%s.", n, n == 1 ? "" : "s"); cheats_hint(dlg, msg); }
           return TRUE;
         }
 
@@ -1989,17 +2570,23 @@ static uint16 cs_snap[0x80000], cs_prev[0x80000];
 static uint8 cs_ok[0x80000];
 static int   cs_wide;     /* 1 = two-byte values */
 static int   cs_size, cs_started, cs_count;
-static int   cs_region;   /* 0 = work RAM, 1 = Mega CD PRG-RAM, 2 = Mega CD Word RAM (2M or 1M mode) */
+static int   cs_region_kept;             /* the region chosen last time Cheat Search was open, and for which game: it comes back for the same game */
+static char  cs_region_game[GUI_PATH_LEN];
+static char  cs_scan_game[GUI_PATH_LEN]; /* the game the scan in progress belongs to: closing the window keeps the scan until the game stops */
+static int   cs_mode_kept;               /* the Compare choice and the Value typed, kept with it */
+static char  cs_value_kept[16];
+static int   cs_region;   /* 0 = work RAM, 1 = Mega CD PRG-RAM, 2 = Mega CD Word RAM (2M or 1M mode), 3 = the 32X SDRAM (the SH-2 processors' memory) */
 
 static int cs_md(void)
 {
-  return (system_hw & SYSTEM_PBC) == SYSTEM_MD;
+  return cheat_md();
 }
 
 static uint8 cs_read(uint32 a)
 {
   uint32 m;
-  const uint8 *base = cs_region == 1 ? scd.prg_ram : cs_region == 2 ? wordram_window(&m) : work_ram;
+  const uint8 *base = cs_region == 1 ? scd.prg_ram : cs_region == 2 ? wordram_window(&m) : cs_region == 3 ? pico_memory(2, NULL) : cheat_wram();
+  if (!base) return 0;
 #ifdef LSB_FIRST
   if (cs_md()) a ^= 1;   /* the 16-bit consoles' RAM is kept with every pair of bytes swapped */
 #endif
@@ -2017,13 +2604,14 @@ static unsigned cs_cur(uint32 a)
 /* Mega CD memory can be searched too, while a CD game runs (not a cartridge with the add-on). */
 static int cs_cd_memory(void)
 {
-  return system_hw == SYSTEM_MCD && !scd.cartridge.boot;
+  return cheat_mcd();
 }
 
 static void cs_addr_text(uint32 a, char *out, int len)
 {
   if (cs_region == 1) gui_snprintf(out, len, "%06X", (unsigned)(a & 0x7FFFF));
   else if (cs_region == 2) gui_snprintf(out, len, "%06X", (unsigned)(0x200000 + (a & 0x3FFFF)));
+  else if (cs_region == 3) gui_snprintf(out, len, "%08X", (unsigned)(0x06000000 + (a & 0x3FFFF)));
   else if (cs_md()) gui_snprintf(out, len, "FF%04X", (unsigned)(a & 0xFFFF));
   else gui_snprintf(out, len, "%04X", (unsigned)(0xC000 + (a & 0x1FFF)));
 }
@@ -2076,20 +2664,21 @@ static void cs_fill_list(void)
   InvalidateRect(list, NULL, TRUE);
 
   EnableWindow(GetDlgItem(cs_dlg, IDC_CS_SEARCH), cs_started && cs_count > 0);   /* nothing to narrow down yet */
-  /* Enter does the next step: Next Search once there is something to narrow down, else First Search. */
+  /* Enter does the next step: Next Scan once there is something to narrow down, else First Scan. */
   SendMessage(cs_dlg, DM_SETDEFID, (cs_started && cs_count > 0) ? IDC_CS_SEARCH : IDC_CS_NEW, 0);
-  if (!cs_started) cs_set_text("Click First Search to begin.");
-  else if (cs_count == 0) cs_set_text("Nothing found. Click First Search to start over.");
+  if (!cs_started) cs_set_text("Click First Scan to begin.");
+  else if (cs_count == 0) cs_set_text("Nothing found. Click First Scan to start over.");
   else if (cs_count <= CS_MAX_SHOWN) cs_set_text("%d address%s left.", cs_count, cs_count == 1 ? "" : "es");
-  else cs_set_text("%d addresses: click Next Search to narrow it down.", cs_count);
+  else cs_set_text("%d addresses: click Next Scan to narrow it down.", cs_count);
 }
 
 static void cs_new(void)
 {
   int a;
 
-  if (!cs_cd_memory()) cs_region = 0;
-  cs_size = cs_region == 1 ? 0x80000 : cs_region == 2 ? (cheats_wordram_1m() ? 0x20000 : 0x40000) : cs_md() ? 0x10000 : 0x2000;
+  if ((cs_region == 1 || cs_region == 2) && !cs_cd_memory()) cs_region = 0;
+  if (cs_region == 3 && !pico_active()) cs_region = 0;
+  cs_size = cs_region == 3 ? 0x40000 : cs_region == 1 ? 0x80000 : cs_region == 2 ? (cheats_wordram_1m() ? 0x20000 : 0x40000) : cs_md() ? 0x10000 : 0x2000;
   cs_count = 0;
   for (a = 0; a < cs_size; a++)
   {
@@ -2099,6 +2688,7 @@ static void cs_new(void)
     cs_count += cs_ok[a];
   }
   cs_started = 1;
+  lstrcpynA(cs_scan_game, emu_rom_path(), sizeof(cs_scan_game));
   cs_fill_list();
 }
 
@@ -2108,7 +2698,7 @@ static void cs_search(void)
   char buf[16];
   int val = 0;
 
-  if (!cs_started) { cs_set_text("Click First Search first."); return; }
+  if (!cs_started) { cs_set_text("Click First Scan first."); return; }
   if (mode == 0)
   {
     GetDlgItemTextA(cs_dlg, IDC_CS_VALUE, buf, sizeof(buf));
@@ -2212,17 +2802,17 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
       HWND list = GetDlgItem(dlg, IDC_CS_LIST);
       LVCOLUMNA col;
       RECT rc;
-      static const char *const modes[] = { "Equal to value", "Changed", "Unchanged", "Increased", "Decreased" };
-      static const char *const regions[] = { "Work RAM", "Mega CD PRG-RAM", "Mega CD Word RAM" };
-      static const char *const sizes[] = { "1 byte", "2 bytes" };
+      static const char *const modes[] = { "Equal to Value", "Changed", "Unchanged", "Increased", "Decreased" };
+      static const char *const regions[] = { "Work RAM", "Mega CD PRG-RAM", "Mega CD Word RAM", "32X SDRAM (SH-2)" };
+      static const char *const sizes[] = { "1 Byte", "2 Bytes" };
       static const GuiTip tips[] =
       {
-        { IDC_CS_REGION, "Memory:", "Which memory to search. Work RAM is where most games keep lives, health and score; a Mega CD game can also use the CD's own memory. Word RAM is searched in whichever mode the game has it (in its 1M mode only the half the main CPU has at that moment is seen). Changing it starts a new search." },
+        { IDC_CS_REGION, "Memory:", "Which memory to search. Work RAM is where most games keep lives, health and score; a Mega CD game can also use the CD's own memory, and a 32X game its SDRAM (the memory of the two SH-2 processors, codes 06aaaaaa:dd). Word RAM is searched in whichever mode the game has it (in its 1M mode only the half the main CPU has at that moment is seen). Changing it starts a new search." },
         { IDC_CS_SIZE, "Size:", "How big the value is: 1 byte (0 to 255: lives, ammo) or 2 bytes (0 to 65535: score, money). A 2-byte value is saved as two cheats. Changing it starts a new search." },
         { IDC_CS_MODE, "Compare:", "How to compare each remaining address with the last time you searched." },
-        { IDC_CS_VALUE, "Value:", "For \"Equal to value\": the number the game shows now (lives, ammo ...)." },
+        { IDC_CS_VALUE, "Value:", "For \"Equal to Value\": the number the game shows now (lives, ammo ...)." },
         { IDC_CS_NEW, NULL, "Start over: remember the memory as it is now (do this first)." },
-        { IDC_CS_SEARCH, NULL, "Keep only the addresses that match; repeat until a few are left. Available after a First Search." },
+        { IDC_CS_SEARCH, NULL, "Keep only the addresses that match; repeat until a few are left. Available after a First Scan." },
         { IDC_CS_LIST, NULL, "The addresses left. The value is what is there now." },
         { IDC_CS_NAME, "Name:", "A name for the cheat." },
         { IDC_CS_SETVAL, "Set to:", "The value the cheat keeps the address at (0 to 255, or up to 65535 with Size 2 bytes)." },
@@ -2234,18 +2824,23 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
       cs_dlg = dlg;
       theme_apply_to_window(dlg);
       SetDlgItemTextA(dlg, IDC_CS_HELP,
-        "Finds where a value (lives, health, ammo, or with Size 2 bytes a score) is kept. 1. First Search. 2. Change it in the game "
-        "(lose a life ...). 3. Choose Compare (and Value), click Next Search; repeat until a few addresses are left. "
+        "Finds where a value (lives, health, ammo, or with Size 2 bytes a score) is kept. 1. First Scan. 2. Change it in the game "
+        "(lose a life ...). 3. Choose Compare (and Value), click Next Scan; repeat until a few addresses are left. "
         "4. Select one, type the value to hold in Set to, Add Cheat.");
       for (i = 0; i < 2; i++) SendDlgItemMessageA(dlg, IDC_CS_SIZE, CB_ADDSTRING, 0, (LPARAM)sizes[i]);
-      cs_wide = 0;
-      SendDlgItemMessage(dlg, IDC_CS_SIZE, CB_SETCURSEL, 0, 0);
+      if (cs_started && lstrcmpiA(cs_scan_game, emu_rom_path())) cs_started = 0;       /* a scan of another game is gone */
+      if (!cs_started) cs_wide = 0;
+      SendDlgItemMessage(dlg, IDC_CS_SIZE, CB_SETCURSEL, (WPARAM)cs_wide, 0);
       for (i = 0; i < 5; i++) SendDlgItemMessageA(dlg, IDC_CS_MODE, CB_ADDSTRING, 0, (LPARAM)modes[i]);
-      for (i = 0; i < 3; i++) SendDlgItemMessageA(dlg, IDC_CS_REGION, CB_ADDSTRING, 0, (LPARAM)regions[i]);
-      cs_region = 0;
-      SendDlgItemMessage(dlg, IDC_CS_REGION, CB_SETCURSEL, 0, 0);
-      EnableWindow(GetDlgItem(dlg, IDC_CS_REGION), cs_cd_memory());
-      SendDlgItemMessage(dlg, IDC_CS_MODE, CB_SETCURSEL, 0, 0);
+      for (i = 0; i < 4; i++) SendDlgItemMessageA(dlg, IDC_CS_REGION, CB_ADDSTRING, 0, (LPARAM)regions[i]);
+      cs_region = (cs_region_kept > 0 && !lstrcmpiA(cs_region_game, emu_rom_path())) ? cs_region_kept : 0;
+      if ((cs_region == 1 || cs_region == 2) && !cs_cd_memory()) cs_region = 0;
+      if (cs_region == 3 && !pico_active()) cs_region = 0;
+      SendDlgItemMessage(dlg, IDC_CS_REGION, CB_SETCURSEL, (WPARAM)cs_region, 0);
+      EnableWindow(GetDlgItem(dlg, IDC_CS_REGION), TRUE);              /* (a memory the game does not have falls back to the work RAM) */
+      EnableWindow(GetDlgItem(dlg, IDC_CS_REGION_LABEL), TRUE);
+      SendDlgItemMessage(dlg, IDC_CS_MODE, CB_SETCURSEL, (WPARAM)(cs_started ? cs_mode_kept : 0), 0);
+      if (cs_started) SetDlgItemTextA(dlg, IDC_CS_VALUE, cs_value_kept);
       SendMessage(list, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_FULLROWSELECT, LVS_EX_FULLROWSELECT);
       GetClientRect(list, &rc);
       ZeroMemory(&col, sizeof(col));
@@ -2256,13 +2851,13 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
       SendMessageA(list, LVM_INSERTCOLUMNA, 1, (LPARAM)&col);
       col.pszText = "Before";  col.cx = (rc.right - rc.left) * 30 / 100;
       SendMessageA(list, LVM_INSERTCOLUMNA, 2, (LPARAM)&col);
+      gui_list_header_menu(list);
       theme_apply_to_window(dlg);
       {
         HWND header = ListView_GetHeader(list);
         if (header && theme_is_dark()) { SetWindowTheme(header, L"ItemsView", NULL); InvalidateRect(header, NULL, TRUE); }
       }
       gui_dialog_tips(dlg, tips, (int)(sizeof(tips) / sizeof(tips[0])));
-      cs_started = 0;
       cs_fill_list();
       return TRUE;
     }
@@ -2318,7 +2913,12 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
           if (HIWORD(wp) == CBN_SELCHANGE)
           {
             cs_region = (int)SendDlgItemMessage(dlg, IDC_CS_REGION, CB_GETCURSEL, 0, 0);
-            if (cs_region < 0 || cs_region > 2) cs_region = 0;
+            if (cs_region < 0 || cs_region > 3) cs_region = 0;
+            if ((cs_region == 1 || cs_region == 2) && !cs_cd_memory()) cs_region = 0;       /* (the Mega CD memories are for a Sega CD game, the SDRAM for a 32X game) */
+            if (cs_region == 3 && !pico_active()) cs_region = 0;
+            SendDlgItemMessage(dlg, IDC_CS_REGION, CB_SETCURSEL, (WPARAM)cs_region, 0);
+            cs_region_kept = cs_region;
+            lstrcpynA(cs_region_game, emu_rom_path(), sizeof(cs_region_game));
             cs_started = 0;          /* a different memory: a new search */
             cs_fill_list();
           }
@@ -2346,8 +2946,10 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
       return TRUE;
 
     case WM_DESTROY:
-      cs_dlg = NULL;
-      cs_started = 0;
+      cs_mode_kept = (int)SendDlgItemMessage(dlg, IDC_CS_MODE, CB_GETCURSEL, 0, 0);
+      if (cs_mode_kept < 0) cs_mode_kept = 0;
+      GetDlgItemTextA(dlg, IDC_CS_VALUE, cs_value_kept, sizeof(cs_value_kept));
+      cs_dlg = NULL;                        /* (the scan stays: see cheat_search_close) */
       return FALSE;
   }
 
@@ -2371,18 +2973,20 @@ int cheat_search_message(MSG *msg)
   return cs_dlg && IsDialogMessage(cs_dlg, msg);
 }
 
+/* The game stops: the window closes and the scan is gone (closing the window alone keeps it). */
 void cheat_search_close(void)
 {
+  cs_started = 0;
   if (cs_dlg) DestroyWindow(cs_dlg);
 }
 
 /* The game was reset or a state was loaded: what the search remembered no longer fits. */
 void cheat_search_invalidate(void)
 {
-  if (!cs_dlg) return;
   cs_started = 0;
+  if (!cs_dlg) return;
   cs_fill_list();
-  cs_set_text("The game was reset or a state was loaded: click First Search to start again.");
+  cs_set_text("The game was reset or a state was loaded: click First Scan to start again.");
 }
 
 /* While a modal window (Settings, Controls ...) is open the search window is switched off too, so
