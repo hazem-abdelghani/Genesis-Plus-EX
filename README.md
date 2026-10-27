@@ -1,4 +1,4 @@
-![Genesis Plus EX](images/Genesis-Plus-EX-Logo.png)
+![Genesis Plus EX](win32/images/Genesis-Plus-EX-Logo.png)
 
 # Genesis Plus EX
 
@@ -65,13 +65,13 @@ Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx) by Eke-Eke
 
 | | |
 |---|---|
-| ![Grid view with cover art, dark theme](images/screenshots/grid-dark.png) | ![Game list, light theme](images/screenshots/gamelist-light.png) |
+| ![Grid view with cover art, dark theme](win32/images/screenshots/grid-dark.png) | ![Game list, light theme](win32/images/screenshots/gamelist-light.png) |
 | Grid view with cover art (dark theme, Modern style) | Game list (light theme) |
-| ![A 32X game](images/screenshots/32x.png) | ![CRT shader](images/screenshots/crt-shader.png) |
+| ![A 32X game](win32/images/screenshots/32x.png) | ![CRT shader](win32/images/screenshots/crt-shader.png) |
 | A 32X game (Knuckles' Chaotix, run by PicoDrive) | CRT look |
-| ![Mega Bezel shader with a bezel](images/screenshots/mega-bezel-shader%2Bbezel.png) | ![xBRZ filter with Smooth Scaling](images/screenshots/xbrz-filter-smooth-scaling.png) |
+| ![Mega Bezel shader with a bezel](win32/images/screenshots/mega-bezel-shader%2Bbezel.png) | ![xBRZ filter with Smooth Scaling](win32/images/screenshots/xbrz-filter-smooth-scaling.png) |
 | Mega Bezel shader with a bezel | xBRZ filter + Smooth Scaling |
-| ![Settings, Modern style](images/screenshots/modern-general-settings.png) | ![Controls window](images/screenshots/controls.png) |
+| ![Settings, Modern style](win32/images/screenshots/modern-general-settings.png) | ![Controls window](win32/images/screenshots/controls.png) |
 | Settings (Modern style, dark theme) | Controls window |
 
 ---
@@ -650,11 +650,11 @@ The same terms as Genesis Plus GX: the source must accompany modified
 redistributions, and the program may not be sold or used commercially. See
 `LICENSE.txt` in the repository root.
 
-The xBR and HQx render filters (`xbr/`, by Hyllian, Maxim Stepin, Cameron Zemek and Treeki) are under the GNU Lesser General Public License 2.1 or later; see `xbr/README-libxbr.txt`.
+The xBR and HQx render filters (`win32/xbr/`, by Hyllian, Maxim Stepin, Cameron Zemek and Treeki) are under the GNU Lesser General Public License 2.1 or later; see `win32/xbr/README-libxbr.txt`.
 
 ScaleFX 3x (`filters.c`) is a port of Sp00kyFox's ScaleFX shader passes (MIT license, Copyright (c) 2016 Sp00kyFox), and CRT Geom 3x / 4x a port of the CRT-Geom shader by cgwg, Themaister and DOLLS (GPL 2 or later).
 
-PicoDrive (`picodrive/`, by Dave, notaz, irixxxx and others; the 32X emulator) has terms of the same kind: it may not be
+PicoDrive (`win32/picodrive/`, by Dave, notaz, irixxxx and others; the 32X emulator) has terms of the same kind: it may not be
 sold or used commercially, and the source must come with modified versions. Its `COPYING` file is in that folder.
 
 Other libraries used:
