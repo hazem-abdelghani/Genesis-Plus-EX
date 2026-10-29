@@ -255,7 +255,7 @@ static LRESULT CALLBACK statusbar_subclass_proc(HWND hwnd, UINT msg, WPARAM wp, 
 /* A ListView's column-header row is a child window, and it sends its
    custom-draw notifications to ITS parent -- the ListView itself. The ListView
    does not pass them on to its own parent, so the WM_NOTIFY handlers in the
-   main window and in dialogs never see them and could not recolour the header
+   main window and in dialogs never see them and could not recolor the header
    text. Subclassing the ListView is what lets us receive them where they
    actually arrive; the color itself is still set by theme_header_customdraw(). */
 static LRESULT CALLBACK listview_header_subclass_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
@@ -511,7 +511,7 @@ static BOOL CALLBACK apply_to_child(HWND hwnd, LPARAM lparam)
     ListView_SetTextColor(hwnd, dark ? THEME_DARK_TEXT : RGB(0, 0, 0));
     ListView_SetTextBkColor(hwnd, dark ? bg_color : RGB(255, 255, 255));
 
-    /* So this list's header text can be recoloured; see the note above. */
+    /* So this list's header text can be recolored; see the note above. */
     SetWindowSubclass(hwnd, listview_header_subclass_proc, 2, 0);
 
     /* Same reasoning and technique as the header's own redraw above --
@@ -601,24 +601,8 @@ static BOOL CALLBACK fit_check_width(HWND c, LPARAM lp)
     return TRUE;
   }
 
-  {
-    typedef UINT (WINAPI *GetDpiForWindow_t)(HWND);
-    typedef int  (WINAPI *GetSystemMetricsForDpi_t)(int, UINT);
-    static GetDpiForWindow_t get_dpi;
-    static GetSystemMetricsForDpi_t metrics_dpi;
-    static int resolved;
-    int glyph = GetSystemMetrics(SM_CXMENUCHECK);
-
-    if (!resolved)
-    {
-      HMODULE u = GetModuleHandleA("user32.dll");
-      get_dpi = (GetDpiForWindow_t)GetProcAddress(u, "GetDpiForWindow");
-      metrics_dpi = (GetSystemMetricsForDpi_t)GetProcAddress(u, "GetSystemMetricsForDpi");
-      resolved = 1;
-    }
-    if (get_dpi && metrics_dpi) glyph = metrics_dpi(SM_CXMENUCHECK, get_dpi(c));   /* this window's monitor, not the system's */
-    w = (tr.right - tr.left) + glyph + 10;
-  }
+  /* Classic: the same box and gap the check box is drawn with (see mod_paint_check), so the words are never cut short. */
+  w = MulDiv(16 + 8, dpi > 0 ? dpi : 96, 96) + (tr.right - tr.left) + MulDiv(8, dpi > 0 ? dpi : 96, 96);
   GetWindowRect(c, &rc);
   if (w >= rc.right - rc.left) return TRUE;
   parent = GetParent(c);
@@ -696,6 +680,7 @@ HFONT theme_style_font(HFONT base)
   lf.lfCharSet = DEFAULT_CHARSET;
   lstrcpynA(lf.lfFaceName, modern_face(), LF_FACESIZE);
   lf.lfHeight = modern_size(lf.lfHeight);
+  lf.lfWidth = 0;                                          /* (a width kept from the font it came from would squeeze the letters) */
   f = CreateFontIndirectA(&lf);
   if (!f) return base;
   style_cache[style_cache_n].height = base_h;                    /* (the table is looked up by the height of the font it was made from) */
@@ -1094,6 +1079,7 @@ static LRESULT CALLBACK modern_button_proc(HWND h, UINT m, WPARAM w, LPARAM l, U
     case WM_KILLFOCUS:
     case WM_ENABLE:
     case WM_SETTEXT:
+    case WM_UPDATEUISTATE:                  /* Alt shows the underline of a &: the system draws it itself, off its own place, until this repaint covers it */
     case BM_SETCHECK:
     case BM_SETSTATE:
     case WM_LBUTTONUP:
@@ -1464,6 +1450,7 @@ static void apply_frame_style(HWND hwnd, int dark)
   if (hwnd == g_hwnd && gui.fullscreen)
   {
     corner = 1;                                                          /* DWMWCP_DONOTROUND: the picture fills the whole screen */
+    border = 0xFFFFFFFEu;                                                /* no frame line round it in either style */
   }
   DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
   DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &caption, sizeof(caption));
@@ -2833,7 +2820,7 @@ typedef struct { const char *title; unsigned short glyph; } menu_icon_title;
 
 static const menu_icon_id menu_icon_ids[] =
 {
-  { IDM_FILE_OPEN, 0xE8E5 }, { IDM_FILE_BROWSER, 0xE838 }, { IDM_EMU_INSERTDISC, 0xE710 }, { IDM_FILE_CLOSE, 0xE711 },
+  { IDM_FILE_OPEN, 0xE8E5 }, { IDM_FILE_BROWSER, 0xE838 }, { IDM_EMU_INSERTDISC, 0xE710 },
   { IDM_FILE_ROMINFO, 0xE946 }, { IDM_FILE_APPLYPATCH, 0xE90F }, { IDM_FILE_OPENDIR, 0xE8B7 }, { IDM_FILE_EXIT, 0xE7E8 },
   { IDM_EMU_PAUSE, 0xE769 }, { IDM_EMU_STOP, 0xE71A }, { IDM_EMU_RESET, MENU_ICON_TOOLBAR_RESET }, { IDM_EMU_HARDRESET, 0xE7E8 },
   { IDM_FILE_LOADSTATE, 0xE896 }, { IDM_FILE_LOADSTATEFILE, 0xE838 }, { IDM_EMU_UNDOLOAD, 0xE7A7 },
@@ -2850,7 +2837,7 @@ static const menu_icon_id menu_icon_ids[] =
   { IDM_FILE_SCREENSHOT, 0xE722 },
   { IDM_OPTIONS_SETTINGS, 0xE713 },
   { IDM_VIDEO_FULLSCREEN_START, 0xE92D }, { IDM_VIDEO_PICTUREADJ, 0xE790 }, { IDM_INPUT_BACKGROUND, 0xE80C }, { IDM_EMU_PAUSE_UNFOCUSED, 0xF2D9 }, { IDM_EMU_AUTOSAVE, 0xF470 }, { IDM_VIDEO_ALWAYS_ON_TOP, 0xE718 }, { IDM_VIDEO_VSYNC, 0xEABB },
-  { IDM_HELP_SHORTCUTS, 0xE765 }, { IDM_HELP_MENUGUIDE, 0xE897 }, { IDM_HELP_ABOUT, 0xE946 },
+  { IDM_HELP_SHORTCUTS, 0xE765 }, { IDM_HELP_USERGUIDE, 0xE897 }, { IDM_HELP_ABOUT, 0xE946 },
 };
 
 static const menu_icon_title menu_icon_titles[] =

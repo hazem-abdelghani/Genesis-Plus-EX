@@ -13,7 +13,7 @@
 #define APP_NAME    "Genesis Plus EX"
 #define APP_NAME_W  L"Genesis Plus EX"
 #define APP_CLASS   "GenesisPlusEXWindow"
-#define APP_VERSION "3.0.0"
+#define APP_VERSION "3.0.3"
 #ifdef _WIN64
 #define APP_BITS    "64-bit"
 #else
@@ -220,6 +220,7 @@ extern int  gui_input_load_slot_shortcut(void);
 extern void        gui_input_refresh_joysticks(void);
 extern int         gui_input_joystick_count(void);
 extern const char *gui_input_joystick_name(int index);      /* 0-based DI index */
+extern void        gui_input_default_buttons(int device, int *button);   /* the pad buttons a mapping starts with on that device (PAD_KEYS values) */
 
 /* Best current device index for a mapping saved/opened with this device
    value and (if it was a DirectInput one) this product name: re-matches by
@@ -409,7 +410,7 @@ extern void dlg_input(HWND parent, int player);
 extern void dlg_audio(HWND parent);
 extern void dlg_picture_adjust(HWND parent);       /* Video > Picture Adjustments... */
 extern void dlg_shortcuts(HWND parent);
-extern void dlg_menu_guide(HWND parent);
+extern void dlg_user_guide(HWND parent);
 extern HMENU gui_main_menu(void);
 extern int  gui_shader_available(void);          /* librashader + Direct3D 11 present (says what is missing) */
 extern int  gui_set_shader(const char *path);    /* a .slangp preset, or NULL / "" for none */

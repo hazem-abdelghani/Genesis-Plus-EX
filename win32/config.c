@@ -936,6 +936,17 @@ void config_load(void)
     }
     gui.pad[player].turbo = (unsigned)ini_get(section, "turbo", (int)gui.pad[player].turbo) & 0x3F0u;
 
+    /* A joystick picked while the buttons were still XInput's own defaults: those masks land the D-pad on the joystick's face
+       buttons. They were never customized, so they move to the joystick's own layout. */
+    if (gui.pad[player].device >= GUI_INPUT_XPAD_COUNT && gui.pad[player].device - GUI_INPUT_XPAD_COUNT < gui_input_joystick_count())      /* (one that is plugged in now) */
+    {
+      int xdef[PAD_KEYS], ddef[PAD_KEYS];
+
+      gui_input_default_buttons(-1, xdef);
+      gui_input_default_buttons(gui.pad[player].device, ddef);
+      if (!memcmp(gui.pad[player].button, xdef, sizeof(xdef))) memcpy(gui.pad[player].button, ddef, sizeof(ddef));
+    }
+
     /* Player 1's keyboard defaults changed (A S D / Q W E  ->  Z X C / A S D).
        A saved config that still holds exactly the old defaults was never
        customized, so move it to the new layout; anything else is left alone. */

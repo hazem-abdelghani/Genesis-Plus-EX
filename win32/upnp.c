@@ -373,5 +373,4 @@ void upnp_close(void)
 }
 
 int upnp_state(void) { return (int)up.state; }
-const char *upnp_external_ip(void) { return up.ext_ip; }
 const char *upnp_message(void) { return up.msg; }

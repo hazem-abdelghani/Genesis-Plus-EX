@@ -1,9 +1,9 @@
-Genesis Plus EX v3.0.0
+Genesis Plus EX v3.0.3
 ===================
 
 Genesis Plus EX is a Windows emulator based on Genesis Plus GX (32X games run in PicoDrive).
-Sega Mega Drive / Genesis, Master System, Game Gear, SG-1000, Mega CD
-Pico and 32X emulator.
+It plays Sega Mega Drive / Genesis, Master System, Game Gear, SG-1000, Mega CD,
+Pico and 32X games.
 
   Genesis Plus EX:     https://github.com/hazem-abdelghani/genesis-plus-ex
   Genesis Plus GX:  https://github.com/ekeeke/Genesis-Plus-GX
@@ -64,7 +64,7 @@ Above the list (and above the game, in a window) is the toolbar:
 
 Play needs a game picked in the list; Pause, Stop, Reset, Fullscreen and
 Screenshot act on the running game. The toolbar goes away in fullscreen
-(View > Toolbar in Fullscreen slides it in at the top edge).
+(View > Toolbars > Toolbar in Fullscreen slides it in at the top edge).
 
   Search bar    Narrows the list as you type. Ctrl+F shows or hides it.
   Filter bar    Narrow the list by console, genre and region (read from tags
@@ -72,8 +72,8 @@ Screenshot act on the running game. The toolbar goes away in fullscreen
                 what you picked is remembered for the next run.
   Columns       Name, Console, Favorite (a star: click it), Genre, Region,
                 File Size and File Type (the last four hidden at first). Right-
-                click the column header, View > List Columns, or Settings >
-                Library. Click a title to sort.
+                click the column header or use View > Game List > List Columns. Click a title
+                to sort.
   View mode     View > View Mode: list or grid with cover art. The grid
                 size runs from Tiny to Extra Large (Ctrl + mouse wheel);
                 shape, corners, captions and card frame are in Settings.
@@ -82,13 +82,13 @@ Screenshot act on the running game. The toolbar goes away in fullscreen
                 and excludes some from the scan.
   A-Z strip     Jump to a letter; Group by Console groups the list.
   Favorites     Click a star (or right-click > Add to Favorites). The star
-                on the toolbar, or View > Show Favorites Only, shows only them.
-  Recent        View > Show Recently Played puts the last few games you
+                on the toolbar, or View > Game List > Show Favorites Only, shows only them.
+  Recent        View > Game List > Show Recently Played puts the last few games you
                 opened in a group at the top of the list. Right-click a
                 game > Clear Recently Played empties it.
-  Names         View > Clean Game Names hides the (...) and [...] tags and
+  Names         View > Game List > Clean Game Names hides the (...) and [...] tags and
                 the extension in the list and in File > Recent Files.
-  Lines         Thin lines separate the columns; View > Show Grid Lines
+  Lines         Thin lines separate the columns; View > Game List > Show Grid Lines
                 adds lines between the rows.
   Scanning      The ROM directory and the folders inside it are searched
                 (Settings > General > Scan ROM Subfolders). Archives with
@@ -119,17 +119,19 @@ PLAYING
                 choose Emulation > Rewind). The history is 128-768 MB and
                 Rewind Speed is Slow, Normal, Fast or Very Fast.
   Backups       Backup State saves quietly every 1-10 minutes into three
-                rolling backups (Load State > Load Backup State).
+                rolling backups (Emulation > Load State > Load Backup State).
   Sound         Audio > Mute (Ctrl+M), Mute FM (Ctrl+N), Mute PSG (Ctrl+B).
-                Output: waveOut, XAudio2, WASAPI shared (default) or
-                exclusive. Also Stereo Width, Bass Boost, Overdrive,
+                Output: Windows Classic, XAudio2, WASAPI (Shared, the
+                default) or WASAPI (Exclusive). Also Stereo Width, Bass Boost, Overdrive,
                 Console Model and Levels and Latency.
   Looks         View > Theme (System, Light, Dark), Style (Classic or
-                Modern: flat rounded controls and a themed title bar) and
-                Accent Color, and Colorful Icons (Settings > General:
-                menu icons, toolbar and favorite star in color; off by default).
-  Picture       Video > Visual Effects (Smooth Scaling, Integer Scaling,
-                Brighten, LCD Ghosting), Scanlines, NTSC Filter, Aspect Ratio.
+                Modern: flat rounded controls and a themed title bar); in
+                Settings > General: Accent Color and Colorful Icons (menu
+                icons, toolbar and favorite star in color; off by default).
+  Picture       Video > Render Filter, Shaders, Visual Effects (Smooth
+                Scaling, Integer Scaling, Brighten, LCD Ghosting), Picture
+                Adjustments (Contrast, Saturation, Gamma, Hue), Scanlines,
+                NTSC Filter and Aspect Ratio.
   ROM info      File > ROM Information shows the game, its header, controllers,
                 save RAM and CRC32 (also for a game picked in the list). Copy,
                 or right-click a row, puts it on the clipboard.
@@ -172,7 +174,7 @@ Cheats and Cheat Search work on the Mega Drive half of a 32X game (cartridge ROM
 68000 work RAM; not the memory of the two SH-2 processors), and so does Rewind (its history
 holds fewer seconds than for a Mega Drive game). Input recording, Region, Low-Pass Filter,
 Mute FM, Mute PSG and LCD Ghosting work too, and so do VGM recording (FM, PSG and 32X PWM;
-the PWM part plays in libvgm-based players only, unless Settings > Options > 32X: Also Record PWM as DAC is on) and netplay (both PCs start the game again
+the PWM part plays in libvgm-based players only) and netplay (both PCs start the game again
 from power-on and compare a fingerprint of the machine; it needs the same game file and program
 version). FM Chip (the YM3438 kinds play as a YM3438, the others as a YM2612), Console Model, High-Quality FM, the
 3-Band EQ, the Sample Rate and the FM and PSG levels of Levels and Latency work too (its CD audio and PCM levels are grayed out). Not available for 32X games: the
@@ -183,18 +185,18 @@ The NTSC Filter works for 32X games as the program's own version of the look (th
 SETTINGS
 --------
 Options > Settings (or the gear on the toolbar) holds every option of the
-menus on tabs: General, View, Video, Picture, OSD, Audio, Input and Options. A change takes
+menus on tabs: General, Video, Audio, Input, Options and OSD. A change takes
 effect at once, exactly as if you had used the menu. Windows with their own
-settings (Levels and Latency, Advanced Audio, Controls...) open from a
+settings (Levels and Latency, Picture Adjustments, Controls...) open from a
 button and Settings stays open underneath.
 
 The Video tab also has the shader switch (64-bit only): tick Enable Shader,
 pick a .slangp preset with the ... button.
 
-New in Settings: Real Console Pixel Shape (Aspect Ratio), Limit Redraws and Hide Mouse Pointer (Video); Bass Boost, Even Out
-Loudness (Audio); Pause When the Pad Disconnects (Input); Backup State
-(a rolling state backup, restored with Load State > Load Backup State), Skip
-Intro on Launch and Write a Log File (Options). Changing a hotkey to one that is
+New in Settings: Limit Redraws (Video); Bass Boost, Even Out Loudness
+(Audio); Pause When the Pad Disconnects and Hide Mouse Pointer (Input); Backup
+State (a rolling state backup, restored with Emulation > Load State > Load Backup State),
+Skip Intro on Launch and Enable Log (Options). Changing a hotkey to one that is
 already used asks whether to swap the two.
 
 Also: a taskbar progress bar while rewinding, fast forwarding or recording, a
@@ -202,7 +204,7 @@ live Level meter in Audio > Levels and Latency. Sound now follows the game speed
 letter in the game list jumps to that game, and a round up-arrow button
 returns to the first row once the list is scrolled down.
 
-Moved: Port A / B devices are on the Advanced tab of Input > Controls; Input
+Moved: Port A / B devices are on the Extras tab of Input > Controls; Input
 Recording and VGM logging are in Tools > Record; the rarely used options below
 Console (Lock-On, BIOS, address errors, Game Gear / Master System screens) and
 Screenshot Output are in Settings only. Slow Motion is gone (use Game Speed).
@@ -215,7 +217,7 @@ boxes centered over the program window, and Reset Window Size centers the
 window.
 
 Netplay: a start check right after the reset, automatic return after a lost
-connection (up to a minute), and an "Open the port on my router (UPnP)" tick
+connection (up to a minute), and an "Open the Port on My Router Automatically (UPnP)" tick
 in the Host box (off until you tick it).
 
 
@@ -227,19 +229,21 @@ CONTROLS (PLAYER 1 DEFAULTS)
   Enter             Start
   Right Shift       Mode
 
-A connected gamepad works with no setup. Change everything under
+A connected gamepad works with no setup (Xbox pads; PlayStation and Nintendo
+pads and other joysticks start in a layout that fits them once picked in the
+Input Devices list). Change everything under
 Input > Controls: click a button, then press the key or pad button you want
 (the right stick can be assigned too; right-click A, B, C, X, Y or Z to turn
 Turbo on). The window tells you when a key or button was already used.
 
-Controls window: tabs Player 1, Player 2 and Advanced. One press works for
+Controls window: tabs Player 1, Player 2 and Extras. One press works for
 keyboard and gamepad, Esc or right click cancels, Auto Assign goes through
-all buttons, and Turbo Rate and Deadzone are beside them. The Advanced tab
+all buttons, and Turbo Rate and Deadzone are beside them. The Extras tab
 chooses what is in each port (Control Pad, Mouse, Light Phaser, Menacer,
 Justifier, XE-1AP, Activator, Paddle Control, Sports Pad, Graphic Board,
 Team Player, EA 4-Way Play, Master Tap, Smash Controller).
 
-Combo buttons (Advanced tab, up to 12): one key or pad button presses
+Combo buttons (Extras tab, up to 12): one key or pad button presses
 several game buttons. Pick a row, choose the Trigger, then click the game
 buttons to add. Hold keeps a button down for 0.25-10 s (or until you press
 it) and Pause waits before the next one, e.g. Gamepad Y -> Down (Hold
@@ -258,7 +262,6 @@ KEYBOARD SHORTCUTS
   F1                      Keyboard shortcuts
   Ctrl+O                  Open a ROM
   Ctrl+R                  ROM Directory
-  Ctrl+W                  Close the ROM
   F2 / Pause              Pause and resume
   F3                      Stop the ROM
   F4 / Ctrl+F4            Reset / hard reset
@@ -274,6 +277,8 @@ KEYBOARD SHORTCUTS
   Ctrl+F                  Show / hide the search bar
   Alt+Enter / Esc         Toggle fullscreen
   Ctrl+M / Ctrl+N / Ctrl+B  Mute / mute FM / mute PSG
+  Ctrl+P                  Mute PWM (32X games)
+  Ctrl+T                  Show / hide the frame rate
   Ctrl+C                  Cheats
   Shift+F11               Record video + audio (start / stop)
   Shift+F10               Record a VGM file (start; Alt+F11 stops)
@@ -295,7 +300,7 @@ start the program with the game as its argument:
 
   -f, --fullscreen      start the game in fullscreen
   -w, --windowed        start the game in a window
-  -x, --exit-on-close   quit when the game is closed (Stop, Close ROM), so
+  -x, --exit-on-close   quit when the game is closed (Stop), so
                         the frontend gets control back
   -s N, --state N       load save state slot N (0-9) once the game has started
   --state-file FILE     load a state file once the game has started

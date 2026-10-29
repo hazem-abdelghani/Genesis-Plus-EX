@@ -483,7 +483,7 @@ static void classify_region(const char *name, char *out, int out_len)
     /* Short form: one to three letters, each a region. */
     if (n <= 3)
     {
-      char text[40] = "";
+      char text[48] = "";   /* (all six names with their separators are 40 characters) */
       for (i = 0; i < n; i++)
       {
         const char *w = NULL;
@@ -3315,7 +3315,7 @@ static LRESULT CALLBACK az_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (!big || big_h != h)
             {
               if (big) DeleteObject(big);
-              lf.lfHeight = h; lf.lfWeight = FW_BOLD;
+              lf.lfHeight = h; lf.lfWeight = FW_BOLD; lf.lfWidth = 0;
               big = CreateFontIndirectA(&lf);
               big_h = h;
             }
@@ -3794,6 +3794,7 @@ static LRESULT heading_band_paint(HDC dc, RECT rc, int kind, int text_h)
     if (!hfont || hfont_h != lf.lfHeight)
     {
       if (hfont) DeleteObject(hfont);
+      lf.lfWidth = 0;
       hfont = CreateFontIndirectA(&lf);
       hfont_h = lf.lfHeight;
     }

@@ -17,6 +17,8 @@ By [Hazem Abdelghani](https://github.com/hazem-abdelghani/genesis-plus-ex).
 Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx) by Eke-Eke (core by Charles MacDonald);
 32X games run in [PicoDrive](https://github.com/notaz/picodrive) by Dave, notaz, irixxxx and others. See [License](#license) for the other libraries used.
 
+⚠️ **Please do not open issues on Genesis Plus GX for Genesis Plus EX.** ⚠️
+
 ---
 
 ## Contents
@@ -173,6 +175,19 @@ Y; RT gives Z; Start is Start and Back is Mode. LB fast-forwards and LT rewinds.
 The right stick is a set of four extra buttons that can be assigned like any
 other, and by default it does the save-state shortcuts.
 
+### Other Pads (DirectInput)
+
+Pads that Windows does not show as an Xbox pad are read through DirectInput:
+PlayStation pads (DualShock 4, DualSense), Nintendo pads (Switch Pro Controller
+and its kin, Switch Online pads) and other joysticks. Pick one in
+**Input → Controls... → Input Devices** and its buttons start in a layout that fits
+it: the D-pad (or left stick) moves, the three buttons at the Mega Drive pad's
+A, B and C spots give A, B and C, the top button gives X, R1 / R (or RB) gives Y,
+R2 / ZR gives Z, and Options / + is Start and Share / − is Mode. Everything can be
+changed in the same window. A Joy-Con is a joystick of its own, so one is used
+at a time (held sideways). The log (**Settings → Options → Enable Log**) lists each
+pad with its vendor and product ids.
+
 ### Changing the Controls
 
 **Input → Controls...** has a tab for Player 1, Player 2 and an Extras tab.
@@ -283,7 +298,7 @@ with no reset. **File → Insert Disc...** does it by hand.
   are asked whether to carry on next time. The exit question has a
   *Resume this game next time* box.
 - **Backup State.** Optionally saves quietly every 1 to 10 minutes into three
-  rolling backups (**Load State → Load Backup State**).
+  rolling backups (**Emulation → Load State → Load Backup State**).
 - **Skip intro.** Optionally runs the first few seconds of a game at full speed.
 - **Battery saves** are written automatically as `.srm` / `.brm` files.
 
@@ -340,7 +355,7 @@ to the window. They are built into the program.
 | CRT Aperture Grille 3x | Trinitron-style stripes with hardly dimmed rows |
 | CRT Geom 3x / 4x | The classic CRT-Geom: curved glass with rounded corners, beams that widen with brightness, a dot mask and the CRT's gamma (ported from its shader; **very heavy**, it uses up to four processor threads) |
 | CRT Shadow Mask 3x | Staggered phosphor dots with darker rows between them |
-| LCD Grid 3x / 4x | The pixel grid of a handheld screen (use *LCD Ghosting* in View > Visual Effects for the ghosting) |
+| LCD Grid 3x / 4x | The pixel grid of a handheld screen (use *LCD Ghosting* in Video > Visual Effects for the ghosting) |
 
 The **Render Filter** menu lists the filters sorted by name, with each family (Bicubic, CRT, HQ, Lanczos, LCD Grid, Scale,
 Scanlines, Sharp, Smooth, xBR, xBRZ) in a sub-menu of its own.
@@ -351,7 +366,7 @@ switch away.
 
 ### Shaders
 
-**Video → Render Filter → Shaders → Preset...** loads a RetroArch-style
+**Video → Shaders → Preset...** loads a RetroArch-style
 `.slangp` preset (CRT looks, phosphor masks, upscalers) through
 [librashader](https://github.com/SnowflakePowered/librashader). It needs the
 **Direct3D 11** renderer and the **64-bit** program, and `librashader.dll` must
@@ -435,7 +450,7 @@ game picked in the list.
 | Audio only | `Recordings/Audio/<Console>/` (`.wav`) | Ctrl+F11 |
 | Animated GIF (up to 6 s, picture only) | `Recordings/GIF/<Console>/` | Ctrl+F12 |
 | VGM sound log | `Recordings/VGM/<Console>/` (`.vgm`) | Shift+F10 |
-| Input recording (`.gpm`) | `Recordings/Input/<Console>/` | Tools → Record Input |
+| Input recording (`.gpm`) | `Recordings/Input/<Console>/` | Tools → Record → Record Input |
 | Stop any of them | | Alt+F11 |
 | Screenshot | `Screenshots/<Console>/` (`.png`) | F12 |
 
@@ -446,7 +461,7 @@ own size, not stretched) or *Final* (like Corrected, with the render filter appl
 
 **Settings → Options → Video Recording** sets the size (1×–4× the console's own picture; 2× by default), the quality (automatic or 4–32 Mbit/s) and the shape (the console's own, 4:3 or 16:9) of a video recording.
 
-**Tools → Record Input** saves a state and every button you press afterwards
+**Tools → Record → Record Input...** saves a state and every button you press afterwards
 to a `.gpm` file (named after the game and the time, like the other recordings); *Play Input Recording...* replays it exactly. Use the same
 game. Handy for speedruns and bug reports.
 
@@ -473,7 +488,7 @@ controls. Both games reset and start together. The status bar shows the ping.
   The games are compared every second; if they drift apart the session ends.
 - If the link drops, both sides wait up to a minute and carry on from the same
   frame.
-- *Open the port on my router automatically* (UPnP, off by default) lets friends
+- *Open the Port on My Router Automatically (UPnP)* (off by default) lets friends
   outside your network join with your public address. Otherwise forward the
   port yourself. Windows Firewall may ask to allow TCP 55455 and UDP 55456.
 - The session code only prevents joining the wrong machine; nothing is encrypted.
@@ -640,7 +655,7 @@ so the core sees this port's `osd.h`.
 | `picocore.c`, `picodrive/` | 32X games: loads the PicoDrive library and feeds it the controls, picture and sound; the PicoDrive source (built as `picodrive_libretro.dll`) |
 | `sevenzip.c`, `lzmasdk/` | `.7z` archives |
 | `config.c`, `config.h` | Defaults and the settings file |
-| `gpex.rc`, `resource.h`, `gpex.manifest` | Menus, dialogs, accelerators, icon and visual styles |
+| `gpex.rc`, `resource.h`, `gpex.manifest` | Menus, dialogs, icon and visual styles |
 
 ---
 

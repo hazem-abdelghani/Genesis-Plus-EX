@@ -80,6 +80,7 @@ static HFONT ui_font_base(void)
        regardless of which convention the stock font happens to use. */
     if (gui.large_ui) lf.lfHeight = (LONG)(lf.lfHeight * 1.5);
     lf.lfHeight = MulDiv(lf.lfHeight, gui_dpi, 96);
+    lf.lfWidth = 0;                                           /* the width follows the height: a fixed width would squeeze the letters */
     f = CreateFontIndirectA(&lf);
     if (!f) return stock;
     scaled_font = f;
@@ -1076,7 +1077,6 @@ void gui_update_menu(void)
       EnableMenuItem(g_menu, IDM_SET_COVERSIZE_BASE + k, MF_BYCOMMAND | (gui.browser_grid_view ? browsing_state : (MF_GRAYED | MF_DISABLED)));
   }
 
-  EnableMenuItem(g_menu, IDM_FILE_CLOSE, MF_BYCOMMAND | rom_state);
   EnableMenuItem(g_menu, IDM_EMU_STOP, MF_BYCOMMAND | rom_state);
   EnableMenuItem(g_menu, IDM_FILE_ROMINFO, MF_BYCOMMAND | ((!emu_running && browser_has_selection()) ? MF_ENABLED : rom_state));
   EnableMenuItem(g_menu, IDM_FILE_APPLYPATCH, MF_BYCOMMAND | rom_state);
@@ -3109,7 +3109,7 @@ static int np_preflight(char *err, int err_len)
   }
   if (gui_input_p2_slot() < 0)
   {
-    lstrcpynA(err, "Netplay needs a plain Control Pad on both ports (Input > Port A / Port B Device).", err_len);
+    lstrcpynA(err, "Netplay needs a plain Control Pad on both ports (Input > Controls > Extras).", err_len);
     return 0;
   }
   return 1;
@@ -3797,14 +3797,28 @@ void gui_hotkeys_changed(void)
   hotkeys_apply_menu();
 }
 
+/* The screen row just under the menu bar of the window, from the bar itself (its height follows the display scale and the
+   Large interface, which a fixed system metric does not); the system's height when the bar is not there. */
+static int fs_menu_bottom(const RECT *wr)
+{
+  MENUBARINFO mbi;
+
+  mbi.cbSize = sizeof(mbi);
+  if (GetMenu(g_hwnd) && GetMenuBarInfo(g_hwnd, OBJID_MENU, 0, &mbi) && mbi.rcBar.bottom > wr->top) return mbi.rcBar.bottom + 1;
+  return wr->top + GetSystemMetrics(SM_CYMENU);
+}
+
 /* Shows or hides the menu bar while fullscreen. Driven by the mouse: see
    tick_fullscreen_menu_hover() below. */
 static void set_fullscreen_menu(int show)
 {
   int showing = (GetMenu(g_hwnd) != NULL);
+  RECT bar_rc;
 
   if (show == showing) return;
 
+  GetWindowRect(g_hwnd, &bar_rc);
+  bar_rc.bottom = fs_menu_bottom(&bar_rc);                     /* where the bar ends, before it goes */
   SetMenu(g_hwnd, show ? g_menu : NULL);
   if (show) theme_paint_menubar(g_hwnd, 1);
 
@@ -3816,14 +3830,11 @@ static void set_fullscreen_menu(int show)
        failed to reliably clear it in testing -- painting directly over
        where it was doesn't depend on any of that, it's just an ordinary
        GDI fill like every other frame in this app already does. */
-    RECT rc;
     HDC hdc = GetDC(NULL);
 
     if (hdc)
     {
-      GetWindowRect(g_hwnd, &rc);
-      rc.bottom = rc.top + GetSystemMetrics(SM_CYMENU);
-      FillRect(hdc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+      FillRect(hdc, &bar_rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
       ReleaseDC(NULL, hdc);
     }
   }
@@ -3832,7 +3843,7 @@ static void set_fullscreen_menu(int show)
   InvalidateRect(g_hwnd, NULL, TRUE);
 }
 
-/* The mouse pointer hides after it has been still for a while (Settings > Video > Hide Mouse Pointer), in fullscreen
+/* The mouse pointer hides after it has been still for a while (Settings > Input > Hide Mouse Pointer), in fullscreen
    and over a running game in a window. Hiding repeats ShowCursor(FALSE) because its internal counter has to go
    negative; any movement brings the pointer back. */
 static void tick_cursor_hide(void)
@@ -3907,7 +3918,7 @@ static void tick_fullscreen_menu_hover(void)
       browser_fullscreen_toolbar(1);   /* the toolbar comes with the menu bar */
     }
   }
-  else if (p.y > rc.top + GetSystemMetrics(SM_CYMENU) + browser_fullscreen_toolbar_shown_height() + 2 ||
+  else if (p.y > fs_menu_bottom(&rc) + browser_fullscreen_toolbar_shown_height() + 1 ||
            p.x < rc.left || p.x >= rc.right)
   {
     browser_fullscreen_toolbar(0);
@@ -5550,7 +5561,6 @@ static void on_command_inner(int id)
       dlg_state_manager(g_hwnd);
       break;
 
-    case IDM_FILE_CLOSE:
     case IDM_EMU_STOP:
       emu_close_rom();
       if (cli_exit_on_close) PostMessage(g_hwnd, WM_CLOSE, 0, 0);   /* back to the frontend */
@@ -6195,8 +6205,8 @@ static void on_command_inner(int id)
       dlg_shortcuts(g_hwnd);
       break;
 
-    case IDM_HELP_MENUGUIDE:
-      dlg_menu_guide(g_hwnd);
+    case IDM_HELP_USERGUIDE:
+      dlg_user_guide(g_hwnd);
       break;
 
     case IDM_HELP_ABOUT:
@@ -6972,7 +6982,7 @@ static int create_main_window(void)
      -f, --fullscreen      start the game in fullscreen
      -w, --windowed        start the game in a window
      -x, --exit-on-close   quit the program when the game is closed
-                           (Stop, Close ROM) -- hands control back to the frontend
+                           (Stop) -- hands control back to the frontend
      -s N, --state N       load save state slot N once the game has started
      -h, --help            show this list
    The ROM is the first argument that is not an option. */
@@ -7064,7 +7074,7 @@ static LONG WINAPI crash_logger(EXCEPTION_POINTERS *ep)
 
   if (InterlockedExchange(&busy, 1)) return EXCEPTION_CONTINUE_SEARCH;       /* a crash while handling a crash */
   gui_restore_combo_animation();                                              /* the Windows setting a window had turned off */
-  if (!gui.crash_report)                                                      /* Settings > Options > Write Crash Report */
+  if (!gui.crash_report)                                                      /* Settings > Options > Enable Crash Report */
   {
     gui_log("CRASH: exception %08lX", (unsigned long)ep->ExceptionRecord->ExceptionCode);
     return EXCEPTION_CONTINUE_SEARCH;

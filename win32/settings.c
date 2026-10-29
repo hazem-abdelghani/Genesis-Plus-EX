@@ -286,7 +286,7 @@ static const SRow rows_options[] =
   CHECK ("Auto Resume", IDM_EMU_AUTOSAVE, "Save the game when you close it, and offer to carry on from there the next time you open it."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Start and Backup", 0, 0, NULL, NULL },
-  CHOICE("Backup State:",         IDM_SET_AUTOSAVE_BASE, it_abackup, "While a game runs, quietly save its state every few minutes into a rolling backup (Emulation > Load Backup State), so a crash never loses much."),
+  CHOICE("Backup State:",         IDM_SET_AUTOSAVE_BASE, it_abackup, "While a game runs, quietly save its state every few minutes into a rolling backup (Emulation > Load State > Load Backup State), so a crash never loses much."),
   CHOICE("Skip Intro on Launch:", IDM_SET_SKIPLEN_BASE, it_skiplen, "When a game starts, run its first few seconds at full speed to get past logos and intros. A press of a game button ends the skip early. Not used when resuming a game or during netplay."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Troubleshooting", 0, 0, NULL, NULL },

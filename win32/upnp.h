@@ -16,7 +16,6 @@ enum { UPNP_OFF = 0, UPNP_WORKING, UPNP_OPEN, UPNP_FAILED };
 extern void        upnp_open(int port);
 extern void        upnp_close(void);
 extern int         upnp_state(void);
-extern const char *upnp_external_ip(void);   /* "" until the router has told it */
 extern const char *upnp_message(void);       /* a short sentence about the result */
 
 #endif

@@ -411,41 +411,9 @@ BEGIN
   POPUP "&Help"
   BEGIN
     MENUITEM "&Keyboard Shortcuts\tF1",         IDM_HELP_SHORTCUTS
-    MENUITEM "&User Guide",                       IDM_HELP_MENUGUIDE
+    MENUITEM "&User Guide",                       IDM_HELP_USERGUIDE
     MENUITEM "&About Genesis Plus EX",          IDM_HELP_ABOUT
   END
-END
-
-/****************************************************************************
- * Accelerators
- *
- * Nothing here may collide with the default gamepad keys (arrows, A S D F,
- * Z X C V) or the key would be swallowed before the emulator sees it.
- ****************************************************************************/
-
-IDR_ACCELERATORS ACCELERATORS
-BEGIN
-  "O",          IDM_FILE_OPEN,              VIRTKEY, CONTROL
-  "B",          IDM_FILE_BROWSER,           VIRTKEY, CONTROL
-  "R",          IDM_EMU_RESET,              VIRTKEY, CONTROL
-  "R",          IDM_EMU_HARDRESET,          VIRTKEY, CONTROL, SHIFT
-  "C",          IDM_EMU_CHEATS,             VIRTKEY, CONTROL
-  "F",          IDM_VIEW_FINDSEARCH,        VIRTKEY, CONTROL
-  VK_F9,        IDM_EMU_UNDOLOAD,           VIRTKEY
-  VK_F1,        IDM_HELP_SHORTCUTS,         VIRTKEY
-  VK_F2,        IDM_EMU_PAUSE,              VIRTKEY
-  VK_PAUSE,     IDM_EMU_PAUSE,              VIRTKEY
-  VK_F3,        IDM_EMU_STOP,               VIRTKEY
-  VK_F5,        IDM_ACCEL_QUICKSAVE,        VIRTKEY
-  VK_F6,        IDM_ACCEL_SLOT_PREV,        VIRTKEY
-  VK_F7,        IDM_ACCEL_SLOT_NEXT,        VIRTKEY
-  VK_F8,        IDM_ACCEL_QUICKLOAD,        VIRTKEY
-  VK_F11,       IDM_FILE_REC_VIDEO,         VIRTKEY, SHIFT
-  VK_F11,       IDM_FILE_REC_AUDIO,         VIRTKEY, CONTROL
-  VK_F11,       IDM_FILE_REC_STOP,          VIRTKEY, ALT
-  VK_F12,       IDM_FILE_SCREENSHOT,        VIRTKEY
-  VK_RETURN,    IDM_VIDEO_FULLSCREEN,       VIRTKEY, ALT
-  VK_ESCAPE,    IDM_ACCEL_LEAVE_FULLSCREEN, VIRTKEY
 END
 
 /****************************************************************************
@@ -628,13 +596,13 @@ BEGIN
   PUSHBUTTON      "Cancel", IDCANCEL, 236, 194, 48, 16
 END
 
-IDD_MENUGUIDE DIALOGEX 0, 0, 440, 300
+IDD_USERGUIDE DIALOGEX 0, 0, 440, 300
 STYLE DS_MODALFRAME | DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX
 CAPTION "User Guide"
 FONT 8, "MS Shell Dlg"
 BEGIN
-  LISTBOX         IDC_MENUGUIDE_LIST, 8, 8, 90, 266, LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-  CONTROL         "", IDC_MENUGUIDE_TEXT, "RICHEDIT50W", ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 104, 8, 328, 266
+  LISTBOX         IDC_USERGUIDE_LIST, 8, 8, 90, 266, LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+  CONTROL         "", IDC_USERGUIDE_TEXT, "RICHEDIT50W", ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 104, 8, 328, 266
   DEFPUSHBUTTON   "Close", IDOK, 384, 278, 48, 16
 END
 
@@ -841,13 +809,13 @@ BEGIN
   DEFPUSHBUTTON   "Close", IDOK, 264, 168, 48, 16
 END
 
-IDD_MENUGUIDE_LARGE DIALOGEX 0, 0, 520, 300
+IDD_USERGUIDE_LARGE DIALOGEX 0, 0, 520, 300
 STYLE DS_MODALFRAME | DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX
 CAPTION "User Guide"
 FONT 12, "MS Shell Dlg"
 BEGIN
-  LISTBOX         IDC_MENUGUIDE_LIST, 8, 8, 100, 266, LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-  CONTROL         "", IDC_MENUGUIDE_TEXT, "RICHEDIT50W", ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 114, 8, 404, 266
+  LISTBOX         IDC_USERGUIDE_LIST, 8, 8, 100, 266, LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+  CONTROL         "", IDC_USERGUIDE_TEXT, "RICHEDIT50W", ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 114, 8, 404, 266
   DEFPUSHBUTTON   "Close", IDOK, 464, 278, 48, 16
 END
 
@@ -1046,8 +1014,8 @@ END
  ****************************************************************************/
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     3,0,0,0
-PRODUCTVERSION  3,0,0,0
+FILEVERSION     3,0,3,0
+PRODUCTVERSION  3,0,3,0
 FILEOS          VOS_NT_WINDOWS32
 FILETYPE        VFT_APP
 BEGIN
@@ -1056,11 +1024,11 @@ BEGIN
     BLOCK "040904E4"
     BEGIN
       VALUE "FileDescription", "Genesis Plus EX"
-      VALUE "FileVersion",     "3.0.0"
+      VALUE "FileVersion",     "3.0.3"
       VALUE "InternalName",    "Genesis Plus EX"
       VALUE "OriginalFilename","Genesis Plus EX.exe"
       VALUE "ProductName",     "Genesis Plus EX"
-      VALUE "ProductVersion",  "3.0.0"
+      VALUE "ProductVersion",  "3.0.3"
       VALUE "LegalCopyright",  "Copyright (C) 1998-2003 Charles MacDonald, 2007-2026 Eke-Eke"
     END
   END

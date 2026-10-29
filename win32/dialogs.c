@@ -746,6 +746,11 @@ static void input_capture_tick(HWND dlg)
      gives rather than leaving the dialog stuck waiting indefinitely. */
   if ((int)(GetTickCount() - inp.listen_deadline) >= 0)
   {
+    if (inp.listen == LISTEN_WAIT_RELEASE && inp.shown_dev >= 0)       /* for the log: what the pad kept reporting as held */
+    {
+      int held = input_capture_gamepad(inp.shown_dev);
+      gui_log("Controls: gave up waiting for the pad to be released (held: %s)", held ? input_pad_button_name(inp.shown_dev, held) : "nothing");
+    }
     input_set_listening(dlg, 0);
     return;
   }
@@ -1725,7 +1730,7 @@ static void prof_build(HWND dlg, char *out, int len)
     wsprintfA(k, "p%d.key", p);    prof_add_ints(out, len, k, inp.other[p].map.key, PAD_KEYS);
     wsprintfA(k, "p%d.button", p); prof_add_ints(out, len, k, inp.other[p].map.button, PAD_KEYS);
   }
-  { char c[512]; cb_serialize(c, sizeof(c)); lstrcatA(out, "combos="); lstrcatA(out, c); lstrcatA(out, "\n"); }
+  { char c[512]; if (!cb_serialize(c, sizeof(c))) c[0] = '\0'; lstrcatA(out, "combos="); lstrcatA(out, c); lstrcatA(out, "\n"); }
 }
 
 static unsigned prof_sig(HWND dlg)
@@ -2097,6 +2102,7 @@ static void input_build(HWND dlg)
       /* The Large interface already makes the dialog font bigger; scaling it again looked heavy, so it is used as is. */
       if (!gui.large_ui) lf.lfHeight = lf.lfHeight * 110 / 100;
       lf.lfWeight = FW_NORMAL;
+      lf.lfWidth = 0;
       inp.font = CreateFontIndirectA(&lf);
       if (inp.font) SendMessage(dlg, WM_SETFONT, (WPARAM)inp.font, FALSE);
     }
@@ -2650,9 +2656,20 @@ static INT_PTR CALLBACK input_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
              tick -- rare to notice, but free to fix. */
           if (HIWORD(wp) == CBN_SELCHANGE)
           {
+            int before = inp.shown_dev;
+
             inp.dev_shadow = 0;             /* a device was picked: it is now the one */
             input_update_identify_hint(dlg);
             input_read_controls(dlg);       /* the buttons show what the new device uses */
+            if (inp.shown_dev >= 0 && before != inp.shown_dev)
+            {
+              /* Buttons that are still the old device's own defaults follow the new device (XInput's masks would put a
+                 joystick's D-pad on its face buttons); ones that were set by hand stay. */
+              int was[PAD_KEYS];
+
+              gui_input_default_buttons(before, was);
+              if (!memcmp(inp.map.button, was, sizeof(was))) gui_input_default_buttons(inp.shown_dev, inp.map.button);
+            }
             input_fill_list(dlg);
           }
           return TRUE;
@@ -3476,7 +3493,7 @@ void dlg_shortcuts(HWND parent)
   gui_dialog_box(gui.large_ui ? IDD_SHORTCUTS_LARGE : IDD_SHORTCUTS, parent, shortcuts_proc);
 }
 
-static const char menu_guide_text[] =
+static const char user_guide_text[] =
   "Every menu, and the Settings, Controls, Cheats and Netplay windows, in one place. Keyboard shortcuts are in brackets (the original keys; Input > Hotkeys changes them).\r\n"
   "\r\n"
   "FILE\r\n"
@@ -3567,7 +3584,7 @@ static const char menu_guide_text[] =
   "   List View or Grid View: how the game browser shows your games.\r\n"
   "\r\n"
   "  List Columns:\r\n"
-  "   A Sega Pico game (a Mega Drive file whose header says SEGA PICO) is listed as its own console, Sega Pico. Choose which columns the list view shows: Favorite (a star: click it to mark a game as a favorite) and Console (Name is always shown), plus Genre, Region (read from tags such as (USA) in the file name), File Size and File Type (zip, bin, chd and so on), which are hidden at first and shown after Console. Drag a column title to move the column, and drag the edge between titles to change its width; the order and the widths you leave are remembered. Click a column's title to sort by it; Shift+click more titles to sort by them as well, in that order (for example Console, then Genre, then name); Shift+click one again to flip it, while a plain click starts over (View > Show Recently Played shows what you played last). Right-clicking the column header offers the same choices, and also Size All Columns to Fit, which gives every shown column the width its contents need. The choices are grayed out while the grid view is shown.\r\n"
+  "   A Sega Pico game (a Mega Drive file whose header says SEGA PICO) is listed as its own console, Sega Pico. Choose which columns the list view shows: Favorite (a star: click it to mark a game as a favorite) and Console (Name is always shown), plus Genre, Region (read from tags such as (USA) in the file name), File Size and File Type (zip, bin, chd and so on), which are hidden at first and shown after Console. Drag a column title to move the column, and drag the edge between titles to change its width; the order and the widths you leave are remembered. Click a column's title to sort by it; Shift+click more titles to sort by them as well, in that order (for example Console, then Genre, then name); Shift+click one again to flip it, while a plain click starts over (View > Game List > Show Recently Played shows what you played last). Right-clicking the column header offers the same choices, and also Size All Columns to Fit, which gives every shown column the width its contents need. The choices are grayed out while the grid view is shown.\r\n"
   "\r\n"
   "  Theme:\r\n"
   "   System (follow Windows), Light or Dark.\r\n"
@@ -3729,7 +3746,7 @@ static const char menu_guide_text[] =
   "\r\n"
   "INPUT\r\n"
   "  Controls...:\r\n"
-  "   One window with a tab for Player 1, one for Player 2 and an Extras tab (what is plugged into the console's two controller ports, and the combos). The pad tabs lay the buttons out like a Mega Drive pad in titled frames (D-Pad with its deadzone, System, Buttons with their Turbo ticks) around a picture of the pad. Click a button, then press the key or gamepad button you want (Esc or a right click cancels the wait; right-click a button to set or clear it; clicking its spot on the picture works too). Tick Turbo beside A, B, C, X, Y or Z: held down, the button then fires repeatedly (Turbo Rate sets how fast). A key or button can only be on one pad button: assigning it takes it off the one that had it (also on the other player, for keys), and a line under the pad says what was removed, and when the key is also a shortcut or the pad button also a gamepad hotkey. Auto Assign goes through them all in turn. Pressing a mapped key or gamepad button lights its spot on the picture, so you can check a pad; tick Test Keys to try keys such as Enter, Tab and Esc without them operating the window. You can also set the gamepad thumbstick's deadzone (how far it has to move off-center before it registers at all). The right stick counts as four more buttons (RS Up, Down, Left, Right) that can be assigned like any other; this works for XInput pads and, where the pad reports the stick on its Rx / Ry or Z / Rz axes, for DirectInput ones. Gamepad Hotkeys... opens a window to choose which pad button runs each shortcut, pressed on its own (no Back needed): Fast Forward and Rewind (held), Toggle Turbo, Save State and Load State (current slot), and Previous and Next Slot. By default the right stick does the last four (up = save, down = load, left = previous slot, right = next slot) and LB / LT are Fast Forward / Rewind; the right stick button (RSB) switches Turbo on or off (the buttons keep their Turbo setting). A button used there also reaches the game, so the right stick is a good choice. Gamepad hotkeys use the Xbox-style (XInput) pad of Player 1 only. Player 1 defaults: arrows, Z X C = A B C, A S D = X Y Z, Enter = Start, Right Shift = Mode. Restore Defaults (bottom left) opens a list: Player 1, Player 2 or Advanced Tab (the combos removed and both ports back to a Control Pad); only that one goes back to its defaults (a player's also resets the Turbo Rate).\r\n"
+  "   One window with a tab for Player 1, one for Player 2 and an Extras tab (what is plugged into the console's two controller ports, and the combos). The pad tabs lay the buttons out like a Mega Drive pad in titled frames (D-Pad with its deadzone, System, Buttons with their Turbo ticks) around a picture of the pad. Click a button, then press the key or gamepad button you want (Esc or a right click cancels the wait; right-click a button to set or clear it; clicking its spot on the picture works too). Tick Turbo beside A, B, C, X, Y or Z: held down, the button then fires repeatedly (Turbo Rate sets how fast). A key or button can only be on one pad button: assigning it takes it off the one that had it (also on the other player, for keys), and a line under the pad says what was removed, and when the key is also a shortcut or the pad button also a gamepad hotkey. Auto Assign goes through them all in turn. Pressing a mapped key or gamepad button lights its spot on the picture, so you can check a pad; tick Test Keys to try keys such as Enter, Tab and Esc without them operating the window. You can also set the gamepad thumbstick's deadzone (how far it has to move off-center before it registers at all). The right stick counts as four more buttons (RS Up, Down, Left, Right) that can be assigned like any other; this works for XInput pads and, where the pad reports the stick on its Rx / Ry or Z / Rz axes, for DirectInput ones. Gamepad Hotkeys... opens a window to choose which pad button runs each shortcut, pressed on its own (no Back needed): Fast Forward and Rewind (held), Toggle Turbo, Save State and Load State (current slot), and Previous and Next Slot. By default the right stick does the last four (up = save, down = load, left = previous slot, right = next slot) and LB / LT are Fast Forward / Rewind; the right stick button (RSB) switches Turbo on or off (the buttons keep their Turbo setting). A button used there also reaches the game, so the right stick is a good choice. Gamepad hotkeys use the Xbox-style (XInput) pad of Player 1 only. Player 1 defaults: arrows, Z X C = A B C, A S D = X Y Z, Enter = Start, Right Shift = Mode. Restore Defaults (bottom left) opens a list: Player 1, Player 2 or Extras Tab (the combos removed and both ports back to a Control Pad); only that one goes back to its defaults (a player's also resets the Turbo Rate).\r\n"
   "\r\n"
   "  Hotkeys...:\r\n"
   "   Every keyboard shortcut in one list: select an action, click Assign (or double-click it) and press the key you want, alone or with Ctrl, Shift or Alt. A key can only be on one action: the old one loses it. Clear removes a shortcut and Restore Defaults brings the original keys back. The menu labels and the Keyboard Shortcuts window follow your choices. Fast Forward and Rewind (the keys you hold, Tab and Backspace by default) are in the list too; their gamepad buttons are under Controls > Gamepad Hotkeys.\r\n"
@@ -3758,7 +3775,7 @@ static const char menu_guide_text[] =
   "  Pause When the Pad Disconnects:\r\n"
   "   Pauses the game with a message when Player 1's gamepad is unplugged or its battery runs out, instead of running on without input. Off by default (Settings > Input).\r\n"
   "\r\n"
-  "  Light Gun Aim Offset X / Y:\r\n"
+  "  Gun Aim Offset X / Y:\r\n"
   "   Shifts where the light gun hits by up to 12 pixels, if shots land beside or above where you point.\r\n"
   "\r\n"
   "  Confine Mouse to the Picture:\r\n"
@@ -3905,12 +3922,12 @@ static const char guide_bios_text[] =
 
 static const char guide_extra_text[] =
   "CONTROLS WINDOW\r\n"
-  "  Where it is:\r\n"
+  "  Where It Is:\r\n"
   "   Input > Controls... or the Controls button on the toolbar. It has a tab for Player 1, one for Player 2 and an Extras tab (Alt+1, Alt+2 and Alt+E open them).\r\n"
-  "  Buttons of the pad:\r\n"
+  "  Buttons of the Pad:\r\n"
   "   Click a button, then press the key or gamepad button you want. The same press works for keyboard and pad. Esc or a right click cancels. A key or button can only be on one pad button; giving it to a new one takes it from the old one.\r\n"
   "  Input Devices:\r\n"
-  "   Which gamepad (or the keyboard) the window shows and reads; the arrow next to it looks for pads again.\r\n"
+  "   Which gamepad (or the keyboard) the window shows and reads; the arrow next to it looks for pads again. Xbox pads (and others that Windows shows as one) are read as XInput pads. PlayStation pads (DualShock 4, DualSense), Nintendo pads (Switch Pro Controller and the like) and other joysticks are read through DirectInput: when you pick one, the buttons start in a layout that fits it (the D-pad on its D-pad, the face buttons where the Mega Drive pad has them), and everything can be changed. A Joy-Con is a joystick of its own, so one at a time is used.\r\n"
   "  Controller Model:\r\n"
   "   Which Mega Drive pad the game sees for this player: Match the Game (the default), 3-Button, 6-Button or 2-Button.\r\n"
   "  Turbo and Turbo Rate:\r\n"
@@ -3925,17 +3942,17 @@ static const char guide_extra_text[] =
   "   Puts shortcuts (fast forward, rewind, states, pause, screenshot and more) on pad buttons; an optional hold button keeps the pad free for the game until it is held.\r\n"
   "  Test Keys:\r\n"
   "   Try your keys: while it is ticked the keyboard no longer moves around or presses buttons in this window, so you can press any key or pad button and see its spot light.\r\n"
-  "  Extras tab:\r\n"
+  "  Extras Tab:\r\n"
   "   Port A Device and Port B Device choose what is plugged into each port (Control Pad, Mouse, Light Phaser, Menacer, Justifier, Paddle, Sports Pad, Team Player, Master Tap and more). Combo buttons let one key or pad button press several game buttons: pick a row, choose the Trigger, then click the game buttons to add; Hold keeps a button down for a time and Pause waits before the next one. Up to 12 combos; How It Works shows an example.\r\n"
   "  Restore Defaults:\r\n"
   "   Puts both players' keys, buttons, deadzones, turbo rate and combos back to their defaults. OK keeps what you changed; Cancel puts everything back.\r\n"
   "\r\n"
   "CHEATS WINDOW\r\n"
-  "  Where it is:\r\n"
+  "  Where It Is:\r\n"
   "   Tools > Cheats... (Ctrl+C), or Edit Cheats in a game's right-click menu in the list (no need to start the game).\r\n"
   "  Enable Cheats:\r\n"
   "   Turns every cheat on or off at once. It is off until you turn it on.\r\n"
-  "  The list:\r\n"
+  "  The List:\r\n"
   "   #  The number a cheat got when it was added; it stays with the cheat when the list is sorted.\r\n"
   "   Box  Tick it to switch that cheat on; the box in the column title ticks or unticks all of them.\r\n"
   "   Code  A Game Genie, Action Replay or raw code (the hint under the buttons shows what this console accepts).\r\n"
@@ -3956,23 +3973,23 @@ static const char guide_extra_text[] =
   "   Other cheat files in the console's Cheats folder whose name starts like the game's. Pick one to load its cheats; when the list already has cheats you choose Load (replace the list) or Insert (merge them in).\r\n"
   "  Cheat Search:\r\n"
   "   Tools > Cheat Search... (a window of its own) finds where a value (lives, health, a score) is kept in memory, so you can make a cheat without a code.\r\n"
-  "  Good to know:\r\n"
+  "  Good to Know:\r\n"
   "   Right-clicking the column titles of the result list offers Size All Columns to Fit. ROM codes wait for the first button press after a game starts or resets (twenty seconds at most). In netplay both PCs need the same cheats on, and the window is locked during the session.\r\n"
   "\r\n"
   "NETPLAY WINDOW\r\n"
-  "  Where it is:\r\n"
+  "  Where It Is:\r\n"
   "   Tools > Netplay...\r\n"
-  "  Before you start:\r\n"
+  "  Before You Start:\r\n"
   "   Both PCs load the same ROM, use the same program and the same settings. Only cartridge games work (not Mega CD), and both ports need a Control Pad.\r\n"
   "  Host:\r\n"
   "   Pick a port (55455 by default), an input delay (1 to 4 frames) and, if you like, a session code, then press Host. The host is Player 1.\r\n"
   "  Join:\r\n"
   "   Press Find hosts and choose the host (or type its address), enter the code and press Join. The guest is Player 2.\r\n"
-  "  During a session:\r\n"
+  "  During a Session:\r\n"
   "   Both games reset and start together. The status bar shows the ping. Pause, reset, states, cheats, rewind, fast forward and emulation settings are locked.\r\n"
-  "  If something differs:\r\n"
+  "  If Something Differs:\r\n"
   "   A setting that differs between the PCs refuses the connection and names it; the games are compared every second.\r\n"
-  "  Open the port on my router automatically:\r\n"
+  "  Open the Port on My Router Automatically (UPnP):\r\n"
   "   Lets friends outside your network join with your public address (UPnP). Otherwise forward the port yourself; Windows Firewall may ask to allow TCP 55455 and UDP 55456.\r\n";
 
 static struct
@@ -4003,11 +4020,11 @@ static void guide_parse(void)
 {
   char *p;
   int s = 0;
-  size_t cs = settings_guide_text(NULL, 0), need = sizeof(menu_guide_text) + sizeof(guide_extra_text) + sizeof(guide_bios_text) + cs + 16;
+  size_t cs = settings_guide_text(NULL, 0), need = sizeof(user_guide_text) + sizeof(guide_extra_text) + sizeof(guide_bios_text) + cs + 16;
 
   guide.text = (char *)malloc(need);
   if (!guide.text) return;
-  lstrcpyA(guide.text, menu_guide_text);
+  lstrcpyA(guide.text, user_guide_text);
   lstrcatA(guide.text, "\r\n");
   settings_guide_text(guide.text + lstrlenA(guide.text), cs + 1);
   lstrcatA(guide.text, "\r\n");
@@ -4208,8 +4225,8 @@ static void guide_title_case(char *title)
    under it and the lists of options as two columns. */
 static void guide_show(HWND dlg)
 {
-  HWND rich = GetDlgItem(dlg, IDC_MENUGUIDE_TEXT);
-  int sel = (int)SendDlgItemMessage(dlg, IDC_MENUGUIDE_LIST, LB_GETCURSEL, 0, 0);
+  HWND rich = GetDlgItem(dlg, IDC_USERGUIDE_TEXT);
+  int sel = (int)SendDlgItemMessage(dlg, IDC_USERGUIDE_LIST, LB_GETCURSEL, 0, 0);
   int s, n = 0, cap_p = 4096, len = 0, k, dark = theme_is_dark(), big = gui.large_ui;
   size_t cap = (size_t)lstrlenA(guide.text ? guide.text : "") + 800;           /* (the credits of the first page too) */
   int prelude = 0;                                               /* paragraphs the first page has above its text: the logo's room and the credits */
@@ -4395,8 +4412,8 @@ static void guide_place(HWND dlg)
 
   GetClientRect(dlg, &cr);
   dx = cr.right - guide_cw; dy = cr.bottom - guide_ch;
-  MoveWindow(GetDlgItem(dlg, IDC_MENUGUIDE_LIST), guide_rl.left, guide_rl.top, guide_rl.right - guide_rl.left, guide_rl.bottom - guide_rl.top + dy, TRUE);
-  MoveWindow(GetDlgItem(dlg, IDC_MENUGUIDE_TEXT), guide_rt.left, guide_rt.top, guide_rt.right - guide_rt.left + dx, guide_rt.bottom - guide_rt.top + dy, TRUE);
+  MoveWindow(GetDlgItem(dlg, IDC_USERGUIDE_LIST), guide_rl.left, guide_rl.top, guide_rl.right - guide_rl.left, guide_rl.bottom - guide_rl.top + dy, TRUE);
+  MoveWindow(GetDlgItem(dlg, IDC_USERGUIDE_TEXT), guide_rt.left, guide_rt.top, guide_rt.right - guide_rt.left + dx, guide_rt.bottom - guide_rt.top + dy, TRUE);
   MoveWindow(GetDlgItem(dlg, IDOK), guide_rb.left + dx, guide_rb.top + dy, guide_rb.right - guide_rb.left, guide_rb.bottom - guide_rb.top, TRUE);
   RedrawWindow(dlg, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);      /* (the page, and the text on it, drawn again for its new width: bits of the old one stayed) */
 }
@@ -4404,7 +4421,7 @@ static void guide_place(HWND dlg)
 static void guide_remember(HWND dlg)
 {
   RECT cr, wr;
-  int ids[3] = { IDC_MENUGUIDE_LIST, IDC_MENUGUIDE_TEXT, IDOK }, i;
+  int ids[3] = { IDC_USERGUIDE_LIST, IDC_USERGUIDE_TEXT, IDOK }, i;
   RECT *dst[3] = { &guide_rl, &guide_rt, &guide_rb };
 
   GetClientRect(dlg, &cr);
@@ -4467,7 +4484,7 @@ static LRESULT CALLBACK guide_text_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp, 
   return DefSubclassProc(h, msg, wp, lp);
 }
 
-static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+static INT_PTR CALLBACK user_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
   switch (msg)
   {
@@ -4488,18 +4505,18 @@ static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
       {
         static const GuiTip tips[] =
         {
-          { IDC_MENUGUIDE_LIST, NULL, "Pick a menu or window to read about it." },
-          { IDC_MENUGUIDE_TEXT, NULL, "What each menu item and each window does." },
+          { IDC_USERGUIDE_LIST, NULL, "Pick a menu or window to read about it." },
+          { IDC_USERGUIDE_TEXT, NULL, "What each menu item and each window does." },
           { IDOK, NULL, "Close this window." },
         };
         gui_dialog_tips(dlg, tips, (int)(sizeof(tips) / sizeof(tips[0])));
       }
       {
         int s;
-        HWND list = GetDlgItem(dlg, IDC_MENUGUIDE_LIST);
+        HWND list = GetDlgItem(dlg, IDC_USERGUIDE_LIST);
 
-        SendDlgItemMessage(dlg, IDC_MENUGUIDE_TEXT, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(12, 12));
-        SetWindowSubclass(GetDlgItem(dlg, IDC_MENUGUIDE_TEXT), guide_text_proc, 1, 0);
+        SendDlgItemMessage(dlg, IDC_USERGUIDE_TEXT, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(12, 12));
+        SetWindowSubclass(GetDlgItem(dlg, IDC_USERGUIDE_TEXT), guide_text_proc, 1, 0);
 
         guide_parse();
         for (s = 0; s < guide.count; s++)
@@ -4534,7 +4551,7 @@ static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
     case WM_MEASUREITEM:
     {
       MEASUREITEMSTRUCT *mi = (MEASUREITEMSTRUCT *)lp;
-      if (mi->CtlID == IDC_MENUGUIDE_LIST) { mi->itemHeight = (UINT)IS(17); return TRUE; }
+      if (mi->CtlID == IDC_USERGUIDE_LIST) { mi->itemHeight = (UINT)IS(17); return TRUE; }
       return FALSE;
     }
 
@@ -4542,7 +4559,7 @@ static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
     {
       /* The list of sections is drawn here so its selection has the theme's colors (the system one turned white in dark mode). */
       DRAWITEMSTRUCT *di = (DRAWITEMSTRUCT *)lp;
-      if (di->CtlID == IDC_MENUGUIDE_LIST && di->itemID != (UINT)-1)
+      if (di->CtlID == IDC_USERGUIDE_LIST && di->itemID != (UINT)-1)
       {
         int dark = theme_is_dark(), sel = (di->itemState & ODS_SELECTED) != 0;
         COLORREF bg = sel ? theme_accent_bg() : (dark ? RGB(0x2D, 0x2D, 0x2D) : GetSysColor(COLOR_WINDOW));
@@ -4570,7 +4587,7 @@ static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
     case WM_CTLCOLORLISTBOX:
     {
       /* The clickable list of sections is #2D2D2D in dark mode. */
-      HBRUSH br = (GetDlgCtrlID((HWND)lp) == IDC_MENUGUIDE_LIST)
+      HBRUSH br = (GetDlgCtrlID((HWND)lp) == IDC_USERGUIDE_LIST)
                 ? theme_ctlcolor_custom((HDC)wp, RGB(0x2D, 0x2D, 0x2D), 2)
                 : theme_ctlcolor((HDC)wp);
       if (br) return (LRESULT)br;
@@ -4578,7 +4595,7 @@ static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
     }
 
     case WM_COMMAND:
-      if (LOWORD(wp) == IDC_MENUGUIDE_LIST && HIWORD(wp) == LBN_SELCHANGE)
+      if (LOWORD(wp) == IDC_USERGUIDE_LIST && HIWORD(wp) == LBN_SELCHANGE)
       {
         guide_show(dlg);
         return TRUE;
@@ -4599,10 +4616,10 @@ static INT_PTR CALLBACK menu_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
   return FALSE;
 }
 
-void dlg_menu_guide(HWND parent)
+void dlg_user_guide(HWND parent)
 {
   LoadLibraryA("Msftedit.dll");                  /* the text box of the page is a rich text box */
-  gui_dialog_box(gui.large_ui ? IDD_MENUGUIDE_LARGE : IDD_MENUGUIDE, parent, menu_guide_proc);
+  gui_dialog_box(gui.large_ui ? IDD_USERGUIDE_LARGE : IDD_USERGUIDE, parent, user_guide_proc);
 }
 
 static const char *system_name(void)

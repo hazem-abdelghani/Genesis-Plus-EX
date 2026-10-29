@@ -16,3 +16,5 @@ sdl/build_sdl2
 
 *.o
 *.a
+
+/win32/build_win32/

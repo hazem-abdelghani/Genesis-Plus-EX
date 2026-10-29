@@ -12,11 +12,9 @@
 
 #define IDI_APPICON                 1
 #define IDR_MAINMENU                2
-#define IDR_ACCELERATORS            3
 
 /* --- File ------------------------------------------------------------- */
 #define IDM_FILE_OPEN             100
-#define IDM_FILE_CLOSE            101
 #define IDM_FILE_LOADSTATE        102
 #define IDM_FILE_SAVESTATE        103
 #define IDM_FILE_SCREENSHOT       104
@@ -123,7 +121,7 @@
 /* --- Help ------------------------------------------------------------- */
 #define IDM_HELP_SHORTCUTS        600
 #define IDM_HELP_ABOUT            601
-#define IDM_HELP_MENUGUIDE         602
+#define IDM_HELP_USERGUIDE         602
 
 /* --- Accelerator-only commands ---------------------------------------- */
 #define IDM_ACCEL_QUICKSAVE       700
@@ -168,7 +166,7 @@
 #define IDD_SHORTCUTS             903
 #define IDD_CHEATS                904
 #define IDD_ROMINFO               905
-#define IDD_MENUGUIDE              906
+#define IDD_USERGUIDE              906
 #define IDD_NETPLAY               920
 #define IDD_NETPLAY_LARGE         921
 #define IDD_ABOUT_LARGE           910
@@ -178,7 +176,7 @@
 #define IDD_CHEATS_LARGE          914
 #define IDD_ROMINFO_LARGE         915
 #define IDD_STATEMGR_LARGE        916
-#define IDD_MENUGUIDE_LARGE        917
+#define IDD_USERGUIDE_LARGE        917
 #define IDD_SETTINGS              930
 #define IDD_SETTINGS_LARGE        931
 #define IDC_SETTINGS_TAB          1400
@@ -221,8 +219,8 @@
 
 #define IDC_SHORTCUTS_TEXT       1040
 #define IDC_SHORTCUTS_HINT      1043
-#define IDC_MENUGUIDE_TEXT        1068
-#define IDC_MENUGUIDE_LIST        1091
+#define IDC_USERGUIDE_TEXT        1068
+#define IDC_USERGUIDE_LIST        1091
 #define IDC_ROMINFO_TEXT         1041
 #define IDC_ROMINFO_COPY         1044
 

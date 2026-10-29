@@ -2598,7 +2598,7 @@ static DWORD WINAPI shot_thread(LPVOID arg)
   png_put_u32(ihdr + 0, (unsigned long)sw);
   png_put_u32(ihdr + 4, (unsigned long)sh);
   ihdr[8]  = 8;   /* bit depth   */
-  ihdr[9]  = 2;   /* color type: truecolour */
+  ihdr[9]  = 2;   /* color type: truecolor */
   ihdr[10] = 0;   /* deflate     */
   ihdr[11] = 0;   /* adaptive filtering */
   ihdr[12] = 0;   /* no interlace */

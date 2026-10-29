@@ -160,6 +160,7 @@ typedef struct
 {
   GUID guidInstance;
   char name[64];
+  unsigned vendor;      /* the USB vendor id: 054C is Sony */
 } di_joy_info;
 
 static di_joy_info          joy_info[GUI_INPUT_DI_MAX];
@@ -285,12 +286,17 @@ static BOOL CALLBACK di_enum_callback(const DIDEVICEINSTANCEA *inst, void *ref)
   if (joy_count >= GUI_INPUT_DI_MAX) return DIENUM_STOP;
   if (is_xinput_device(&inst->guidProduct, snap))
   {
+    gui_log("Controller: \"%s\" (vendor %04lX, product %04lX) is an XInput pad, read through XInput", inst->tszProductName,
+            (unsigned long)(inst->guidProduct.Data1 & 0xFFFF), (unsigned long)(inst->guidProduct.Data1 >> 16));
     if (xi_count < 4) lstrcpynA(xi_names[xi_count++], inst->tszProductName, sizeof(xi_names[0]));
     return DIENUM_CONTINUE;
   }
 
+  gui_log("Controller: \"%s\" (vendor %04lX, product %04lX) is a joystick, read through DirectInput", inst->tszProductName,
+          (unsigned long)(inst->guidProduct.Data1 & 0xFFFF), (unsigned long)(inst->guidProduct.Data1 >> 16));
   joy_info[joy_count].guidInstance = inst->guidInstance;
   lstrcpynA(joy_info[joy_count].name, inst->tszProductName, sizeof(joy_info[joy_count].name));
+  joy_info[joy_count].vendor = (unsigned)(inst->guidProduct.Data1 & 0xFFFF);
   joy_count++;
   return DIENUM_CONTINUE;
 }
@@ -477,6 +483,60 @@ const char *gui_input_joystick_name(int index)
   return joy_info[index].name;
 }
 
+#define VENDOR_SONY      0x054C
+#define VENDOR_NINTENDO  0x057E
+
+/* The pad buttons a mapping starts with on a device, laid out like a 6-button Control Pad. An XInput pad (and the keyboard, which
+   keeps the XInput set for when a pad is picked) uses XInput's own masks. A DirectInput joystick numbers its buttons from 0
+   and reports the D-pad as a hat, so XInput's masks would land the D-pad on its face buttons: it gets its own set, by the
+   maker of the pad (the vendor id). A Sony pad counts Square, Cross, Circle, Triangle, L1, R1, L2, R2, Share, Options. A Nintendo
+   pad (Switch Pro Controller and its kin) counts B, A, Y, X, L, R, ZL, ZR, -, +. Other pads are taken as Xbox-style:
+   A, B, X, Y, LB, RB, Back, Start. The buttons that are placed like the Control Pad's are the ones at the same spot on the pad. */
+void gui_input_default_buttons(int device, int *button)
+{
+  if (is_di_device(device))
+  {
+    unsigned vendor = joy_info[device - XPAD_MAX_DEVICES].vendor;
+
+    button[PAD_UP]    = (int)DI_DPAD_UP;
+    button[PAD_DOWN]  = (int)DI_DPAD_DOWN;
+    button[PAD_LEFT]  = (int)DI_DPAD_LEFT;
+    button[PAD_RIGHT] = (int)DI_DPAD_RIGHT;
+    if (vendor == VENDOR_SONY)
+    {
+      button[PAD_A] = (int)DI_BTN(0); button[PAD_B] = (int)DI_BTN(1); button[PAD_C] = (int)DI_BTN(2);
+      button[PAD_X] = (int)DI_BTN(3); button[PAD_Y] = (int)DI_BTN(5); button[PAD_Z] = (int)DI_BTN(7);
+      button[PAD_START] = (int)DI_BTN(9); button[PAD_MODE] = (int)DI_BTN(8);
+    }
+    else if (vendor == VENDOR_NINTENDO)
+    {
+      button[PAD_A] = (int)DI_BTN(2); button[PAD_B] = (int)DI_BTN(0); button[PAD_C] = (int)DI_BTN(1);
+      button[PAD_X] = (int)DI_BTN(3); button[PAD_Y] = (int)DI_BTN(5); button[PAD_Z] = (int)DI_BTN(7);
+      button[PAD_START] = (int)DI_BTN(9); button[PAD_MODE] = (int)DI_BTN(8);
+    }
+    else
+    {
+      button[PAD_A] = (int)DI_BTN(2); button[PAD_B] = (int)DI_BTN(0); button[PAD_C] = (int)DI_BTN(1);
+      button[PAD_X] = (int)DI_BTN(3); button[PAD_Y] = (int)DI_BTN(5); button[PAD_Z] = (int)DI_BTN(4);
+      button[PAD_START] = (int)DI_BTN(7); button[PAD_MODE] = (int)DI_BTN(6);
+    }
+    return;
+  }
+
+  button[PAD_UP]    = XPAD_DPAD_UP;
+  button[PAD_DOWN]  = XPAD_DPAD_DOWN;
+  button[PAD_LEFT]  = XPAD_DPAD_LEFT;
+  button[PAD_RIGHT] = XPAD_DPAD_RIGHT;
+  button[PAD_A]     = XPAD_X;
+  button[PAD_B]     = XPAD_A;
+  button[PAD_C]     = XPAD_B;
+  button[PAD_X]     = XPAD_Y;
+  button[PAD_Y]     = XPAD_RIGHT_SHOULDER;
+  button[PAD_Z]     = XPAD_RIGHT_TRIGGER;
+  button[PAD_START] = XPAD_START;
+  button[PAD_MODE]  = XPAD_BACK;
+}
+
 /* avoid_device: a device value (typically the other player's, already
    resolved) this call must never return, even if its name is also a match --
    two identical controller models is a common two-player setup, and without
@@ -589,7 +649,31 @@ static int di_ensure_acquired(int idx)
         if (SUCCEEDED(IDirectInputDevice8_GetObjectInfo(joy_dev[idx], &oi, DIJOFS_RZ, DIPH_BYOFFSET))) joy_rs_pair[idx] = 1;
       }
     }
+    /* A Sony pad has the analog triggers on Rx / Ry (they rest at the end of their range, not in the middle) and the right
+       stick on Z / Rz: taking the triggers for the stick leaves a "pressed" direction that never goes away. A Nintendo pad
+       has its right stick on Z / Rz too. */
+    if (joy_info[idx].vendor == VENDOR_SONY || joy_info[idx].vendor == VENDOR_NINTENDO)
+    {
+      ZeroMemory(&oi, sizeof(oi));
+      oi.dwSize = sizeof(oi);
+      if (SUCCEEDED(IDirectInputDevice8_GetObjectInfo(joy_dev[idx], &oi, DIJOFS_Z, DIPH_BYOFFSET)))
+      {
+        ZeroMemory(&oi, sizeof(oi));
+        oi.dwSize = sizeof(oi);
+        if (SUCCEEDED(IDirectInputDevice8_GetObjectInfo(joy_dev[idx], &oi, DIJOFS_RZ, DIPH_BYOFFSET))) joy_rs_pair[idx] = 1;
+      }
+    }
     joy_rs_base_ok[idx] = 0;
+  }
+
+  {
+    DIDEVCAPS caps;
+    ZeroMemory(&caps, sizeof(caps));
+    caps.dwSize = sizeof(caps);
+    if (SUCCEEDED(IDirectInputDevice8_GetCapabilities(joy_dev[idx], &caps)))
+      gui_log("Controller: \"%s\" opened: %lu buttons, %lu axes, %lu hats, right stick on %s", joy_info[idx].name,
+              (unsigned long)caps.dwButtons, (unsigned long)caps.dwAxes, (unsigned long)caps.dwPOVs,
+              joy_rs_pair[idx] == 0 ? "Rx / Ry" : joy_rs_pair[idx] == 1 ? "Z / Rz" : "no axes");
   }
 
   IDirectInputDevice8_Acquire(joy_dev[idx]);
