@@ -17,7 +17,6 @@ By [Hazem Abdelghani](https://github.com/hazem-abdelghani/genesis-plus-ex).
 Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx) by Eke-Eke (core by Charles MacDonald);
 32X games run in [PicoDrive](https://github.com/notaz/picodrive) by Dave, notaz, irixxxx and others. See [License](#license) for the other libraries used.
 
-⚠️ **Please do not open issues on Genesis Plus GX for Genesis Plus EX.** ⚠️
 
 ---
 ## ⚠️ **Please do not open issues on Genesis Plus GX for Genesis Plus EX.** ⚠️
