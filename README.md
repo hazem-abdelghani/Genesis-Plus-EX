@@ -20,6 +20,7 @@ Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx) by Eke-Eke
 ⚠️ **Please do not open issues on Genesis Plus GX for Genesis Plus EX.** ⚠️
 
 ---
+## ⚠️ **Please do not open issues on Genesis Plus GX for Genesis Plus EX.** ⚠️
 
 ## Contents
 
