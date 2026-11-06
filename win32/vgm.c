@@ -164,8 +164,8 @@ void vgm_attach(void)
 }
 
 /* A game starts, or is reset: the chips are blank, and so is the copy. */
-void __wrap_system_init(void)  { __real_system_init();  shadow_clear(); vgm_attach(); }
-void __wrap_system_reset(void) { __real_system_reset(); shadow_clear(); vgm_attach(); }
+void __wrap_system_init(void)  { __real_system_init();  shadow_clear(); vgm_attach(); picopcm_attach(); }
+void __wrap_system_reset(void) { __real_system_reset(); shadow_clear(); vgm_attach(); picopcm_reset(); }
 
 /* Writes the remembered registers into the freshly set-up FM chip and PSG.
    The chips take one write at a time (the Nuked FM chip loses a write that arrives before the previous one was processed),
@@ -255,6 +255,26 @@ static void pico_event(int kind, unsigned a, unsigned d, unsigned frac)
 }
 
 int vgm_active(void) { return vgm != NULL; }
+
+static void shadow_from_nuked(void);
+static void shadow_from_mame(void);
+
+/* What the sound chips hold now, for the Sound Viewer: the FM registers (port 0 and port 1) and the channels' key states, and the PSG's tones,
+   volumes and noise. Returns which FM chip there is: 1 = YM2612 / YM3438, 2 = YM2413 (registers 00-3F of the first port), 0 = none. */
+int vgm_sound_snapshot(unsigned char ym[2][256], unsigned char keyon[8], unsigned tone[3], unsigned char vol[4], unsigned char *noise)
+{
+  int i;
+
+  shadow_from_nuked();
+  shadow_from_mame();
+  memcpy(ym, ym_reg, sizeof(ym_reg));
+  memcpy(keyon, ym_keyon, sizeof(ym_keyon));
+  for (i = 0; i < 3; i++) tone[i] = psg_tone[i];
+  for (i = 0; i < 4; i++) vol[i] = psg_vol[i];
+  *noise = psg_noise;
+  if (fm_chip_is_opll()) return 2;
+  return ((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? 1 : 0;
+}
 
 /* The Nuked FM chip (the default for a Mega Drive game) keeps every register it was given in its own state, which a loaded state
    restores without any write: the copy kept above does not know it. The chip's state is read from what the core saves (the chip itself

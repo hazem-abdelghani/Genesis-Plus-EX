@@ -53,6 +53,13 @@ static struct
   void   (*set_levels)(int, int);           /* gpex_set_levels: the FM and PSG levels in percent (optional) */
   void   (*set_sound_log)(void (*)(int, unsigned, unsigned, unsigned));    /* gpex_set_sound_log (optional) */
   void  *(*memory)(int, size_t *);          /* gpex_memory: only in the library built with this program (optional) */
+  int    (*set_cpu_hook)(void (*)(int, unsigned));   /* gpex_set_cpu_hook: the CPU Debugger (optional) */
+  void   (*dasm_sh2)(char *, unsigned, unsigned);    /* gpex_dasm_sh2 (optional) */
+  int    (*regs)(int, unsigned *, int);     /* gpex_regs: the processors' registers, for the CPU Viewer (optional) */
+  void   (*vdp_reg)(int, int);                   /* gpex_vdp_reg: set a register of the video chip (optional) */
+  void   (*vdp_poke)(int, unsigned, unsigned);   /* gpex_vdp_poke: change a byte of VRAM, CRAM or VSRAM (optional) */
+  int    (*pwm_state)(int *);               /* gpex_pwm_state (optional) */
+  void   (*sound_state)(unsigned char (*)[256], unsigned char *, unsigned *, unsigned char *, unsigned char *);   /* gpex_sound_state (optional) */
 } rt;
 
 static int    loaded;              /* a game is running in the library */
@@ -60,6 +67,7 @@ static int    vars_dirty;          /* a setting the library reads (region, low-p
 static int    av_pending;          /* ... and the frame rate is asked again after that frame (a region of the other kind) */
 static int    state_quiet;         /* saving and loading states is not written to the log (rewind) */
 static size_t state_len_cache;     /* the length of the state saved last */
+static size_t state_max_seen;     /* the largest state seen for this game (see pico_state_max) */
 static double core_fps = 60.0;
 static short *audio_out;           /* where this frame's sound goes */
 static int    audio_cap, audio_got;
@@ -213,7 +221,7 @@ int pico_take_rate_change(void) { int r = rate_changed; rate_changed = 0; return
 static const char *sample_rate_text(void)
 {
   static char text[16];
-  wsprintfA(text, "%d", gui.sample_rate > 0 ? gui.sample_rate : 44100);
+  wsprintfA(text, "%d", gui_cd_rate ? gui_cd_rate : (gui.sample_rate > 0 ? gui.sample_rate : 44100));
   return text;
 }
 
@@ -381,6 +389,13 @@ static int resolve(void)
   *(FARPROC *)&rt.set_levels = GetProcAddress(rt.dll, "gpex_set_levels");
   *(FARPROC *)&rt.set_pwm = GetProcAddress(rt.dll, "gpex_set_pwm");
   *(FARPROC *)&rt.set_sound_log = GetProcAddress(rt.dll, "gpex_set_sound_log");
+  *(FARPROC *)&rt.regs = GetProcAddress(rt.dll, "gpex_regs");
+  *(FARPROC *)&rt.set_cpu_hook = GetProcAddress(rt.dll, "gpex_set_cpu_hook");
+  *(FARPROC *)&rt.dasm_sh2 = GetProcAddress(rt.dll, "gpex_dasm_sh2");
+  *(FARPROC *)&rt.sound_state = GetProcAddress(rt.dll, "gpex_sound_state");
+  *(FARPROC *)&rt.pwm_state = GetProcAddress(rt.dll, "gpex_pwm_state");
+  *(FARPROC *)&rt.vdp_poke = GetProcAddress(rt.dll, "gpex_vdp_poke");
+  *(FARPROC *)&rt.vdp_reg = GetProcAddress(rt.dll, "gpex_vdp_reg");
   *(FARPROC *)&rt.memory = GetProcAddress(rt.dll, "gpex_memory");       /* optional: without it there are no cheats */
 #undef SYM
   gui_log("32X library: %s (%s)", path, rt.set_sound_log && rt.memory && rt.set_mute && rt.set_levels ? "complete" : "OLD: it lacks parts this program needs; use the one from the newest zip");
@@ -425,7 +440,7 @@ int pico_load(const char *path, char *err, int err_len)
 
   pico_unload();
   fail(err, err_len, "");
-  run_rate = gui.sample_rate > 0 ? gui.sample_rate : 44100;
+  run_rate = gui_cd_rate ? gui_cd_rate : (gui.sample_rate > 0 ? gui.sample_rate : 44100);
 
   if (!resolve())
   {
@@ -464,6 +479,7 @@ int pico_load(const char *path, char *err, int err_len)
   core_fps = av.timing.fps > 20.0 ? av.timing.fps : 60.0;
   loaded = 1;
   state_len_cache = 0;
+  state_max_seen = 0;
   if (!restarting)
   {
     char tmp[GUI_PATH_LEN];
@@ -472,7 +488,7 @@ int pico_load(const char *path, char *err, int err_len)
     if (keep_path[0]) { DeleteFileA(keep_path); keep_path[0] = '\0'; }
     lstrcpynA(last_path, path, sizeof(last_path));
     /* A game unpacked into the temporary folder is deleted by the caller once it is loaded: a copy is kept for a restart. */
-    if (n > 0 && n < sizeof(tmp) && !_strnicmp(path, tmp, n))
+    if (n > 0 && n < sizeof(tmp) && !_strnicmp(path, tmp, n) && !strstr(path, "\\gpexmdp"))          /* (a game unpacked whole stays where it is until it closes) */
     {
       lstrcpynA(keep_path, tmp, sizeof(keep_path));
       lstrcatA(keep_path, "gpex32x-restart.tmp");
@@ -688,10 +704,66 @@ unsigned char *pico_memory(int what, unsigned *size)
   return (unsigned char *)p;
 }
 
+/* The registers of a processor of the 32X game (see gpex_regs in the library): the number of values written to out, -1 for none. */
+int pico_regs(int which, unsigned *out, int max)
+{
+  return (loaded && rt.regs) ? rt.regs(which, out, max) : -1;
+}
+
+/* The CPU Debugger: cb is called before every instruction of the 68000 (cpu 0) and the SH-2s (1: master, 2: slave) of the 32X game
+   (NULL: no more). 0 when the library cannot (an older one). */
+int pico_cpu_hook(void (*cb)(int cpu, unsigned pc))
+{
+  if (!loaded || !rt.set_cpu_hook || !rt.dasm_sh2) return 0;
+  return rt.set_cpu_hook(cb);
+}
+
+/* An SH-2 instruction as text (out holds at least 64 characters). */
+void pico_dasm_sh2(char *out, unsigned pc, unsigned opcode)
+{
+  out[0] = '\0';
+  if (loaded && rt.dasm_sh2) rt.dasm_sh2(out, pc, opcode);
+}
+
+/* Sets a register of the 32X game's video chip the way the game would; 0 when the library cannot. */
+int pico_vdp_reg(int reg, int value)
+{
+  if (!loaded || !rt.vdp_reg) return 0;
+  rt.vdp_reg(reg, value);
+  return 1;
+}
+
+/* Changes one byte of the 32X game's VRAM (kind 3), CRAM (4) or VSRAM (5) the way the video chip would; 0 when the library cannot. */
+int pico_poke(int kind, unsigned off, int value)
+{
+  if (!loaded || !rt.vdp_poke) return 0;
+  rt.vdp_poke(kind, off, (unsigned)value);
+  return 1;
+}
+
+/* The 32X PWM chip as it is now (8 values, see gpex_pwm_state_get in the library); 0 when there is none. */
+int pico_pwm_state(int out[8])
+{
+  return (loaded && rt.pwm_state) ? rt.pwm_state(out) : 0;
+}
+
+/* The FM chip and the PSG as they are now; 0 when the library has no such call. */
+int pico_sound_state(unsigned char ym[2][256], unsigned char keyon[8], unsigned tone[3], unsigned char vol[4], unsigned char *noise)
+{
+  if (!loaded || !rt.sound_state) return 0;
+  rt.sound_state(ym, keyon, tone, vol, noise);
+  return 1;
+}
+
+/* The largest state seen so far for this game: the size the library reports changes while the game runs (the 32X is switched on, a CD
+   stream starts), and a buffer made for an earlier, smaller one would refuse the state. */
 size_t pico_state_max(void)
 {
   size_t n = loaded ? rt.serialize_size() : 0;
-  return n + 4096;
+
+  if (n > state_max_seen) state_max_seen = n;
+  if (state_len_cache > state_max_seen) state_max_seen = state_len_cache;
+  return state_max_seen + 4096;
 }
 
 /* Rewind saves and loads a state at every frame: that is not written to the log, and the size is asked of the library once

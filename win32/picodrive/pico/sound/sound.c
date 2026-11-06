@@ -83,6 +83,23 @@ void gpex_sound_dump(void (*cb)(int, unsigned, unsigned, unsigned))
   cb(2, 0, 0x80 | (7 << 4) | (unsigned)(sn76496_regs[7] & 0x0F), 0);
 }
 
+/* The FM chip's registers and key states and the PSG's tones, volumes and noise as they are now (the program's Sound Viewer). */
+void gpex_sound_state_get(unsigned char ym[2][256], unsigned char keyon[8], unsigned tone[3], unsigned char vol[4], unsigned char *noise)
+{
+  int i;
+
+  gpex_ym_from_chip();
+  memcpy(ym, gpex_ym_reg, sizeof(gpex_ym_reg));
+  memcpy(keyon, gpex_ym_keyon, sizeof(gpex_ym_keyon));
+  for (i = 0; i < 3; i++)
+  {
+    tone[i] = (unsigned)sn76496_regs[i * 2] & 0x3FF;
+    vol[i] = (unsigned char)(sn76496_regs[i * 2 + 1] & 15);
+  }
+  vol[3] = (unsigned char)(sn76496_regs[7] & 15);
+  *noise = (unsigned char)(sn76496_regs[6] & 7);
+}
+
 // master int buffer to mix to
 // +1 for a fill triggered by an instruction overhanging into the next scanline
 static s32 PsndBuffer[2*(54000+100)/50+2];

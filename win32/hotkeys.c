@@ -96,6 +96,8 @@ static const hk_t hk[] =
   { "Stop Recording",                 IDM_FILE_REC_STOP,           K_ALT | VK_F11 },
   { "Record VGM File",                IDM_TOOLS_VGM,               K_SHIFT | VK_F10 },
   { "Save a Screenshot",              IDM_FILE_SCREENSHOT,         VK_F12 },
+  { "Sega Pico: Previous Page",       IDM_EMU_PICO_PAGEPREV,       VK_NEXT },
+  { "Sega Pico: Next Page",           IDM_EMU_PICO_PAGENEXT,       VK_PRIOR },
 };
 #define HK_N ((int)(sizeof(hk) / sizeof(hk[0])))
 typedef char hotkey_table_fits_gui_hotkey[(sizeof(hk) / sizeof(hk[0])) <= 96 ? 1 : -1];   /* gui.hotkey[] holds 96 */
@@ -547,7 +549,7 @@ static INT_PTR CALLBACK hotkeys_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
     {
-      HBRUSH br = theme_ctlcolor((HDC)wp);
+      HBRUSH br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
       if (br) return (LRESULT)br;
       break;
     }
@@ -616,7 +618,7 @@ void dlg_hotkeys(HWND parent)
  * Which button runs which action is set here (Controls > Gamepad Hotkeys...).
  ****************************************************************************/
 
-typedef struct { const char *name; int cmd; int def; } ph_t;
+typedef struct { const char *name; int cmd; padmask_t def; } ph_t;
 
 /* The pad button masks are XInput's own. Fast Forward and Rewind are held buttons (cmd 0); the rest
    run their command once per press. None needs Back held: the defaults use the right stick, which
@@ -645,7 +647,7 @@ static const ph_t ph[] =
 
 int padhk_count(void) { return PH_N; }
 int padhk_cmd(int i) { return ph[i].cmd; }
-int padhk_default(int i) { return ph[i].def; }
+padmask_t padhk_default(int i) { return ph[i].def; }
 void padhk_ini_key(int i, char *out)
 {
   if (i == PADHK_FASTFWD)      lstrcpyA(out, "pad_fast_forward");
@@ -653,12 +655,12 @@ void padhk_ini_key(int i, char *out)
   else                         wsprintfA(out, "padhk_cmd%d", ph[i].cmd);
 }
 /* Player 1 on a DirectInput joystick: its buttons have their own numbers, kept apart from XInput's. */
-static int *padhk_array_for(int dev)
+static padmask_t *padhk_array_for(int dev)
 {
   return dev >= GUI_INPUT_XPAD_COUNT ? gui.padhk_di : gui.padhk;
 }
 
-static int *padhk_array(void)
+static padmask_t *padhk_array(void)
 {
   return padhk_array_for(gui.pad[0].device);
 }
@@ -666,13 +668,13 @@ static int *padhk_array(void)
 /* The Gamepad Hotkeys window works on the pad the Controls window shows for Player 1 (not saved yet). */
 static int phd_dev = -1;
 
-int padhk_mask(int i) { return padhk_array()[i]; }
+padmask_t padhk_mask(int i) { return padhk_array()[i]; }
 
 /* The gamepad hotkey on this pad button, or NULL. */
-const char *padhk_owner_of_button(int mask)
+const char *padhk_owner_of_button(padmask_t mask)
 {
   int i;
-  const int *a = padhk_array();
+  const padmask_t *a = padhk_array();
   if (!mask) return NULL;
   for (i = 0; i < PH_N; i++)
     if (a[i] == mask) return ph[i].name;
@@ -681,9 +683,9 @@ const char *padhk_owner_of_button(int mask)
 
 int padhk_is_hold(int i) { return i == PADHK_FASTFWD || i == PADHK_REWIND; }
 
-static const char *padhk_button_name(int mask)
+static const char *padhk_button_name(padmask_t mask)
 {
-  switch (mask)
+  switch ((unsigned)mask)
   {
     case 0x0001: return "D-Pad Up";
     case 0x0002: return "D-Pad Down";
@@ -711,14 +713,14 @@ static const char *padhk_button_name(int mask)
 
 static struct
 {
-  int work[24];
+  padmask_t work[24];
   int capture;       /* the row being assigned, or -1 */
   int phase;         /* 0 = waiting for every button to be let go, 1 = listening */
   DWORD deadline;
 } phd;
 
 /* The name of a pad button for Player 1's pad, whichever kind it is. */
-static const char *phd_button_name(int mask)
+static const char *phd_button_name(padmask_t mask)
 {
   return phd_dev >= GUI_INPUT_XPAD_COUNT ? input_pad_button_name(phd_dev, mask) : padhk_button_name(mask);
 }
@@ -825,7 +827,8 @@ static INT_PTR CALLBACK padhk_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
       if (wp == 8 && phd.capture >= 0)
       {
-        int dev = phd_dev, m, j, row = phd.capture;
+        int dev = phd_dev, j, row = phd.capture;
+        padmask_t m;
 
         if ((int)(GetTickCount() - phd.deadline) >= 0) { phd_end(dlg); SetDlgItemTextA(dlg, IDC_PH_HINT, "No button was pressed."); return TRUE; }
         if (GetForegroundWindow() != dlg) return TRUE;
@@ -871,7 +874,7 @@ static INT_PTR CALLBACK padhk_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
     {
-      HBRUSH br = theme_ctlcolor((HDC)wp);
+      HBRUSH br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
       if (br) return (LRESULT)br;
       break;
     }

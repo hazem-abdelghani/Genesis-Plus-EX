@@ -13,6 +13,8 @@
 #ifndef _SEVENZIP_H_
 #define _SEVENZIP_H_
 
+#include <stdio.h>
+
 typedef struct sevenzip_s sevenzip_t;
 
 /* Opens path for reading. NULL if it can't be opened or isn't a valid,
@@ -41,6 +43,9 @@ unsigned int sevenzip_entry_size(sevenzip_t *sz, int i);
    or -1 on error. Repeated calls reuse the SDK's own solid-block cache, so
    extracting several entries from the same solid archive is still cheap. */
 int sevenzip_extract(sevenzip_t *sz, int i, unsigned char *buffer, int maxsize);
+
+/* Entry i written straight into an open file: the bytes written, or -1. */
+long long sevenzip_extract_to_file(sevenzip_t *sz, int i, FILE *fp);
 
 void sevenzip_close(sevenzip_t *sz);
 

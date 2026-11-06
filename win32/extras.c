@@ -141,7 +141,7 @@ static INT_PTR CALLBACK shaderparams_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM 
     case WM_CTLCOLORBTN:
     case WM_CTLCOLORLISTBOX:
     {
-      HBRUSH br = theme_ctlcolor((HDC)wp);
+      HBRUSH br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
       if (br) return (LRESULT)br;
       break;
     }

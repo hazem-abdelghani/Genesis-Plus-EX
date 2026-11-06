@@ -315,6 +315,18 @@ static int create_device_and_swapchain(int w, int h)
 
   if (FAILED(hr)) return 0;
 
+  /* VSync (Present with a sync interval of 1) waits when the driver already has this many frames queued: the default is 3, which
+     would add up to three frames of delay between a button press and the picture. One keeps it as short as the display allows. */
+  {
+    IDXGIDevice1 *dxgi_dev = NULL;
+
+    if (SUCCEEDED(ID3D11Device_QueryInterface(device, &IID_IDXGIDevice1, (void **)&dxgi_dev)) && dxgi_dev)
+    {
+      IDXGIDevice1_SetMaximumFrameLatency(dxgi_dev, 1);
+      IDXGIDevice1_Release(dxgi_dev);
+    }
+  }
+
   swap_w = w; swap_h = h;
   return create_rtv();
 }
@@ -735,12 +747,21 @@ int d3d11_draw_overlay(const uint32 *argb_pixels, int argb_pitch,
   return 1;
 }
 
+/* VSync: 1 makes the next d3d11_present() wait for the display's refresh (the swap chain does the waiting), 0 shows the frame at once.
+   video.c sets it for each frame (it is 0 when the sound buffer runs low, so a wait never starves the sound card). */
+static int present_sync;
+
+void d3d11_set_sync(int on)
+{
+  present_sync = on ? 1 : 0;
+}
+
 void d3d11_present(void)
 {
   HRESULT hr;
 
   if (!device_ok) return;
-  hr = IDXGISwapChain_Present(swapchain, 0, 0);
+  hr = IDXGISwapChain_Present(swapchain, present_sync, 0);
   if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)      /* the graphics driver was reset or the GPU went away */
   {
     release_device();

@@ -98,8 +98,54 @@ int theme_get_mode(void)
 int theme_is_dark(void)
 {
   if (gui.theme_mode == THEME_LIGHT) return 0;
-  if (gui.theme_mode == THEME_DARK)  return 1;
+  if (gui.theme_mode >= THEME_DARK)  return 1;
   return system_dark;
+}
+
+/* The colored dark themes: the dark theme's grays tinted toward one color, and the accent color used while none is chosen. Only the
+   color of the background is given: every other gray moves toward it by the same amount, less the lighter it is (text stays white). */
+static const struct { COLORREF base, accent, edge, modern; } pal[THEME_COUNT - THEME_SAPPHIRE] =
+{
+  { RGB(8, 24, 54),  RGB(0x00, 0x5C, 0xA8), RGB(0x00, 0x89, 0xCF), RGB(0x1E, 0x9B, 0xE8) },      /* Sapphire */
+  { RGB(44, 14, 20), RGB(0x9A, 0x1F, 0x2E), RGB(0xE0, 0x48, 0x5A), RGB(0xE5, 0x4B, 0x5C) },      /* Ruby */
+  { RGB(10, 38, 28), RGB(0x17, 0x62, 0x46), RGB(0x3F, 0xCB, 0x8E), RGB(0x22, 0x93, 0x66) },      /* Emerald */
+  { RGB(30, 16, 52), RGB(0x6A, 0x3D, 0xB8), RGB(0xA8, 0x80, 0xF0), RGB(0xA0, 0x78, 0xF0) },      /* Amethyst */
+  { RGB(44, 30, 10), RGB(0x8A, 0x50, 0x00), RGB(0xF0, 0xA8, 0x30), RGB(0xB0, 0x70, 0x10) },      /* Amber */
+  { RGB(8, 38, 42),  RGB(0x0B, 0x66, 0x6C), RGB(0x2D, 0xD4, 0xD0), RGB(0x13, 0x8F, 0x96) },      /* Aquamarine */
+  { RGB(40, 42, 48), RGB(0x38, 0x3F, 0x4C), RGB(0xA6, 0xAF, 0xBE), RGB(0x48, 0x51, 0x62) },      /* Diamond: a dark selection, white text reads on it */
+};
+
+static int colored_theme(void);
+static int mod_look(void) { return gui.ui_style || colored_theme() >= 0; }       /* the program draws the buttons and drop-downs itself: Modern, or a colored theme (the system's cannot take a tint) */
+
+static int colored_theme(void)       /* index in pal, or -1 */
+{
+  return gui.theme_mode >= THEME_SAPPHIRE && gui.theme_mode < THEME_COUNT ? gui.theme_mode - THEME_SAPPHIRE : -1;
+}
+
+int theme_colored(void) { return colored_theme() >= 0; }
+
+COLORREF theme_dk(COLORREF c)
+{
+  int t = colored_theme(), ch[3], b[3], i;
+
+  if (t < 0) return c;
+  ch[0] = GetRValue(c); ch[1] = GetGValue(c); ch[2] = GetBValue(c);
+  b[0] = GetRValue(pal[t].base); b[1] = GetGValue(pal[t].base); b[2] = GetBValue(pal[t].base);
+  {
+    int hi = ch[0] > ch[1] ? ch[0] : ch[1], lo = ch[0] < ch[1] ? ch[0] : ch[1];
+
+    if (ch[2] > hi) hi = ch[2];
+    if (ch[2] < lo) lo = ch[2];
+    if (hi - lo <= 40) ch[0] = ch[1] = ch[2] = (ch[0] + ch[1] + ch[2]) / 3;       /* a gray with a little blue in it: the gray it stands for */
+  }
+  for (i = 0; i < 3; i++)
+  {
+    ch[i] += (b[i] - 32) * (255 - ch[i]) / 223;
+    if (ch[i] < 0) ch[i] = 0;
+    if (ch[i] > 255) ch[i] = 255;
+  }
+  return RGB(ch[0], ch[1], ch[2]);
 }
 
 /* A more direct fix than SB_SETBKCOLOR, which turned out not to
@@ -296,7 +342,7 @@ static LRESULT CALLBACK listview_grid_subclass_proc(HWND hwnd, UINT msg, WPARAM 
       RECT cr;
       HWND header = ListView_GetHeader(hwnd);
       int hh = 0, i, n, cols;
-      HPEN pen = CreatePen(PS_SOLID, 1, theme_is_dark() ? RGB(0x3A, 0x3A, 0x3A) : RGB(0xDD, 0xDD, 0xDD));
+      HPEN pen = CreatePen(PS_SOLID, 1, theme_is_dark() ? theme_dk(RGB(0x3A, 0x3A, 0x3A)) : RGB(0xDD, 0xDD, 0xDD));
       HGDIOBJ op = SelectObject(dc, pen);
 
       GetClientRect(hwnd, &cr);
@@ -505,8 +551,8 @@ static BOOL CALLBACK apply_to_child(HWND hwnd, LPARAM lparam)
        themes (the built-in grid is too bright in dark mode). */
     SendMessage(hwnd, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_GRIDLINES, 0);
     if (GetDlgCtrlID(hwnd) != IDC_BROWSER_LIST) SetWindowSubclass(hwnd, listview_grid_subclass_proc, 6, 0);
-    COLORREF bg_color = GetDlgCtrlID(hwnd) == IDC_BROWSER_LIST ? RGB(0x24, 0x24, 0x24)   /* the ROM browser: darker, #242424 */
-                                                                : RGB(0x2D, 0x2D, 0x2D);  /* every other list: #2D2D2D */
+    COLORREF bg_color = GetDlgCtrlID(hwnd) == IDC_BROWSER_LIST ? theme_dk(RGB(0x24, 0x24, 0x24))   /* the ROM browser: darker, #242424 */
+                                                                : theme_dk(RGB(0x2D, 0x2D, 0x2D));  /* every other list: #2D2D2D */
     ListView_SetBkColor(hwnd, dark ? bg_color : RGB(255, 255, 255));
     ListView_SetTextColor(hwnd, dark ? THEME_DARK_TEXT : RGB(0, 0, 0));
     ListView_SetTextBkColor(hwnd, dark ? bg_color : RGB(255, 255, 255));
@@ -571,7 +617,7 @@ static BOOL CALLBACK fit_check_width(HWND c, LPARAM lp)
   SetRectEmpty(&tr);
   DrawTextA(dc, text, -1, &tr, DT_CALCRECT | DT_SINGLELINE | DT_LEFT);
   SelectObject(dc, of);
-  dpi = GetDeviceCaps(dc, LOGPIXELSX);
+  dpi = gui_dpi;
   ReleaseDC(c, dc);
 
   if (gui.ui_style)
@@ -728,6 +774,7 @@ HFONT theme_menu_font(void)
 
 static COLORREF modern_blue(void)      /* the Modern style's color when no accent color is chosen */
 {
+  if (colored_theme() >= 0) return pal[colored_theme()].modern;
   return theme_is_dark() ? RGB(0x4C, 0x9A, 0xFF) : RGB(0x00, 0x67, 0xC0);
 }
 
@@ -741,8 +788,8 @@ COLORREF theme_modern_accent(void) { return mod_accent(); }
 
 static COLORREF mod_text(int dark, int disabled)
 {
-  if (disabled) return dark ? THEME_DARK_MUTED : RGB(160, 160, 165);
-  return dark ? THEME_DARK_TEXT : RGB(27, 27, 27);
+  if (disabled) return dark ? THEME_DARK_MUTED : theme_dk(RGB(160, 160, 165));
+  return dark ? THEME_DARK_TEXT : theme_dk(RGB(27, 27, 27));
 }
 
 static void mod_fill_parent(HWND h, HDC dc, const RECT *rc)
@@ -752,10 +799,11 @@ static void mod_fill_parent(HWND h, HDC dc, const RECT *rc)
   FillRect(dc, rc, b ? b : GetSysColorBrush(COLOR_BTNFACE));
 }
 
-static int mod_dpi_px(HDC dc, int px)
+/* A size in pixels at the display scale of the program's window (kept up to date when the scale changes: the device context
+   keeps answering with the scale of the system when the program started). */
+static int mod_dpi_px(int px)
 {
-  int dpi = GetDeviceCaps(dc, LOGPIXELSX);
-  return MulDiv(px, dpi > 0 ? dpi : 96, 96);
+  return MulDiv(px, gui_dpi > 0 ? gui_dpi : 96, 96);
 }
 
 static void mod_draw_text(HWND h, HDC dc, RECT *tr, UINT flags, COLORREF color)
@@ -859,8 +907,8 @@ static void mod_push_colors(int dark, int hot, int pushed, int dis, int def, COL
   }
   else if (dark)
   {
-    *fill = dis ? RGB(42, 44, 50) : pushed ? RGB(44, 46, 52) : hot ? RGB(68, 72, 84) : RGB(54, 57, 66);
-    *edge = dis ? RGB(58, 60, 66) : hot ? RGB(104, 110, 126) : RGB(82, 86, 98);
+    *fill = dis ? theme_dk(RGB(42, 44, 50)) : pushed ? theme_dk(RGB(44, 46, 52)) : hot ? theme_dk(RGB(68, 72, 84)) : theme_dk(RGB(54, 57, 66));
+    *edge = dis ? theme_dk(RGB(58, 60, 66)) : hot ? theme_dk(RGB(104, 110, 126)) : theme_dk(RGB(82, 86, 98));
     *text = mod_text(1, dis);
   }
   else
@@ -883,7 +931,7 @@ static void mod_paint_push(HWND h, HDC dc, const RECT *rc)
   RECT tr;
   mod_ss ss;
   int w = rc->right - rc->left, hh = rc->bottom - rc->top;
-  double rad = (double)mod_dpi_px(dc, 5);
+  double rad = (double)mod_dpi_px(5);
 
   mod_push_colors(dark, hot, pushed, dis, def, &fill, &text, &edge);
 
@@ -899,7 +947,7 @@ static void mod_paint_push(HWND h, HDC dc, const RECT *rc)
   }
 
   tr = *rc;
-  InflateRect(&tr, -mod_dpi_px(dc, 4), 0);
+  InflateRect(&tr, -mod_dpi_px(4), 0);
   {
     UINT align = ((st & BS_CENTER) == BS_LEFT) ? DT_LEFT : ((st & BS_CENTER) == BS_RIGHT) ? DT_RIGHT : DT_CENTER;
     if (!(st & BS_MULTILINE))
@@ -927,13 +975,13 @@ static void mod_paint_check(HWND h, HDC dc, const RECT *rc)
   int check = (int)SendMessage(h, BM_GETCHECK, 0, 0);
   int hot = GetPropA(h, "gpx_hot") != NULL, dis = !IsWindowEnabled(h);
   int focus = ((int)SendMessage(h, BM_GETSTATE, 0, 0) & BST_FOCUS) != 0;
-  int sz = mod_dpi_px(dc, 16);
+  int sz = mod_dpi_px(16);
   double lw = 1.5 * sz / 16.0;
   RECT box, tr;
-  COLORREF accent = mod_accent(), edge = dark ? (hot ? RGB(190, 194, 205) : RGB(140, 144, 155)) : (hot ? RGB(60, 60, 66) : RGB(105, 105, 112)), bg;
+  COLORREF accent = mod_accent(), edge = dark ? (hot ? theme_dk(RGB(190, 194, 205)) : theme_dk(RGB(140, 144, 155))) : (hot ? theme_dk(RGB(60, 60, 66)) : theme_dk(RGB(105, 105, 112))), bg;
   mod_ss ss;
 
-  if (dis) { accent = dark ? RGB(70, 76, 90) : RGB(180, 190, 205); edge = dark ? RGB(80, 82, 90) : RGB(190, 190, 196); }
+  if (dis) { accent = dark ? theme_dk(RGB(70, 76, 90)) : theme_dk(RGB(180, 190, 205)); edge = dark ? theme_dk(RGB(80, 82, 90)) : theme_dk(RGB(190, 190, 196)); }
   else if (focus && !check) edge = accent;                       /* the keyboard focus: the box's outline in the accent color */
 
   mod_fill_parent(h, dc, rc);
@@ -985,7 +1033,7 @@ static void mod_paint_check(HWND h, HDC dc, const RECT *rc)
   }
 
   tr = *rc;
-  tr.left = box.right + mod_dpi_px(dc, 8);
+  tr.left = box.right + mod_dpi_px(8);
   mod_draw_text(h, dc, &tr, DT_LEFT | DT_VCENTER | ((st & BS_MULTILINE) ? DT_WORDBREAK : DT_SINGLELINE | DT_END_ELLIPSIS), mod_text(dark, dis));
 
 }
@@ -995,7 +1043,7 @@ static void mod_paint_check(HWND h, HDC dc, const RECT *rc)
 void theme_draw_tickbox(HDC dc, int x, int y, int sz, int checked, COLORREF bg)
 {
   int dark = theme_is_dark();
-  COLORREF accent = mod_accent(), edge = dark ? RGB(140, 144, 155) : RGB(105, 105, 112);
+  COLORREF accent = mod_accent(), edge = dark ? theme_dk(RGB(140, 144, 155)) : theme_dk(RGB(105, 105, 112));
   double lw = 1.5 * sz / 16.0, rad = sz * 0.25;
   mod_ss ss;
 
@@ -1109,7 +1157,7 @@ static void modern_button_hook(HWND hwnd)
   DWORD_PTR dummy;
 
   /* Classic: the check boxes and radio buttons are drawn here too, flat and in the accent color (the system's cannot take it). */
-  if (ours && (gui.ui_style || (type != BS_PUSHBUTTON && type != BS_DEFPUSHBUTTON))) SetWindowSubclass(hwnd, modern_button_proc, 7, 0);
+  if (ours && (mod_look() || (type != BS_PUSHBUTTON && type != BS_DEFPUSHBUTTON))) SetWindowSubclass(hwnd, modern_button_proc, 7, 0);
   else if (GetWindowSubclass(hwnd, modern_button_proc, 7, &dummy)) { RemoveWindowSubclass(hwnd, modern_button_proc, 7); InvalidateRect(hwnd, NULL, TRUE); }
 }
 
@@ -1129,6 +1177,8 @@ static wchar_t *mod_row_text(HWND h, UINT get_len, UINT get_text, int i)
   SendMessageW(h, get_text, (WPARAM)i, (LPARAM)t);
   return t;
 }
+
+static int mod_combo_painting;       /* the Modern box is being drawn by modern_combo_proc (it draws the field itself); a row drawn by Windows at another time has to fill its own */
 
 static LRESULT CALLBACK modern_combo_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR ref)
 {
@@ -1165,8 +1215,8 @@ static LRESULT CALLBACK modern_combo_proc(HWND h, UINT m, WPARAM w, LPARAM l, UI
       old = bmp ? SelectObject(mem, bmp) : NULL;
       to = bmp ? mem : dc;
 
-      fill = dark ? (dis ? RGB(38, 40, 46) : hot ? RGB(54, 58, 68) : RGB(46, 49, 57)) : (dis ? RGB(246, 246, 247) : hot ? RGB(244, 247, 252) : RGB(255, 255, 255));
-      edge = dark ? (focus ? mod_accent() : hot ? RGB(104, 110, 126) : RGB(82, 86, 98)) : (focus ? mod_accent() : hot ? RGB(150, 178, 224) : RGB(196, 200, 210));
+      fill = dark ? (dis ? theme_dk(RGB(38, 40, 46)) : hot ? theme_dk(RGB(54, 58, 68)) : theme_dk(RGB(46, 49, 57))) : (dis ? RGB(246, 246, 247) : hot ? RGB(244, 247, 252) : RGB(255, 255, 255));
+      edge = dark ? (focus ? mod_accent() : hot ? theme_dk(RGB(104, 110, 126)) : theme_dk(RGB(82, 86, 98))) : (focus ? mod_accent() : hot ? RGB(150, 178, 224) : RGB(196, 200, 210));
       text = mod_text(dark, dis);
       if (editable && have_ci && ci.hwndItem && !dis)
       {
@@ -1181,16 +1231,16 @@ static LRESULT CALLBACK modern_combo_proc(HWND h, UINT m, WPARAM w, LPARAM l, UI
       if (bg == CLR_INVALID) bg = dark ? THEME_DARK_BG : GetSysColor(COLOR_BTNFACE);
       if (mod_ss_begin(&ss, to, rw, rh, bg))
       {
-        double rad = (double)mod_dpi_px(to, 5);
+        double rad = (double)mod_dpi_px(5);
         mod_ss_round(&ss, 0.5, 0.5, rw - 1, rh - 1, rad, fill, edge, focus ? 2.0 : 1.0);
         {
           /* the chevron on the right */
           LOGBRUSH lb;
           HPEN pen;
           HGDIOBJ op;
-          double cx = rw - mod_dpi_px(to, 14), cy = rh / 2.0, d = mod_dpi_px(to, 3) + 1;
+          double cx = rw - mod_dpi_px(14), cy = rh / 2.0, d = mod_dpi_px(3) + 1;
           if (have_ci && ci.rcButton.right > ci.rcButton.left) { cx = (ci.rcButton.left + ci.rcButton.right) / 2.0; cy = (ci.rcButton.top + ci.rcButton.bottom) / 2.0; }      /* in the middle of the button */
-          lb.lbStyle = BS_SOLID; lb.lbColor = dis ? (dark ? RGB(90, 92, 100) : RGB(190, 190, 196)) : (dark ? RGB(200, 204, 214) : RGB(80, 84, 94)); lb.lbHatch = 0;
+          lb.lbStyle = BS_SOLID; lb.lbColor = dis ? (dark ? theme_dk(RGB(90, 92, 100)) : theme_dk(RGB(190, 190, 196))) : (dark ? RGB(200, 204, 214) : theme_dk(RGB(80, 84, 94))); lb.lbHatch = 0;
           pen = ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_ROUND | PS_JOIN_ROUND, (DWORD)(1.6 * MOD_SS + 0.5), &lb, 0, NULL);
           op = SelectObject(ss.dc, pen);
           MoveToEx(ss.dc, (int)((cx - d) * MOD_SS), (int)((cy - d / 2) * MOD_SS), NULL);
@@ -1203,8 +1253,8 @@ static LRESULT CALLBACK modern_combo_proc(HWND h, UINT m, WPARAM w, LPARAM l, UI
       }
 
       tr = rc;
-      tr.left += mod_dpi_px(to, 4);
-      tr.right -= mod_dpi_px(to, 26);
+      tr.left += mod_dpi_px(4);
+      tr.right -= mod_dpi_px(26);
       InflateRect(&tr, 0, -2);
       sel = (int)SendMessage(h, CB_GETCURSEL, 0, 0);
       f = (HFONT)SendMessage(h, WM_GETFONT, 0, 0);
@@ -1226,12 +1276,14 @@ static LRESULT CALLBACK modern_combo_proc(HWND h, UINT m, WPARAM w, LPARAM l, UI
           di.hwndItem = h;
           di.hDC = to;
           di.rcItem = tr;
+          mod_combo_painting = 1;
           if (sel >= 0) SendMessage(GetParent(h), WM_DRAWITEM, (WPARAM)di.CtlID, (LPARAM)&di);
+          mod_combo_painting = 0;
         }
         else if ((cst & 3) == CBS_DROPDOWNLIST)
         {
           wchar_t *item = sel >= 0 ? mod_row_text(h, CB_GETLBTEXTLEN, CB_GETLBTEXT, sel) : NULL;
-          tr.left += mod_dpi_px(to, 6);
+          tr.left += mod_dpi_px(6);
           if (item) { DrawTextW(to, item, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX); free(item); }
         }
         if (of) SelectObject(to, of);
@@ -1313,7 +1365,7 @@ static LRESULT CALLBACK modern_list_proc(HWND h, UINT m, WPARAM w, LPARAM l, UIN
       HGDIOBJ old;
       HDC to;
       int dark = theme_is_dark(), n, top, sel, i;
-      COLORREF bgc = dark ? RGB(40, 43, 50) : RGB(255, 255, 255);
+      COLORREF bgc = dark ? theme_dk(RGB(40, 43, 50)) : RGB(255, 255, 255);
       HBRUSH bb;
       HFONT f = (HFONT)SendMessage(h, WM_GETFONT, 0, 0);
 
@@ -1342,15 +1394,15 @@ static LRESULT CALLBACK modern_list_proc(HWND h, UINT m, WPARAM w, LPARAM l, UIN
           item = mod_row_text(h, LB_GETTEXTLEN, LB_GETTEXT, i);
           if (i == sel)
           {
-            HBRUSH hb = CreateSolidBrush(dark ? RGB(66, 74, 96) : RGB(222, 232, 248));
+            HBRUSH hb = CreateSolidBrush(dark ? theme_dk(RGB(66, 74, 96)) : RGB(222, 232, 248));
             HGDIOBJ ob = SelectObject(to, hb), op = SelectObject(to, GetStockObject(NULL_PEN));
-            int rr = mod_dpi_px(to, 4);
+            int rr = mod_dpi_px(4);
             RoundRect(to, ir.left + rr, ir.top + 1, ir.right - rr, ir.bottom - 1, rr * 2, rr * 2);
             SelectObject(to, ob); SelectObject(to, op); DeleteObject(hb);
           }
           pr = ir;
-          pr.left += mod_dpi_px(to, 12);
-          SetTextColor(to, dark ? THEME_DARK_TEXT : RGB(27, 27, 27));
+          pr.left += mod_dpi_px(12);
+          SetTextColor(to, dark ? THEME_DARK_TEXT : theme_dk(RGB(27, 27, 27)));
           if (item) { DrawTextW(to, item, -1, &pr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX); free(item); }
         }
         if (of) SelectObject(to, of);
@@ -1397,7 +1449,7 @@ static void modern_combo_hook(HWND hwnd)
   int plain = type == CBS_DROPDOWNLIST && !(st & (CBS_OWNERDRAWFIXED | CBS_OWNERDRAWVARIABLE));     /* the open list is restyled only for these */
 
   cbi.cbSize = sizeof(cbi);
-  if (gui.ui_style && ours)
+  if (mod_look() && ours)
   {
     SetWindowSubclass(hwnd, modern_combo_proc, 10, 0);
     if (plain && GetComboBoxInfo(hwnd, &cbi) && cbi.hwndList) SetWindowSubclass(cbi.hwndList, modern_list_proc, 11, 0);
@@ -1443,8 +1495,8 @@ static BOOL CALLBACK style_font_child(HWND c, LPARAM unused)
 static void apply_frame_style(HWND hwnd, int dark)
 {
   DWORD corner = gui.ui_style ? 2 : 0;                                   /* DWMWCP_ROUND, DWMWCP_DEFAULT */
-  COLORREF caption = gui.ui_style ? (dark ? THEME_DARK_BG : RGB(0xF3, 0xF3, 0xF3)) : (COLORREF)DWM_COLOR_DEFAULT_VALUE;
-  COLORREF text    = gui.ui_style ? (dark ? THEME_DARK_TEXT : RGB(0x1B, 0x1B, 0x1B)) : (COLORREF)DWM_COLOR_DEFAULT_VALUE;
+  COLORREF caption = mod_look() ? (dark ? THEME_DARK_BG : RGB(0xF3, 0xF3, 0xF3)) : (COLORREF)DWM_COLOR_DEFAULT_VALUE;
+  COLORREF text    = mod_look() ? (dark ? THEME_DARK_TEXT : theme_dk(RGB(0x1B, 0x1B, 0x1B))) : (COLORREF)DWM_COLOR_DEFAULT_VALUE;
   COLORREF border  = gui.ui_style ? 0xFFFFFFFEu /* DWMWA_COLOR_NONE: no frame line around a window */ : (COLORREF)DWM_COLOR_DEFAULT_VALUE;
 
   if (hwnd == g_hwnd && gui.fullscreen)
@@ -1486,10 +1538,12 @@ int theme_combo_draw(const DRAWITEMSTRUCT *di)
   dark = theme_is_dark();
   sel = (di->itemState & ODS_SELECTED) && !(di->itemState & ODS_COMBOBOXEDIT);
   off = (di->itemState & ODS_DISABLED) != 0;
-  bg = sel ? theme_accent_bg() : (dark ? RGB(0x2D, 0x2D, 0x2D) : GetSysColor(COLOR_WINDOW));
+  bg = sel ? theme_accent_bg() : (dark ? theme_dk(RGB(0x2D, 0x2D, 0x2D)) : GetSysColor(COLOR_WINDOW));
   fg = off ? GetSysColor(COLOR_GRAYTEXT) : (sel ? (dark || gui.ui_style ? RGB(255, 255, 255) : GetSysColor(COLOR_HIGHLIGHTTEXT)) : (dark ? RGB(0xE0, 0xE0, 0xE0) : GetSysColor(COLOR_WINDOWTEXT)));
   r = di->rcItem;
-  if (!(gui.ui_style && (di->itemState & ODS_COMBOBOXEDIT)))      /* (Modern: the rounded box behind the chosen one is already drawn) */
+  if (mod_look() && (di->itemState & ODS_COMBOBOXEDIT) && !mod_combo_painting)
+    bg = dark ? theme_dk(RGB(46, 49, 57)) : RGB(255, 255, 255);   /* Windows drew the field itself (the Modern box is drawn at the next paint): the box's own color, not white */
+  if (!(mod_look() && (di->itemState & ODS_COMBOBOXEDIT) && mod_combo_painting))      /* (Modern: the rounded box behind the chosen one is already drawn) */
   {
     br = CreateSolidBrush(bg);
     FillRect(di->hDC, &r, br);
@@ -1536,7 +1590,7 @@ LRESULT theme_trackbar_customdraw(NMHDR *hdr, LRESULT prev)
   if (nm->dwDrawStage == CDDS_PREPAINT) return prev | CDRF_NOTIFYITEMDRAW;
   if (nm->dwDrawStage == CDDS_ITEMPREPAINT && nm->dwItemSpec == TBCD_CHANNEL && off)
   {
-    HBRUSH cb = CreateSolidBrush(theme_is_dark() ? RGB(0x44, 0x44, 0x44) : RGB(0xD0, 0xD0, 0xD0));      /* a slider that is switched off: a dim rail */
+    HBRUSH cb = CreateSolidBrush(theme_is_dark() ? theme_dk(RGB(0x44, 0x44, 0x44)) : theme_dk(RGB(0xD0, 0xD0, 0xD0)));      /* a slider that is switched off: a dim rail */
     FillRect(nm->hdc, &nm->rc, cb);
     DeleteObject(cb);
     return CDRF_SKIPDEFAULT;
@@ -1545,7 +1599,7 @@ LRESULT theme_trackbar_customdraw(NMHDR *hdr, LRESULT prev)
   {
     LONG st = GetWindowLong(hdr->hwndFrom, GWL_STYLE);
     int held = (nm->uItemState & CDIS_SELECTED) != 0, hot = (nm->uItemState & CDIS_HOT) != 0, dark = theme_is_dark();
-    COLORREF base = mod_accent(), fill = off ? (dark ? RGB(0x5A, 0x5A, 0x5A) : RGB(0xB8, 0xB8, 0xB8))      /* (a slider that is switched off has a gray knob) */
+    COLORREF base = mod_accent(), fill = off ? (dark ? theme_dk(RGB(0x5A, 0x5A, 0x5A)) : theme_dk(RGB(0xB8, 0xB8, 0xB8)))      /* (a slider that is switched off has a gray knob) */
                                              : held ? shade_color(base, dark ? 40 : -30) : hot ? shade_color(base, dark ? 20 : -12) : base;
     RECT rc = nm->rc;
     POINT pts[5];
@@ -1582,7 +1636,7 @@ static LRESULT CALLBACK combo_rows_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT
     return r ? r : (theme_combo_measure((MEASUREITEMSTRUCT *)l) ? TRUE : FALSE);
   }
   else if (m == WM_NOTIFY && ((const NMHDR *)l)->code == NM_CUSTOMDRAW && ((const NMHDR *)l)->idFrom != IDC_BROWSER_LIST &&
-           ((gui.accent || gui.ui_style) || is_trackbar(((const NMHDR *)l)->hwndFrom)))
+           ((gui.accent || mod_look()) || is_trackbar(((const NMHDR *)l)->hwndFrom)))
   {
     /* The lists of the other windows: the chosen row is drawn in the accent color, as in the game list (Windows would use its own
        color). The window's own code goes first (the Cheats list draws its boxes), and what it asks for is kept. */
@@ -1594,7 +1648,7 @@ static LRESULT CALLBACK combo_rows_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT
     r = DefSubclassProc(h, m, w, l);
     if (!lstrcmpiA(cls, "msctls_trackbar32")) return theme_trackbar_customdraw(&cd->nmcd.hdr, r);
     if (lstrcmpiA(cls, "SysListView32") != 0) return r;
-    if (!(gui.accent || gui.ui_style)) return r;
+    if (!(gui.accent || mod_look())) return r;
     if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return r | CDRF_NOTIFYITEMDRAW;
     if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return r | CDRF_NOTIFYSUBITEMDRAW;
     if (cd->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM) &&
@@ -1624,6 +1678,452 @@ static LRESULT CALLBACK combo_rows_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT
   return DefSubclassProc(h, m, w, l);
 }
 
+/****************************************************************************
+ * Scroll bars of the colored themes
+ *
+ * Windows draws the scroll bars of lists and text boxes itself, in fixed grays. In a colored theme a bar of our own is laid over each
+ * one (a small window above the control's scroll bar, the same size): it shows the same range and position, a click or a drag on it
+ * sends the control the scroll messages the system bar would. The control's own bar stays underneath, unused. A timer keeps the
+ * bars in step with their controls (position, size, shown or not) and removes the ones whose control is gone.
+ ****************************************************************************/
+
+typedef struct sbo
+{
+  HWND ctl, ov;
+  int vert;
+  int hot, part, drag, grab, repeat_fast;     /* the part under the pointer; the part held down; the thumb being dragged and where it was taken */
+  SCROLLINFO si;
+  int nat, n_btn;                               /* the size of the system's arrow buttons, which the bar of ours has too */
+  struct sbo *next;
+} sbo;
+
+static sbo *sbo_list;
+static int sbo_class_made;
+
+enum { SP_NONE, SP_LESS, SP_MORE, SP_PAGELESS, SP_PAGEMORE, SP_THUMB };
+
+/* The pieces of a bar, along its length: the arrows at the ends, the track between them, the thumb in the track. */
+static void sbo_layout(const sbo *e, int w, int h, int *arrow, int *tstart, int *tlen, int *thumb_at, int *thumb_len)
+{
+  int len = e->vert ? h : w, thick = e->vert ? w : h;
+  int range = e->si.nMax - e->si.nMin + 1, page = (int)e->si.nPage, track, tl, ta;
+
+  *arrow = thick < len / 3 ? thick : len / 3;
+  if (e->nat && e->n_btn > 0 && e->n_btn < len / 2) *arrow = e->n_btn;
+  *tstart = *arrow;
+  track = len - 2 * *arrow;
+  if (track < 1) track = 1;
+  *tlen = track;
+  if (range <= 0 || page >= range) { *thumb_len = track; *thumb_at = *tstart; return; }
+  tl = (int)((double)track * page / range);
+  if (tl < thick * 3 / 2) tl = thick * 3 / 2;              /* (long enough to take hold of, however long the list is) */
+  if (tl > track) tl = track;
+  ta = (int)((double)(track - tl) * (e->si.nPos - e->si.nMin) / (range - page));
+  if (ta < 0) ta = 0;
+  if (ta > track - tl) ta = track - tl;
+  *thumb_len = tl;
+  *thumb_at = *tstart + ta;
+}
+
+/* What the system's bar shows now: the thumb and buttons as it draws them, and the range and position. */
+static void sbo_refresh(sbo *e)
+{
+  SCROLLBARINFO sbi;
+  SCROLLINFO si;
+
+  memset(&sbi, 0, sizeof(sbi));
+  sbi.cbSize = sizeof(sbi);
+  e->nat = 0;
+  if (GetScrollBarInfo(e->ctl, e->vert ? OBJID_VSCROLL : OBJID_HSCROLL, &sbi) && sbi.dxyLineButton > 0)
+  {
+    e->nat = 1;
+    e->n_btn = sbi.dxyLineButton;
+  }
+  memset(&si, 0, sizeof(si));
+  si.cbSize = sizeof(si);
+  si.fMask = SIF_ALL;
+  if (GetScrollInfo(e->ctl, e->vert ? SB_VERT : SB_HORZ, &si)) e->si = si;
+}
+
+static int sbo_hit(const sbo *e, int x, int y)
+{
+  RECT rc;
+  int w, h, arrow, ts, tl, ta, tn, p = e->vert ? y : x, len;
+
+  GetClientRect(e->ov, &rc);
+  w = rc.right; h = rc.bottom;
+  len = e->vert ? h : w;
+  sbo_layout(e, w, h, &arrow, &ts, &tl, &ta, &tn);
+  if (p < arrow) return SP_LESS;
+  if (p >= len - arrow) return SP_MORE;
+  if (p < ta) return SP_PAGELESS;
+  if (p >= ta + tn) return SP_PAGEMORE;
+  return SP_THUMB;
+}
+
+static void sbo_send(const sbo *e, int code, int pos)
+{
+  SendMessageA(e->ctl, e->vert ? WM_VSCROLL : WM_HSCROLL, MAKEWPARAM(code, pos), 0);
+}
+
+/* Moves the control to a position of the bar. A drag cannot be sent as SB_THUMBTRACK: a list takes the position from the system bar's own
+   tracking, which has not happened, and goes back to the top. Each kind of control is asked in its own way. */
+static void sbo_scroll_to(sbo *e, int np)
+{
+  char cls[32];
+  SCROLLINFO si;
+  int cur, d;
+
+  memset(&si, 0, sizeof(si));
+  si.cbSize = sizeof(si);
+  si.fMask = SIF_POS;
+  if (!GetScrollInfo(e->ctl, e->vert ? SB_VERT : SB_HORZ, &si)) return;
+  cur = si.nPos;
+  d = np - cur;
+  if (!d) return;
+  GetClassNameA(e->ctl, cls, sizeof(cls));
+  if (!lstrcmpiA(cls, "SysListView32"))
+  {
+    int dx = 0, dy = 0;
+
+    if (e->vert)
+    {
+      if ((GetWindowLongA(e->ctl, GWL_STYLE) & LVS_TYPEMASK) == LVS_REPORT)          /* rows */
+      {
+        RECT r;
+
+        if (!ListView_GetItemRect(e->ctl, ListView_GetTopIndex(e->ctl), &r, LVIR_BOUNDS) || r.bottom <= r.top) return;
+        dy = d * (r.bottom - r.top);
+      }
+      else dy = d;                                                                    /* pixels */
+    }
+    else dx = d;
+    SendMessageA(e->ctl, LVM_SCROLL, (WPARAM)dx, (LPARAM)dy);
+  }
+  else if (!lstrcmpiA(cls, "ListBox") && e->vert) SendMessageA(e->ctl, LB_SETTOPINDEX, (WPARAM)np, 0);
+  else if (!lstrcmpiA(cls, "Edit")) SendMessageA(e->ctl, EM_LINESCROLL, e->vert ? 0 : (WPARAM)d, e->vert ? (LPARAM)d : 0);
+  else sbo_send(e, SB_THUMBTRACK, np & 0xFFFF);
+}
+
+static void sbo_step(sbo *e, int part)
+{
+  sbo_send(e, part == SP_LESS ? SB_LINEUP : part == SP_MORE ? SB_LINEDOWN : part == SP_PAGELESS ? SB_PAGEUP : SB_PAGEDOWN, 0);
+}
+
+static LRESULT CALLBACK sbo_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
+{
+  sbo *e = (sbo *)GetWindowLongPtrA(h, GWLP_USERDATA);
+
+  if (m == WM_NCCREATE) { e = (sbo *)((CREATESTRUCTA *)lp)->lpCreateParams; SetWindowLongPtrA(h, GWLP_USERDATA, (LONG_PTR)e); return TRUE; }
+  if (!e) return DefWindowProcA(h, m, wp, lp);
+
+  switch (m)
+  {
+    case WM_ERASEBKGND:
+      return 1;
+
+    case WM_PAINT:
+    {
+      PAINTSTRUCT ps;
+      HDC dc = BeginPaint(h, &ps), real_dc = dc, mem = NULL;
+      HBITMAP mbmp = NULL, mold = NULL;
+      RECT rc, r;
+      int w, hh, arrow, ts, tl, ta, tn, v = e->vert, dis;
+      COLORREF track = theme_dk(RGB(0x2D, 0x2D, 0x2D)), thumb, glyph = theme_dk(RGB(0xDC, 0xDC, 0xDC));
+      HBRUSH br;
+      POINT tri[3];
+      int cx, cy, s;
+
+      if (!e->drag) sbo_refresh(e);
+      GetClientRect(h, &rc);
+      w = rc.right; hh = rc.bottom;
+      mem = CreateCompatibleDC(real_dc);                       /* drawn off screen and copied at once: no flicker while the thumb moves */
+      mbmp = mem ? CreateCompatibleBitmap(real_dc, w > 0 ? w : 1, hh > 0 ? hh : 1) : NULL;
+      if (mbmp) { mold = (HBITMAP)SelectObject(mem, mbmp); dc = mem; }
+      sbo_layout(e, w, hh, &arrow, &ts, &tl, &ta, &tn);
+      dis = e->si.nPage >= (UINT)(e->si.nMax - e->si.nMin + 1) || !IsWindowEnabled(e->ctl);
+      thumb = (e->drag || e->hot == SP_THUMB) ? theme_accent_edge() : theme_dk(RGB(0x5A, 0x5A, 0x5A));
+      if (dis) thumb = theme_dk(RGB(0x44, 0x44, 0x44));
+
+      br = CreateSolidBrush(track);
+      FillRect(dc, &rc, br);
+      DeleteObject(br);
+
+      /* the thumb: a rounded bar a little inside the track */
+      br = CreateSolidBrush(thumb);
+      {
+        HGDIOBJ ob = SelectObject(dc, br), op = SelectObject(dc, GetStockObject(NULL_PEN));
+        int pad = (v ? w : hh) / 5, rad = (v ? w : hh) - 2 * pad;           /* (a slim thumb with room either side) */
+
+        if (v) RoundRect(dc, pad, ta, w - pad + 1, ta + tn + 1, rad, rad);
+        else   RoundRect(dc, ta, pad, ta + tn + 1, hh - pad + 1, rad, rad);
+        SelectObject(dc, ob); SelectObject(dc, op);
+      }
+      DeleteObject(br);
+
+      /* the arrows: a small triangle on each end (lit under the pointer) */
+      s = (v ? w : hh) * 3 / 10;
+      if (s < 3) s = 3;
+      for (r = rc, cx = 0; cx < 2; cx++)
+      {
+        COLORREF c = (e->hot == (cx ? SP_MORE : SP_LESS)) ? theme_accent_edge() : glyph;
+
+        br = CreateSolidBrush(dis ? theme_dk(RGB(0x66, 0x66, 0x66)) : c);
+        if (v) { r.top = cx ? hh - arrow : 0; r.bottom = r.top + arrow; r.left = 0; r.right = w; }
+        else   { r.left = cx ? w - arrow : 0; r.right = r.left + arrow; r.top = 0; r.bottom = hh; }
+        cy = (r.top + r.bottom) / 2; { int mx = (r.left + r.right) / 2;
+          if (v) { tri[0].x = mx; tri[0].y = cx ? cy + s / 2 : cy - s / 2; tri[1].x = mx - s; tri[1].y = cx ? cy - s / 2 : cy + s / 2; tri[2].x = mx + s; tri[2].y = tri[1].y; }
+          else   { tri[0].x = cx ? mx + s / 2 : mx - s / 2; tri[0].y = cy; tri[1].x = cx ? mx - s / 2 : mx + s / 2; tri[1].y = cy - s; tri[2].x = tri[1].x; tri[2].y = cy + s; }
+        }
+        {
+          HGDIOBJ ob = SelectObject(dc, br), op = SelectObject(dc, GetStockObject(NULL_PEN));
+          Polygon(dc, tri, 3);
+          SelectObject(dc, ob); SelectObject(dc, op);
+        }
+        DeleteObject(br);
+      }
+      if (mbmp)
+      {
+        BitBlt(real_dc, 0, 0, w, hh, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, mold);
+        DeleteObject(mbmp);
+      }
+      if (mem) DeleteDC(mem);
+      EndPaint(h, &ps);
+      return 0;
+    }
+
+    case WM_LBUTTONDOWN:
+    {
+      int x = (short)LOWORD(lp), y = (short)HIWORD(lp), part;
+
+      sbo_refresh(e);
+      part = sbo_hit(e, x, y);
+      if (GetFocus() != e->ctl && IsWindowEnabled(e->ctl)) SetFocus(e->ctl);       /* the keys go to the list, as after a click on the system's bar */
+      SetCapture(h);
+      e->part = part;
+      if (part == SP_THUMB)
+      {
+        RECT rc;
+        int w, hh, arrow, ts, tl, ta, tn;
+
+        GetClientRect(h, &rc);
+        w = rc.right; hh = rc.bottom;
+        sbo_layout(e, w, hh, &arrow, &ts, &tl, &ta, &tn);
+        e->drag = 1;
+        e->grab = (e->vert ? y : x) - ta;
+      }
+      else if (part != SP_NONE)
+      {
+        sbo_step(e, part);
+        e->repeat_fast = 0;
+        SetTimer(h, 1, 300, NULL);
+      }
+      InvalidateRect(h, NULL, FALSE);
+      return 0;
+    }
+
+    case WM_MOUSEMOVE:
+    {
+      int x = (short)LOWORD(lp), y = (short)HIWORD(lp);
+
+      if (e->drag)
+      {
+        RECT rc;
+        int w, hh, arrow, ts, tl, ta, tn, range = e->si.nMax - e->si.nMin + 1, page = (int)e->si.nPage, room, np;
+
+        GetClientRect(h, &rc);
+        w = rc.right; hh = rc.bottom;
+        sbo_layout(e, w, hh, &arrow, &ts, &tl, &ta, &tn);
+        room = tl - tn;
+        if (room > 0 && range > page)
+        {
+          int at = (e->vert ? y : x) - e->grab - ts;
+
+          if (at < 0) at = 0;
+          if (at > room) at = room;
+          np = e->si.nMin + (int)((double)at * (range - page) / room);
+          if (np < 0) np = 0;
+          if (np > 0xFFFF) np = 0xFFFF;
+          { int before = e->si.nPos; e->si.nPos = np; InvalidateRect(h, NULL, FALSE); UpdateWindow(h); e->si.nPos = before; }      /* the thumb follows the pointer at once, not after the list has repainted */
+          sbo_scroll_to(e, np);
+          e->si.nPos = np;
+        }
+      }
+      else
+      {
+        int part = sbo_hit(e, x, y);
+
+        if (!e->hot)
+        {
+          TRACKMOUSEEVENT t;
+          t.cbSize = sizeof(t); t.dwFlags = TME_LEAVE; t.hwndTrack = h; t.dwHoverTime = 0;
+          TrackMouseEvent(&t);
+        }
+        if (part != e->hot) { e->hot = part; InvalidateRect(h, NULL, FALSE); }
+      }
+      return 0;
+    }
+
+    case WM_MOUSELEAVE:
+      e->hot = 0;
+      InvalidateRect(h, NULL, FALSE);
+      return 0;
+
+    case WM_TIMER:
+      if (wp == 1 && e->part != SP_NONE && e->part != SP_THUMB)
+      {
+        POINT p;
+
+        GetCursorPos(&p);
+        ScreenToClient(h, &p);
+        if (sbo_hit(e, p.x, p.y) == e->part) sbo_step(e, e->part);
+        if (!e->repeat_fast) { e->repeat_fast = 1; SetTimer(h, 1, 50, NULL); }
+      }
+      return 0;
+
+    case WM_LBUTTONUP:
+    case WM_CAPTURECHANGED:
+      if (e->part != SP_NONE || e->drag)
+      {
+        KillTimer(h, 1);
+        sbo_send(e, SB_ENDSCROLL, 0);
+        e->drag = 0;
+        e->part = SP_NONE;
+        if (GetCapture() == h) ReleaseCapture();
+        InvalidateRect(h, NULL, FALSE);
+      }
+      return 0;
+
+    case WM_MOUSEWHEEL:                                    /* the wheel goes to the list */
+      return SendMessageA(e->ctl, m, wp, lp);
+  }
+  return DefWindowProcA(h, m, wp, lp);
+}
+
+static void sbo_remove(sbo **link)
+{
+  sbo *e = *link;
+
+  *link = e->next;
+  if (IsWindow(e->ov)) DestroyWindow(e->ov);
+  free(e);
+}
+
+static void sbo_update(sbo *e)
+{
+  SCROLLBARINFO sbi;
+  HWND parent = GetParent(e->ctl);
+  int show;
+
+  memset(&sbi, 0, sizeof(sbi));
+  sbi.cbSize = sizeof(sbi);
+  show = parent && IsWindowVisible(e->ctl) && GetScrollBarInfo(e->ctl, e->vert ? OBJID_VSCROLL : OBJID_HSCROLL, &sbi) &&
+         !(sbi.rgstate[0] & (STATE_SYSTEM_INVISIBLE | STATE_SYSTEM_OFFSCREEN)) && sbi.rcScrollBar.right > sbi.rcScrollBar.left && sbi.rcScrollBar.bottom > sbi.rcScrollBar.top;
+  if (!show)
+  {
+    if (IsWindowVisible(e->ov)) ShowWindow(e->ov, SW_HIDE);
+    return;
+  }
+  {
+    RECT want = sbi.rcScrollBar, have;
+    SCROLLINFO si;
+
+    MapWindowPoints(NULL, parent, (POINT *)&want, 2);
+    GetWindowRect(e->ov, &have);
+    MapWindowPoints(NULL, parent, (POINT *)&have, 2);
+    if (!IsWindowVisible(e->ov) || memcmp(&want, &have, sizeof(RECT)))
+    {
+      /* No copy of what was on the screen under the old place to the new one (SWP_NOCOPYBITS): when the list moved down under a bar that came up,
+         a piece of the bar's button was in that copy and stayed, a few lines lower, until something painted over it. */
+      SetWindowPos(e->ov, HWND_TOP, want.left, want.top, want.right - want.left, want.bottom - want.top, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOCOPYBITS);
+      InvalidateRect(e->ov, NULL, FALSE);
+    }
+    memset(&si, 0, sizeof(si));
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_ALL;
+    if (GetScrollInfo(e->ctl, e->vert ? SB_VERT : SB_HORZ, &si) && !e->drag &&
+        (si.nPos != e->si.nPos || si.nMin != e->si.nMin || si.nMax != e->si.nMax || si.nPage != e->si.nPage))
+    {
+      e->si = si;
+      InvalidateRect(e->ov, NULL, FALSE);
+    }
+  }
+}
+
+static UINT_PTR sbo_timer_id;
+static UINT sbo_timer_ms;
+
+static VOID CALLBACK sbo_tick(HWND w, UINT m, UINT_PTR id, DWORD t)
+{
+  sbo **link = &sbo_list;
+  int shown = 0;
+  UINT want;
+
+  (void)w; (void)m; (void)t;
+  while (*link)
+  {
+    if (!IsWindow((*link)->ctl) || colored_theme() < 0) { sbo_remove(link); continue; }
+    sbo_update(*link);
+    if (IsWindowVisible((*link)->ov)) shown++;
+    link = &(*link)->next;
+  }
+  if (!sbo_list) { KillTimer(NULL, id); sbo_timer_id = 0; return; }
+  want = shown ? 16 : 150;                         /* 60 times a second while a bar is on screen; nothing to follow otherwise (a bar that appears is picked up within 150 ms) */
+  if (want != sbo_timer_ms)
+  {
+    KillTimer(NULL, id);
+    sbo_timer_ms = want;
+    sbo_timer_id = SetTimer(NULL, 0, want, sbo_tick);
+  }
+}
+
+static void sbo_attach(HWND ctl)
+{
+  char cls[32];
+  LONG st = GetWindowLongA(ctl, GWL_STYLE);
+  sbo *e;
+  int v;
+
+  GetClassNameA(ctl, cls, sizeof(cls));
+  if (!(!lstrcmpiA(cls, "SysListView32") || !lstrcmpiA(cls, "ListBox") || (!lstrcmpiA(cls, "Edit") && (st & ES_MULTILINE)))) return;
+  for (e = sbo_list; e; e = e->next) if (e->ctl == ctl) return;
+  if (!sbo_class_made)
+  {
+    WNDCLASSEXA wc;
+
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = sbo_proc;
+    wc.hInstance = GetModuleHandleA(NULL);
+    wc.hCursor = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
+    wc.lpszClassName = "GPScrollOverlay";
+    RegisterClassExA(&wc);
+    sbo_class_made = 1;
+  }
+  SetWindowLongA(ctl, GWL_STYLE, st | WS_CLIPSIBLINGS);            /* (the list does not paint over a bar laid above it) */
+  for (v = 0; v < 2; v++)
+  {
+    e = (sbo *)calloc(1, sizeof(sbo));
+    if (!e) return;
+    e->ctl = ctl;
+    e->vert = v;
+    e->si.cbSize = sizeof(e->si);
+    e->ov = CreateWindowExA(0, "GPScrollOverlay", "", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1, GetParent(ctl), NULL, GetModuleHandleA(NULL), e);
+    if (!e->ov) { free(e); return; }
+    e->next = sbo_list;
+    sbo_list = e;
+  }
+  if (!sbo_timer_id) { sbo_timer_ms = 16; sbo_timer_id = SetTimer(NULL, 0, sbo_timer_ms, sbo_tick); }
+}
+
+static BOOL CALLBACK sbo_attach_cb(HWND c, LPARAM unused)
+{
+  (void)unused;
+  sbo_attach(c);
+  return TRUE;
+}
+
 void theme_apply_to_window(HWND hwnd)
 {
   int dark = theme_is_dark();
@@ -1651,6 +2151,7 @@ void theme_apply_to_window(HWND hwnd)
 
   EnumChildWindows(hwnd, fit_check_width, 0);
   EnumChildWindows(hwnd, apply_to_child, (LPARAM)dark);
+  if (colored_theme() >= 0) EnumChildWindows(hwnd, sbo_attach_cb, 0);       /* the colored themes: scroll bars of their own over those of the lists */
 
   /* Popup menus cache their own theme state; without this, a menu
      opened after switching modes can still show the old one until the
@@ -1682,10 +2183,16 @@ int theme_handle_settingchange(HWND hwnd)
 HBRUSH theme_ctlcolor(HDC hdc)
 {
   static HBRUSH dark_brush;
+  static COLORREF dark_color = CLR_INVALID;
 
   if (!theme_is_dark()) return NULL;
 
-  if (!dark_brush) dark_brush = CreateSolidBrush(THEME_DARK_BG);
+  if (!dark_brush || dark_color != THEME_DARK_BG)          /* (the theme may have changed) */
+  {
+    if (dark_brush) DeleteObject(dark_brush);
+    dark_color = THEME_DARK_BG;
+    dark_brush = CreateSolidBrush(dark_color);
+  }
 
   SetTextColor(hdc, THEME_DARK_TEXT);
   SetBkColor(hdc, THEME_DARK_BG);
@@ -1701,15 +2208,38 @@ HBRUSH theme_ctlcolor(HDC hdc)
 HBRUSH theme_ctlcolor_custom(HDC hdc, COLORREF bg, int cache_id)
 {
   static HBRUSH cached[4];
+  static COLORREF cached_color[4];
 
   if (!theme_is_dark()) return NULL;
   if (cache_id < 0 || cache_id >= 4) return theme_ctlcolor(hdc);
 
-  if (!cached[cache_id]) cached[cache_id] = CreateSolidBrush(bg);
+  bg = theme_dk(bg);
+  if (!cached[cache_id] || cached_color[cache_id] != bg)         /* (the theme may have changed) */
+  {
+    if (cached[cache_id]) DeleteObject(cached[cache_id]);
+    cached[cache_id] = CreateSolidBrush(bg);
+    cached_color[cache_id] = bg;
+  }
 
   SetTextColor(hdc, THEME_DARK_TEXT);
   SetBkColor(hdc, bg);
   return cached[cache_id];
+}
+
+/* The color of a control in the dark style, knowing which one it is: a text box is #383838 while it can be typed in and #2D2D2D
+   (the shade of the lists) when it is greyed out or read-only, so the two can be told apart; anything else as theme_ctlcolor. */
+HBRUSH theme_ctlcolor_ctl(HDC hdc, HWND ctl)
+{
+  char cls[16];
+
+  if (!theme_is_dark()) return NULL;
+  if (ctl && GetClassNameA(ctl, cls, sizeof(cls)) && !lstrcmpiA(cls, "Edit"))
+  {
+    if (IsWindowEnabled(ctl) && !(GetWindowLongPtr(ctl, GWL_STYLE) & ES_READONLY))
+      return theme_ctlcolor_custom(hdc, RGB(0x38, 0x38, 0x38), 1);
+    return theme_ctlcolor_custom(hdc, RGB(0x2D, 0x2D, 0x2D), 2);
+  }
+  return theme_ctlcolor(hdc);
 }
 
 LRESULT theme_statusbar_customdraw(NMHDR *hdr, HWND status_bar)
@@ -1735,7 +2265,7 @@ LRESULT theme_statusbar_customdraw(NMHDR *hdr, HWND status_bar)
   {
     RECT client, last;
     int n = (int)SendMessage(hdr->hwndFrom, HDM_GETITEMCOUNT, 0, 0);
-    HBRUSH br = CreateSolidBrush(RGB(0x19, 0x19, 0x19));
+    HBRUSH br = CreateSolidBrush(theme_dk(RGB(0x19, 0x19, 0x19)));
 
     GetClientRect(hdr->hwndFrom, &client);
     if (n > 0 && SendMessage(hdr->hwndFrom, HDM_GETITEMRECT, (WPARAM)(n - 1), (LPARAM)&last)) client.left = last.right;
@@ -1753,7 +2283,7 @@ static void draw_header_cell(HDC dc, HWND header, int idx, const RECT *prc)
     HDITEMA hi;
     char text[128];
     RECT r = *prc, tr;
-    HBRUSH br = CreateSolidBrush(RGB(0x19, 0x19, 0x19));
+    HBRUSH br = CreateSolidBrush(theme_dk(RGB(0x19, 0x19, 0x19)));
     HPEN pen, op;
     UINT fmt;
 
@@ -1806,7 +2336,7 @@ static void draw_header_cell(HDC dc, HWND header, int idx, const RECT *prc)
       DeleteObject(ab);
     }
 
-    pen = CreatePen(PS_SOLID, 1, RGB(0x55, 0x55, 0x55));       /* divider on the right edge */
+    pen = CreatePen(PS_SOLID, 1, theme_dk(RGB(0x55, 0x55, 0x55)));       /* divider on the right edge */
     op = SelectObject(dc, pen);
     MoveToEx(dc, r.right - 1, r.top + 3, NULL);
     LineTo(dc, r.right - 1, r.bottom - 3);
@@ -1833,7 +2363,7 @@ static LRESULT CALLBACK header_paint_subclass_proc(HWND hwnd, UINT msg, WPARAM w
       HDC dc = msg == WM_PAINT ? BeginPaint(hwnd, &ps) : (HDC)wp;
       HFONT f = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
       HGDIOBJ of = f ? SelectObject(dc, f) : NULL;
-      HBRUSH br = CreateSolidBrush(RGB(0x19, 0x19, 0x19));
+      HBRUSH br = CreateSolidBrush(theme_dk(RGB(0x19, 0x19, 0x19)));
       int i, cnt = (int)SendMessage(hwnd, HDM_GETITEMCOUNT, 0, 0);
 
       GetClientRect(hwnd, &client);
@@ -1982,7 +2512,7 @@ void theme_paint_menu_line(HWND hwnd, HDC dc)
   line = rc_client;
   line.bottom = line.top;
   line.top--;
-  br = CreateSolidBrush(RGB(0x55, 0x55, 0x55));       /* a gray line, not white and not gone */
+  br = CreateSolidBrush(theme_dk(RGB(0x55, 0x55, 0x55)));       /* a gray line, not white and not gone */
   FillRect(dc, &line, br);
   DeleteObject(br);
   if (own) ReleaseDC(hwnd, own);
@@ -2176,7 +2706,7 @@ static int menus_made_style = -1;
 /* The menus are drawn by the program (and so use its font) with the Large interface or the Modern style; otherwise the system draws them. */
 int theme_menus_owner(void)
 {
-  return gui.large_ui || (menus_made_style < 0 ? gui.ui_style : menus_made_style);
+  return gui.large_ui || (menus_made_style < 0 ? mod_look() : menus_made_style);      /* (a colored theme: the system's menus cannot take its tint) */
 }
 
 static void convert_item_to_ownerdraw(HMENU menu, int pos)
@@ -2243,7 +2773,7 @@ static int menu_item_position(HMENU menu, ULONG_PTR item_data);
 
 static HMENU bar_menu;                  /* the menu bar, known before it is attached to the window */
 
-void theme_set_menu_bar(HMENU menu) { bar_menu = menu; menus_made_style = gui.ui_style; }
+void theme_set_menu_bar(HMENU menu) { bar_menu = menu; menus_made_style = mod_look(); }
 
 static void own_icon_set(ULONG_PTR key, HBITMAP b);
 
@@ -2326,11 +2856,22 @@ int theme_measure_menu_ownerdraw(LPARAM lp)
     }
     *o = '\0';
     GetTextExtentPoint32A(hdc, plain, lstrlenA(plain), &sz);
-    if (!strncmp(plain, "Slot ", 5))                  /* a state slot: wide enough for a date too (the menu is measured before its dates are filled in) */
+    char slotword[64];                                  /* "Slot " in the language of the menu ("Emplacement " in French) */
     {
-      char wide[128] = "Slot 0 - 00:00:00  00/00/0000";
+      int sl;
+
+      lstrcpynA(slotword, tr("Slot &0"), sizeof(slotword));
+      sl = lstrlenA(slotword);
+      while (sl > 0 && (slotword[sl - 1] == '0' || slotword[sl - 1] == '&')) slotword[--sl] = '\0';
+    }
+    if (slotword[0] && !strncmp(plain, slotword, strlen(slotword)))     /* a state slot: wide enough for a date too (the menu is measured before its dates are filled in) */
+    {
+      char wide[128];
       const char *tab = strchr(plain, '\t');
       SIZE ws;
+
+      lstrcpynA(wide, slotword, sizeof(wide) - 32);
+      lstrcatA(wide, "0 - 00:00:00  00/00/0000");
 
       if (tab) lstrcpynA(wide + lstrlenA(wide), tab, (int)sizeof(wide) - lstrlenA(wide));
       GetTextExtentPoint32A(hdc, wide, lstrlenA(wide), &ws);
@@ -2338,7 +2879,7 @@ int theme_measure_menu_ownerdraw(LPARAM lp)
     }
   }
   SelectObject(hdc, old_font);
-  dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+  dpi = gui_dpi;
   ReleaseDC(NULL, hdc);
 
   /* Margin beyond the raw text size for the selection highlight and
@@ -2552,11 +3093,11 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
       /* The Modern style: the chosen item of a drop-down is a rounded patch (a title on the bar stays a plain rectangle), with a little room round it, drawn smooth. */
       mod_ss ss;
       int w = r.right - r.left, h = r.bottom - r.top;
-      int ix = mod_dpi_px(dis->hDC, 4), iy = mod_dpi_px(dis->hDC, 2);
+      int ix = mod_dpi_px(4), iy = mod_dpi_px(2);
 
       if (mod_ss_begin(&ss, dis->hDC, w, h, bgc))
       {
-        mod_ss_round(&ss, ix, iy, w - 2 * ix, h - 2 * iy, (double)mod_dpi_px(dis->hDC, 4), fillc, CLR_INVALID, 0);
+        mod_ss_round(&ss, ix, iy, w - 2 * ix, h - 2 * iy, (double)mod_dpi_px(4), fillc, CLR_INVALID, 0);
         mod_ss_end(&ss, dis->hDC, r.left, r.top);
       }
       else FillRect(dis->hDC, &r, br);
@@ -2633,7 +3174,7 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
 
   if (!text)   /* separator */
   {
-    HPEN pen = CreatePen(PS_SOLID, 1, dark ? RGB(80, 80, 80) : GetSysColor(COLOR_3DSHADOW));
+    HPEN pen = CreatePen(PS_SOLID, 1, dark ? theme_dk(RGB(80, 80, 80)) : GetSysColor(COLOR_3DSHADOW));
     HPEN old_pen = (HPEN)SelectObject(dis->hDC, pen);
     int mid = (r.top + r.bottom) / 2;
 
@@ -2691,7 +3232,7 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
            looked like the two were equally important. Disabled rows keep
            their single, already-dim color throughout; this only affects
            enabled ones. */
-        if (!disabled && !selected) SetTextColor(dis->hDC, dark ? RGB(150, 150, 150) : GetSysColor(COLOR_GRAYTEXT));       /* (the chosen item's own text color reads on its highlight: the dim one did not) */
+        if (!disabled && !selected) SetTextColor(dis->hDC, dark ? theme_dk(RGB(150, 150, 150)) : GetSysColor(COLOR_GRAYTEXT));       /* (the chosen item's own text color reads on its highlight: the dim one did not) */
         DrawTextA(dis->hDC, tab + 1, -1, &shortcut_rect, DT_VCENTER | DT_SINGLELINE | DT_RIGHT);
         *tab = '\t';   /* restore -- this string is reused every time the item repaints */
       }
@@ -2813,6 +3354,7 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
 
 /* Not a font glyph: the picture of the toolbar's Reset button, so the menu item looks the same. */
 #define MENU_ICON_TOOLBAR_RESET 0xFFF0
+#define MENU_ICON_DISC 0xFFF2                   /* a drawn disc (toolbar.c TI_DISC): File > Run Mega CD BIOS */
 #define MENU_ICON_TOOLBAR_REFRESH 0xFFF1      /* (also used by browser.c for the right-click menu, as 0xFFF1) */
 
 typedef struct { int id; unsigned short glyph; } menu_icon_id;
@@ -2831,7 +3373,7 @@ static const menu_icon_id menu_icon_ids[] =
   { IDM_VIDEO_FULLSCREEN, 0xE740 }, { IDM_VIDEO_SHADER_PRESET, 0xE8E5 }, { IDM_VIDEO_SHADERPARAMS, 0xE713 },
   { IDM_AUDIO_SETTINGS, 0xEA41 },
   { IDM_INPUT_P1, 0xE7FC }, { IDM_INPUT_HOTKEYS, 0xE765 },
-  { IDM_EMU_CHEATS, 0xE8EC }, { IDM_EMU_CHEATSEARCH, 0xE721 }, { IDM_TOOLS_NETPLAY, 0xE968 }, { IDM_TOOLS_NETPLAY_STOP, 0xE711 },
+  { IDM_EMU_CHEATS, 0xE8EC }, { IDM_TOOLS_DEBUGGER, 0xE9D9 }, { IDM_TOOLS_FIXCHECKSUM, 0xE73E }, { IDM_EMU_CHEATSEARCH, 0xE721 }, { IDM_TOOLS_NETPLAY, 0xE968 }, { IDM_TOOLS_NETPLAY_STOP, 0xE711 },
   { IDM_FILE_REC_GIF, 0xE722 }, { IDM_FILE_REC_VIDEO, 0xE714 }, { IDM_FILE_REC_AUDIO, 0xE720 }, { IDM_TOOLS_VGM, 0xE8D6 }, { IDM_FILE_REC_STOP, 0xE71A },
   { IDM_TOOLS_MOVIE_REC, 0xE7FC }, { IDM_TOOLS_MOVIE_PLAY, 0xE768 }, { IDM_TOOLS_MOVIE_STOP, 0xE71A },
   { IDM_FILE_SCREENSHOT, 0xE722 },
@@ -2848,12 +3390,12 @@ static const menu_icon_title menu_icon_titles[] =
   { "View Mode", 0xE8A9 }, { "Theme", 0xE790 }, { "Style", 0xE771 }, { "Toolbars", 0xE737 }, { "Game List", 0xE8FD },
   { "List Spacing", 0xE8CB }, { "List Columns", 0xE8FD },
   { "Window Size", 0xE73F }, { "Render Filter", 0xE71C }, { "Shaders", 0xEA99 }, { "Visual Effects", 0xE794 },
-  { "Scanlines", 0xE700 }, { "NTSC Filter", 0xE7F4 }, { "Aspect Ratio", 0xE799 },
+  { "Scanlines", 0xE700 }, { "NTSC Filter", 0xE7F4 }, { "Aspect Ratio", 0xE799 }, { "Rotation", 0xE7AD }, { "Run Mega CD BIOS", MENU_ICON_DISC },
   { "Borders", 0xE739 }, { "Interlaced Mode", 0xE8CB }, { "Frameskip", 0xE84F }, { "Renderer", 0xF1BA },
   { "Mute", 0xE74F }, { "Console Model", 0xE967 }, { "Tone and Effects", 0xE767 }, 
   
   { "Record", 0xE714 },
-  { "Region", 0xE774 }, { "Force VDP Mode", 0xE7F4 }, { "Console", 0xE967 },
+  { "Region", 0xE774 }, { "Force VDP Mode", 0xE7F4 }, { "Console", 0xE967 }, { "Language", 0xF2B7 },
 };
 
 static HBITMAP menu_icon_bmp[96];
@@ -2982,7 +3524,7 @@ static COLORREF menu_icon_color(unsigned short glyph, int dark)
     /* pause, reset, slower: orange; play, add, refresh: green */
     { 0xE769, {0xFF,0xA9,0x4D}, {0xC4,0x6A,0x00} }, { MENU_ICON_TOOLBAR_RESET, {0xFF,0xA9,0x4D}, {0xC4,0x6A,0x00} }, { 0xE738, {0xFF,0xA9,0x4D}, {0xC4,0x6A,0x00} },
     { 0xE768, {0x4C,0xC7,0x64}, {0x1E,0x8A,0x3A} }, { 0xE710, {0x4C,0xC7,0x64}, {0x1E,0x8A,0x3A} }, { MENU_ICON_TOOLBAR_REFRESH, {0x4C,0xC7,0x64}, {0x1E,0x8A,0x3A} },
-    { 0xE72C, {0x4C,0xC7,0x64}, {0x1E,0x8A,0x3A} },
+    { 0xE72C, {0x4C,0xC7,0x64}, {0x1E,0x8A,0x3A} }, { MENU_ICON_DISC, {0x4C,0xC7,0x64}, {0x1E,0x8A,0x3A} },
     /* speed: purple */
     { 0xEB9D, {0xB3,0x88,0xFF}, {0x6A,0x3F,0xC4} }, { 0xEB9E, {0xB3,0x88,0xFF}, {0x6A,0x3F,0xC4} }, { 0xE916, {0xB3,0x88,0xFF}, {0x6A,0x3F,0xC4} },
     /* picture: sky blue */
@@ -3026,7 +3568,8 @@ static HBITMAP menu_icon_get(HFONT font, unsigned short glyph, int sz, COLORREF 
   if (menu_icon_n >= (int)(sizeof(menu_icon_bmp) / sizeof(menu_icon_bmp[0]))) return NULL;
   if (gui.color_icons) fg = menu_icon_color(glyph, theme_is_dark());          /* else the color of the text, as passed */
   menu_icon_bmp[menu_icon_n] = glyph == MENU_ICON_TOOLBAR_RESET ? menu_icon_make_toolbar(TI_RESET, sz, fg) :
-                                             glyph == MENU_ICON_TOOLBAR_REFRESH ? menu_icon_make_toolbar(TI_REFRESH, sz, fg) : menu_icon_make(font, glyph, sz, fg);
+                                             glyph == MENU_ICON_TOOLBAR_REFRESH ? menu_icon_make_toolbar(TI_REFRESH, sz, fg) :
+                                             glyph == MENU_ICON_DISC ? menu_icon_make_toolbar(TI_DISC, sz, fg) : menu_icon_make(font, glyph, sz, fg);
   menu_icon_glyph[menu_icon_n] = glyph;
   return menu_icon_bmp[menu_icon_n++];
 }
@@ -3130,6 +3673,11 @@ static void menu_icons_walk(HMENU menu, HFONT font, int sz, COLORREF fg)
         mii.dwTypeData = title;
         mii.cch = sizeof(title) - 1;
         GetMenuItemInfoA(menu, (UINT)i, TRUE, &mii);
+      }
+      {                                                              /* (a translated menu: its pictures are found by the English name) */
+        const char *en = i18n_menu_title(sub);
+
+        lstrcpynA(title, en ? en : i18n_untr(title), sizeof(title));
       }
       for (a = o = title; *a; a++) if (*a != '&') *o++ = *a;        /* "&Load State" -> "Load State" */
       *o = 0;
@@ -3303,13 +3851,10 @@ void theme_menu_icons(HMENU menu)
 {
   HBITMAP old_bmp[96], old_on[96];
   int old_n = menu_icon_n, i, sz, dpi;
-  HDC sdc;
   HFONT font;
 
   if (!menu) return;
-  sdc = GetDC(NULL);
-  dpi = sdc ? GetDeviceCaps(sdc, LOGPIXELSX) : 96;
-  if (sdc) ReleaseDC(NULL, sdc);
+  dpi = gui_dpi;
   sz = MulDiv(16, dpi, 96);
   if (sz < 16) sz = 16;
 
@@ -3318,7 +3863,7 @@ void theme_menu_icons(HMENU menu)
 
   for (i = 0; i < old_n; i++) { old_bmp[i] = menu_icon_bmp[i]; old_on[i] = menu_icon_bmp_on[i]; menu_icon_bmp_on[i] = NULL; }
   menu_icon_n = 0;                                          /* new pictures, in the color of the theme that is on now */
-  menu_icons_walk(menu, font, sz, theme_is_dark() ? RGB(0xF0, 0xF0, 0xF0) : RGB(0x30, 0x30, 0x30));
+  menu_icons_walk(menu, font, sz, theme_is_dark() ? RGB(0xF0, 0xF0, 0xF0) : theme_dk(RGB(0x30, 0x30, 0x30)));
   for (i = 0; i < old_n; i++) { if (old_bmp[i]) DeleteObject(old_bmp[i]); if (old_on[i]) DeleteObject(old_on[i]); }    /* the menu items no longer use these */
   DeleteObject(font);
 }
@@ -3335,21 +3880,18 @@ void theme_menu_icon_marks(HMENU menu)
    The bitmaps are kept in the same list as the menu bar's and live as long as the program (or until the theme changes). */
 void theme_menu_icon(HMENU menu, UINT id, unsigned short glyph)
 {
-  HDC sdc;
   int dpi, sz;
   HFONT font;
   HBITMAP b;
   MENUITEMINFOA mii;
 
   if (!menu) return;
-  sdc = GetDC(NULL);
-  dpi = sdc ? GetDeviceCaps(sdc, LOGPIXELSX) : 96;
-  if (sdc) ReleaseDC(NULL, sdc);
+  dpi = gui_dpi;
   sz = MulDiv(16, dpi, 96);
   if (sz < 16) sz = 16;
   font = menu_icon_font(sz - 3);
   if (!font) return;
-  b = menu_icon_get(font, glyph, sz, theme_is_dark() ? RGB(0xF0, 0xF0, 0xF0) : RGB(0x30, 0x30, 0x30));
+  b = menu_icon_get(font, glyph, sz, theme_is_dark() ? RGB(0xF0, 0xF0, 0xF0) : theme_dk(RGB(0x30, 0x30, 0x30)));
   DeleteObject(font);
   if (!b) return;
   ZeroMemory(&mii, sizeof(mii));
@@ -3371,12 +3913,12 @@ void theme_menu_icon(HMENU menu, UINT id, unsigned short glyph)
 /* The accent color (Settings > General): the selected row of the program's own lists and the button that waits for a key.
    0 is the default (a blue in the dark theme, the color Windows uses in the light one); the others are fixed colors that
    read with white text in both themes. */
-static const COLORREF accent_bg[GUI_ACCENT_HIDDEN + 1]   = { 0, RGB(0x7A, 0x52, 0x33), RGB(0xA8, 0x1F, 0x3A), RGB(0xA6, 0x7C, 0x00),
+static const COLORREF accent_bg[GUI_ACCENT_HIDDEN + 1]   = { 0, RGB(0x2A, 0x5F, 0xB8), RGB(0x7A, 0x52, 0x33), RGB(0xA8, 0x1F, 0x3A), RGB(0xA6, 0x7C, 0x00),
                                                           RGB(0x55, 0x55, 0x55), RGB(0x3A, 0x76, 0x3E), RGB(0x3F, 0x4F, 0xA8), RGB(0x6B, 0x8E, 0x23),
                                                           RGB(0xA0, 0x2F, 0x8F), RGB(0x1F, 0x3F, 0x8F), RGB(0x6B, 0x6B, 0x1F), RGB(0x94, 0x62, 0x30),
                                                           RGB(0x92, 0x45, 0x78), RGB(0x62, 0x4A, 0x92), RGB(0x90, 0x40, 0x40), RGB(0x1F, 0x7F, 0xB5),
                                                           RGB(0x2A, 0x7A, 0x7A), RGB(0x7B, 0x2F, 0xB8), RGB(0xB8, 0x98, 0x00), RGB(0x0E, 0x8F, 0x3F) };
-static const COLORREF accent_edge[GUI_ACCENT_HIDDEN + 1] = { 0, RGB(0xB0, 0x84, 0x60), RGB(0xE0, 0x60, 0x78), RGB(0xE0, 0xB8, 0x3A),
+static const COLORREF accent_edge[GUI_ACCENT_HIDDEN + 1] = { 0, RGB(0x6C, 0xA0, 0xF0), RGB(0xB0, 0x84, 0x60), RGB(0xE0, 0x60, 0x78), RGB(0xE0, 0xB8, 0x3A),
                                                           RGB(0x80, 0x80, 0x80), RGB(0x68, 0xA8, 0x6C), RGB(0x7C, 0x8A, 0xD8), RGB(0xA4, 0xCC, 0x5A),
                                                           RGB(0xD8, 0x70, 0xC8), RGB(0x60, 0x80, 0xD8), RGB(0xB8, 0xB8, 0x58), RGB(0xC4, 0x90, 0x58),
                                                           RGB(0xC0, 0x72, 0xA5), RGB(0x90, 0x78, 0xC0), RGB(0xC0, 0x70, 0x70), RGB(0x5C, 0xB8, 0xE8),
@@ -3401,14 +3943,14 @@ void theme_draw_dropdown_button(const DRAWITEMSTRUCT *di)
   HGDIOBJ ob, op;
 
   if (GetCursorPos(&cur)) { RECT wr; if (GetWindowRect(di->hwndItem, &wr) && PtInRect(&wr, cur)) hot = 1; }
-  face = dark ? (down ? RGB(0x55, 0x55, 0x55) : (hot ? RGB(0x4A, 0x4A, 0x4A) : RGB(0x38, 0x38, 0x38)))
+  face = dark ? (down ? theme_dk(RGB(0x55, 0x55, 0x55)) : (hot ? theme_dk(RGB(0x4A, 0x4A, 0x4A)) : theme_dk(RGB(0x38, 0x38, 0x38))))
               : (down ? RGB(0xCC, 0xE4, 0xF7) : (hot ? RGB(0xE5, 0xF1, 0xFB) : RGB(0xE1, 0xE1, 0xE1)));
-  edge = dark ? RGB(0x6B, 0x6B, 0x6B) : (hot ? RGB(0x00, 0x78, 0xD7) : RGB(0xAD, 0xAD, 0xAD));
-  fg = dis ? (dark ? RGB(0x80, 0x80, 0x80) : RGB(0x80, 0x80, 0x80)) : (dark ? RGB(0xF0, 0xF0, 0xF0) : RGB(0, 0, 0));
+  edge = dark ? theme_dk(RGB(0x6B, 0x6B, 0x6B)) : (hot ? RGB(0x00, 0x78, 0xD7) : theme_dk(RGB(0xAD, 0xAD, 0xAD)));
+  fg = dis ? (dark ? theme_dk(RGB(0x80, 0x80, 0x80)) : theme_dk(RGB(0x80, 0x80, 0x80))) : (dark ? RGB(0xF0, 0xF0, 0xF0) : RGB(0, 0, 0));
 
-  if (gui.ui_style)
+  if (mod_look())
   {
-    /* Modern: the same flat rounded look as the other buttons. */
+    /* Modern (or a colored theme): the same flat rounded look as the other buttons. */
     COLORREF mf, mt, me, bg;
     mod_ss ss;
     int w = r.right - r.left, hh = r.bottom - r.top;
@@ -3419,7 +3961,7 @@ void theme_draw_dropdown_button(const DRAWITEMSTRUCT *di)
     if (bg == CLR_INVALID) bg = dark ? THEME_DARK_BG : GetSysColor(COLOR_BTNFACE);
     if (mod_ss_begin(&ss, di->hDC, w, hh, bg))
     {
-      mod_ss_round(&ss, 0.5, 0.5, w - 1, hh - 1, (double)mod_dpi_px(di->hDC, 5), mf, (di->itemState & ODS_FOCUS) ? mod_accent() : me, (di->itemState & ODS_FOCUS) ? 2.0 : 1.0);
+      mod_ss_round(&ss, 0.5, 0.5, w - 1, hh - 1, (double)mod_dpi_px(5), mf, (di->itemState & ODS_FOCUS) ? mod_accent() : me, (di->itemState & ODS_FOCUS) ? 2.0 : 1.0);
       mod_ss_end(&ss, di->hDC, r.left, r.top);
     }
   }
@@ -3467,7 +4009,7 @@ void theme_draw_dropdown_button(const DRAWITEMSTRUCT *di)
   SelectObject(di->hDC, op);
   DeleteObject(ab);
 
-  if ((di->itemState & ODS_FOCUS) && !gui.ui_style)
+  if ((di->itemState & ODS_FOCUS) && !mod_look())
   {
     RECT fr = r;
     InflateRect(&fr, -TBS(3), -TBS(3));
@@ -3480,13 +4022,14 @@ COLORREF theme_accent_bg(void)
   int a = gui.accent < 0 || gui.accent > GUI_ACCENT_HIDDEN ? 0 : gui.accent;
   if (a) return accent_bg[a];
   if (gui.ui_style) return modern_blue();          /* every chosen row of every list: the same color as the Modern style's other highlights */
+  if (colored_theme() >= 0) return pal[colored_theme()].accent;
   return theme_is_dark() ? RGB(0x40, 0x60, 0x90) : GetSysColor(COLOR_HIGHLIGHT);
 }
 
 /* The color shown beside a name in the Accent Color list. */
 COLORREF theme_accent_swatch(int i)
 {
-  if (i <= 0 || i > GUI_ACCENT_HIDDEN) return gui.ui_style ? modern_blue() : (theme_is_dark() ? RGB(0x40, 0x60, 0x90) : GetSysColor(COLOR_HIGHLIGHT));
+  if (i <= 0 || i > GUI_ACCENT_HIDDEN) return gui.ui_style ? modern_blue() : colored_theme() >= 0 ? pal[colored_theme()].accent : (theme_is_dark() ? RGB(0x40, 0x60, 0x90) : GetSysColor(COLOR_HIGHLIGHT));
   return accent_bg[i];
 }
 
@@ -3495,5 +4038,6 @@ COLORREF theme_accent_edge(void)
   int a = gui.accent < 0 || gui.accent > GUI_ACCENT_HIDDEN ? 0 : gui.accent;
   if (a) return accent_edge[a];
   if (gui.ui_style) return modern_blue();
+  if (colored_theme() >= 0) return pal[colored_theme()].edge;
   return theme_is_dark() ? RGB(0x70, 0x90, 0xC0) : GetSysColor(COLOR_HIGHLIGHT);
 }

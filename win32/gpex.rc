@@ -19,6 +19,7 @@ IDR_RING RCDATA "ring_png.png"
 IDR_RINGBLINK RCDATA "ring_gif.gif"
 IDR_LOGO RCDATA "logo_gpex.png"
 IDR_GENRES RCDATA "genres.bin"
+IDR_CONTROLLERDB RCDATA "controllerdb.bin"
 IDR_SEGA_SFX RCDATA "sega.wav"
 IDR_RING_SFX RCDATA "ring_sfx.wav"
 
@@ -37,7 +38,13 @@ BEGIN
       MENUITEM "(Empty)",                       IDM_FILE_RECENT_BASE, GRAYED
     END
     MENUITEM "ROM &Information...",             IDM_FILE_ROMINFO
-    MENUITEM "Insert Dis&c...",             IDM_EMU_INSERTDISC
+    MENUITEM "Change Dis&c...",             IDM_EMU_INSERTDISC
+    POPUP "Run Mega CD &BIOS"
+    BEGIN
+      MENUITEM "&USA",                          IDM_FILE_RUNBIOS_BASE + 0
+      MENUITEM "&Europe",                       IDM_FILE_RUNBIOS_BASE + 1
+      MENUITEM "&Japan",                        IDM_FILE_RUNBIOS_BASE + 2
+    END
     MENUITEM "Appl&y Patch...",                 IDM_FILE_APPLYPATCH
     MENUITEM SEPARATOR
     MENUITEM "Open Genesis Plus EX &Folder", IDM_FILE_OPENDIR
@@ -152,6 +159,13 @@ BEGIN
       MENUITEM "&System",                       IDM_VIDEO_THEME_BASE + 0
       MENUITEM "&Light",                        IDM_VIDEO_THEME_BASE + 1
       MENUITEM "&Dark",                         IDM_VIDEO_THEME_BASE + 2
+      MENUITEM "Sapp&hire",                     IDM_VIDEO_THEME_BASE + 3
+      MENUITEM "&Ruby",                      IDM_VIDEO_THEME_BASE + 4
+      MENUITEM "&Emerald",                      IDM_VIDEO_THEME_BASE + 5
+      MENUITEM "Ameth&yst",                       IDM_VIDEO_THEME_BASE + 6
+      MENUITEM "&Amber",                        IDM_VIDEO_THEME_BASE + 7
+      MENUITEM "Aq&uamarine",                         IDM_VIDEO_THEME_BASE + 8
+      MENUITEM "Dia&mond",                       IDM_VIDEO_THEME_BASE + 9
     END
     MENUITEM SEPARATOR
     POPUP "Tool&bars"
@@ -210,6 +224,10 @@ BEGIN
       MENUITEM "4x",                            IDM_VIDEO_SCALE_BASE + 3
       MENUITEM "5x",                            IDM_VIDEO_SCALE_BASE + 4
       MENUITEM "6x",                            IDM_VIDEO_SCALE_BASE + 5
+      MENUITEM "7x",                            IDM_VIDEO_SCALE_BASE + 6
+      MENUITEM "8x",                            IDM_VIDEO_SCALE_BASE + 7
+      MENUITEM "9x",                            IDM_VIDEO_SCALE_BASE + 8
+      MENUITEM "10x",                           IDM_VIDEO_SCALE_BASE + 9
     END
     MENUITEM "&Fullscreen\tAlt+Enter",          IDM_VIDEO_FULLSCREEN
     MENUITEM SEPARATOR
@@ -230,6 +248,7 @@ BEGIN
     POPUP "Visual &Effects"
     BEGIN
       MENUITEM "&Smooth Scaling",               IDM_VIDEO_SMOOTH
+      MENUITEM "&Deinterlacing",                IDM_VIDEO_DEINTERLACE
       MENUITEM "&Dither Smoothing",             IDM_VIDEO_DITHER
       MENUITEM "&Integer Scaling",              IDM_VIDEO_INTSCALE
       MENUITEM "&Flicker Blending",             IDM_VIDEO_FLICKER
@@ -265,17 +284,19 @@ BEGIN
       MENUITEM "4:3 (Standard)",                  IDM_VIDEO_ASPECT_BASE + 2
       MENUITEM "16:9 (Widescreen)",             IDM_VIDEO_ASPECT_BASE + 3
     END
+    POPUP "Ro&tation"
+    BEGIN
+      MENUITEM "None",                          IDM_VIDEO_ROTATE_BASE + 0
+      MENUITEM "90 Degrees Clockwise",          IDM_VIDEO_ROTATE_BASE + 1
+      MENUITEM "180 Degrees",                   IDM_VIDEO_ROTATE_BASE + 2
+      MENUITEM "90 Degrees Counterclockwise",   IDM_VIDEO_ROTATE_BASE + 3
+    END
     POPUP "&Borders"
     BEGIN
       MENUITEM "Hide All",                      IDM_VIDEO_OVERSCAN_BASE + 0
       MENUITEM "Top and Bottom",                IDM_VIDEO_OVERSCAN_BASE + 1
       MENUITEM "Left and Right",                IDM_VIDEO_OVERSCAN_BASE + 2
       MENUITEM "Show All",                      IDM_VIDEO_OVERSCAN_BASE + 3
-    END
-    POPUP "&Interlaced Mode"
-    BEGIN
-      MENUITEM "Single Field",                  IDM_VIDEO_INTERLACE_BASE + 0
-      MENUITEM "Double Field",                  IDM_VIDEO_INTERLACE_BASE + 1
     END
     POPUP "Frames&kip"
     BEGIN
@@ -359,6 +380,9 @@ BEGIN
     MENUITEM "&Netplay...",               IDM_TOOLS_NETPLAY
     MENUITEM "Sto&p Netplay",                   IDM_TOOLS_NETPLAY_STOP
     MENUITEM SEPARATOR
+    MENUITEM "&Debugger...",                    IDM_TOOLS_DEBUGGER
+    MENUITEM "Fix Chec&ksum...",                IDM_TOOLS_FIXCHECKSUM
+    MENUITEM SEPARATOR
     POPUP "&Record"
     BEGIN
       MENUITEM "Record Animated &GIF\tCtrl+F12",    IDM_FILE_REC_GIF
@@ -405,6 +429,10 @@ BEGIN
       MENUITEM "Master System II",              IDM_EMU_SYSTEM_BASE + 6
       MENUITEM "Game Gear",                     IDM_EMU_SYSTEM_BASE + 7
       MENUITEM "Mega Drive / Genesis",          IDM_EMU_SYSTEM_BASE + 8
+    END
+    POPUP "&Language"
+    BEGIN
+      MENUITEM "English",                       IDM_OPT_LANGUAGE_BASE
     END
   END
 
@@ -606,14 +634,14 @@ BEGIN
   DEFPUSHBUTTON   "Close", IDOK, 384, 278, 48, 16
 END
 
-IDD_ROMINFO DIALOGEX 0, 0, 280, 270
+IDD_ROMINFO DIALOGEX 0, 0, 296, 270
 STYLE DS_MODALFRAME | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "ROM Information"
 FONT 8, "MS Shell Dlg"
 BEGIN
-  CONTROL         "", IDC_ROMINFO_TEXT, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP | WS_VSCROLL, 8, 8, 264, 234
+  CONTROL         "", IDC_ROMINFO_TEXT, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP | WS_VSCROLL, 8, 8, 280, 234
   PUSHBUTTON      "Copy", IDC_ROMINFO_COPY, 8, 248, 48, 16
-  DEFPUSHBUTTON   "Close", IDOK, 224, 248, 48, 16
+  DEFPUSHBUTTON   "Close", IDOK, 240, 248, 48, 16
 END
 
 IDD_CHEATS DIALOGEX 0, 0, 452, 258
@@ -819,14 +847,14 @@ BEGIN
   DEFPUSHBUTTON   "Close", IDOK, 464, 278, 48, 16
 END
 
-IDD_ROMINFO_LARGE DIALOGEX 0, 0, 280, 270
+IDD_ROMINFO_LARGE DIALOGEX 0, 0, 296, 270
 STYLE DS_MODALFRAME | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "ROM Information"
 FONT 12, "MS Shell Dlg"
 BEGIN
-  CONTROL         "", IDC_ROMINFO_TEXT, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP | WS_VSCROLL, 8, 8, 264, 234
+  CONTROL         "", IDC_ROMINFO_TEXT, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP | WS_VSCROLL, 8, 8, 280, 234
   PUSHBUTTON      "Copy", IDC_ROMINFO_COPY, 8, 248, 48, 16
-  DEFPUSHBUTTON   "Close", IDOK, 224, 248, 48, 16
+  DEFPUSHBUTTON   "Close", IDOK, 240, 248, 48, 16
 END
 
 IDD_CHEATS_LARGE DIALOGEX 0, 0, 452, 258
@@ -891,56 +919,86 @@ BEGIN
   PUSHBUTTON      "Close", IDCANCEL, 240, 164, 50, 16
 END
 
-IDD_PICTUREADJ DIALOGEX 0, 0, 252, 150
+IDD_PICTUREADJ DIALOGEX 0, 0, 252, 178
 STYLE DS_MODALFRAME | DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Picture Adjustments"
 FONT 8, "MS Shell Dlg"
 BEGIN
-  LTEXT           "Contrast", IDC_STATIC, 12, 18, 50, 9
-  CONTROL         "", IDC_PADJ_CONTRAST, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 14, 138, 20
-  RTEXT           "", IDC_PADJ_CONTRAST_TEXT, 208, 18, 34, 9
+  LTEXT           "Brightness", IDC_STATIC, 12, 18, 50, 9
+  CONTROL         "", IDC_PADJ_BRIGHT, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 14, 138, 20
+  RTEXT           "", IDC_PADJ_BRIGHT_TEXT, 208, 18, 34, 9
 
-  LTEXT           "Saturation", IDC_STATIC, 12, 46, 50, 9
-  CONTROL         "", IDC_PADJ_SAT, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 42, 138, 20
-  RTEXT           "", IDC_PADJ_SAT_TEXT, 208, 46, 34, 9
+  LTEXT           "Contrast", IDC_STATIC, 12, 46, 50, 9
+  CONTROL         "", IDC_PADJ_CONTRAST, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 42, 138, 20
+  RTEXT           "", IDC_PADJ_CONTRAST_TEXT, 208, 46, 34, 9
 
-  LTEXT           "Gamma", IDC_STATIC, 12, 74, 50, 9
-  CONTROL         "", IDC_PADJ_GAMMA, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 70, 138, 20
-  RTEXT           "", IDC_PADJ_GAMMA_TEXT, 208, 74, 34, 9
+  LTEXT           "Saturation", IDC_STATIC, 12, 74, 50, 9
+  CONTROL         "", IDC_PADJ_SAT, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 70, 138, 20
+  RTEXT           "", IDC_PADJ_SAT_TEXT, 208, 74, 34, 9
 
-  LTEXT           "Hue", IDC_STATIC, 12, 102, 50, 9
-  CONTROL         "", IDC_PADJ_HUE, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 98, 138, 20
-  RTEXT           "", IDC_PADJ_HUE_TEXT, 208, 102, 34, 9
+  LTEXT           "Gamma", IDC_STATIC, 12, 102, 50, 9
+  CONTROL         "", IDC_PADJ_GAMMA, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 98, 138, 20
+  RTEXT           "", IDC_PADJ_GAMMA_TEXT, 208, 102, 34, 9
 
-  PUSHBUTTON      "Restore Defaults", IDC_PADJ_DEFAULTS, 12, 128, 74, 16
-  DEFPUSHBUTTON   "OK", IDOK, 142, 128, 50, 16
-  PUSHBUTTON      "Cancel", IDCANCEL, 196, 128, 48, 16
+  LTEXT           "Hue", IDC_STATIC, 12, 130, 50, 9
+  CONTROL         "", IDC_PADJ_HUE, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 126, 138, 20
+  RTEXT           "", IDC_PADJ_HUE_TEXT, 208, 130, 34, 9
+
+  PUSHBUTTON      "Restore Defaults", IDC_PADJ_DEFAULTS, 12, 156, 74, 16
+  DEFPUSHBUTTON   "OK", IDOK, 142, 156, 50, 16
+  PUSHBUTTON      "Cancel", IDCANCEL, 196, 156, 48, 16
 END
 
-IDD_PICTUREADJ_LARGE DIALOGEX 0, 0, 252, 150
+IDD_PICTUREADJ_LARGE DIALOGEX 0, 0, 252, 178
 STYLE DS_MODALFRAME | DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Picture Adjustments"
 FONT 12, "MS Shell Dlg"
 BEGIN
-  LTEXT           "Contrast", IDC_STATIC, 12, 18, 50, 9
-  CONTROL         "", IDC_PADJ_CONTRAST, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 14, 138, 20
-  RTEXT           "", IDC_PADJ_CONTRAST_TEXT, 208, 18, 34, 9
+  LTEXT           "Brightness", IDC_STATIC, 12, 18, 50, 9
+  CONTROL         "", IDC_PADJ_BRIGHT, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 14, 138, 20
+  RTEXT           "", IDC_PADJ_BRIGHT_TEXT, 208, 18, 34, 9
 
-  LTEXT           "Saturation", IDC_STATIC, 12, 46, 50, 9
-  CONTROL         "", IDC_PADJ_SAT, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 42, 138, 20
-  RTEXT           "", IDC_PADJ_SAT_TEXT, 208, 46, 34, 9
+  LTEXT           "Contrast", IDC_STATIC, 12, 46, 50, 9
+  CONTROL         "", IDC_PADJ_CONTRAST, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 42, 138, 20
+  RTEXT           "", IDC_PADJ_CONTRAST_TEXT, 208, 46, 34, 9
 
-  LTEXT           "Gamma", IDC_STATIC, 12, 74, 50, 9
-  CONTROL         "", IDC_PADJ_GAMMA, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 70, 138, 20
-  RTEXT           "", IDC_PADJ_GAMMA_TEXT, 208, 74, 34, 9
+  LTEXT           "Saturation", IDC_STATIC, 12, 74, 50, 9
+  CONTROL         "", IDC_PADJ_SAT, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 70, 138, 20
+  RTEXT           "", IDC_PADJ_SAT_TEXT, 208, 74, 34, 9
 
-  LTEXT           "Hue", IDC_STATIC, 12, 102, 50, 9
-  CONTROL         "", IDC_PADJ_HUE, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 98, 138, 20
-  RTEXT           "", IDC_PADJ_HUE_TEXT, 208, 102, 34, 9
+  LTEXT           "Gamma", IDC_STATIC, 12, 102, 50, 9
+  CONTROL         "", IDC_PADJ_GAMMA, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 98, 138, 20
+  RTEXT           "", IDC_PADJ_GAMMA_TEXT, 208, 102, 34, 9
 
-  PUSHBUTTON      "Restore Defaults", IDC_PADJ_DEFAULTS, 12, 128, 74, 16
-  DEFPUSHBUTTON   "OK", IDOK, 142, 128, 50, 16
-  PUSHBUTTON      "Cancel", IDCANCEL, 196, 128, 48, 16
+  LTEXT           "Hue", IDC_STATIC, 12, 130, 50, 9
+  CONTROL         "", IDC_PADJ_HUE, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 66, 126, 138, 20
+  RTEXT           "", IDC_PADJ_HUE_TEXT, 208, 130, 34, 9
+
+  PUSHBUTTON      "Restore Defaults", IDC_PADJ_DEFAULTS, 12, 156, 74, 16
+  DEFPUSHBUTTON   "OK", IDOK, 142, 156, 50, 16
+  PUSHBUTTON      "Cancel", IDCANCEL, 196, 156, 48, 16
+END
+
+IDD_DIRECTORIES DIALOGEX 0, 0, 330, 236
+STYLE DS_MODALFRAME | DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Data Folders"
+FONT 8, "MS Shell Dlg"
+BEGIN
+  LTEXT           "", IDC_DIR_HELP, 10, 6, 310, 34
+  PUSHBUTTON      "Defaults", IDC_DIR_DEFAULT, 10, 214, 60, 16
+  DEFPUSHBUTTON   "OK", IDOK, 214, 214, 50, 16
+  PUSHBUTTON      "Cancel", IDCANCEL, 270, 214, 50, 16
+END
+
+IDD_DIRECTORIES_LARGE DIALOGEX 0, 0, 330, 236
+STYLE DS_MODALFRAME | DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Data Folders"
+FONT 12, "MS Shell Dlg"
+BEGIN
+  LTEXT           "", IDC_DIR_HELP, 10, 6, 310, 34
+  PUSHBUTTON      "Defaults", IDC_DIR_DEFAULT, 10, 214, 60, 16
+  DEFPUSHBUTTON   "OK", IDOK, 214, 214, 50, 16
+  PUSHBUTTON      "Cancel", IDCANCEL, 270, 214, 50, 16
 END
 
 IDD_ROMFOLDERS DIALOGEX 0, 0, 330, 226
@@ -953,6 +1011,7 @@ BEGIN
   CONTROL         "", IDC_RF_LIST, "SysListView32", LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 10, 43, 310, 61
   PUSHBUTTON      "Add Directory...", IDC_RF_ADD, 10, 108, 76, 16
   PUSHBUTTON      "Remove", IDC_RF_REMOVE, 92, 108, 56, 16
+  AUTOCHECKBOX    "Scan Subfolders", IDC_RF_SCANSUB, 160, 111, 150, 10
   LTEXT           "Exclude Directories:", IDC_STATIC, 10, 132, 120, 9
   CONTROL         "", IDC_RF_EXLIST, "SysListView32", LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 10, 144, 310, 44
   PUSHBUTTON      "Add Directory...", IDC_RF_EXADD, 10, 192, 76, 16
@@ -971,6 +1030,7 @@ BEGIN
   CONTROL         "", IDC_RF_LIST, "SysListView32", LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 10, 43, 310, 61
   PUSHBUTTON      "Add Directory...", IDC_RF_ADD, 10, 108, 76, 16
   PUSHBUTTON      "Remove", IDC_RF_REMOVE, 92, 108, 56, 16
+  AUTOCHECKBOX    "Scan Subfolders", IDC_RF_SCANSUB, 160, 111, 150, 10
   LTEXT           "Exclude Directories:", IDC_STATIC, 10, 132, 120, 9
   CONTROL         "", IDC_RF_EXLIST, "SysListView32", LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 10, 144, 310, 44
   PUSHBUTTON      "Add Directory...", IDC_RF_EXADD, 10, 192, 76, 16
@@ -1014,8 +1074,8 @@ END
  ****************************************************************************/
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     3,0,3,0
-PRODUCTVERSION  3,0,3,0
+FILEVERSION     3,1,0,0
+PRODUCTVERSION  3,1,0,0
 FILEOS          VOS_NT_WINDOWS32
 FILETYPE        VFT_APP
 BEGIN
@@ -1024,11 +1084,11 @@ BEGIN
     BLOCK "040904E4"
     BEGIN
       VALUE "FileDescription", "Genesis Plus EX"
-      VALUE "FileVersion",     "3.0.3"
+      VALUE "FileVersion",     "3.1.0"
       VALUE "InternalName",    "Genesis Plus EX"
       VALUE "OriginalFilename","Genesis Plus EX.exe"
       VALUE "ProductName",     "Genesis Plus EX"
-      VALUE "ProductVersion",  "3.0.3"
+      VALUE "ProductVersion",  "3.1.0"
       VALUE "LegalCopyright",  "Copyright (C) 1998-2003 Charles MacDonald, 2007-2026 Eke-Eke"
     END
   END

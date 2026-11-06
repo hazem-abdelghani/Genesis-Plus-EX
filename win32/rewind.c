@@ -73,7 +73,7 @@
 typedef struct { int x, y, w, h, ow, oh, changed; } saved_viewport_t;
 
 #define BLOB_STATE_OFF     (0)
-#define BLOB_PIXEL_OFF     (BLOB_STATE_OFF + STATE_SIZE)
+#define BLOB_PIXEL_OFF     (BLOB_STATE_OFF + rw_state_cap)
 #define BLOB_VIEWPORT_OFF  (BLOB_PIXEL_OFF + REWIND_PIXEL_SIZE)
 #define BLOB_AUDCOUNT_OFF  (BLOB_VIEWPORT_OFF + sizeof(saved_viewport_t))
 #define BLOB_AUDIO_OFF     (BLOB_AUDCOUNT_OFF + sizeof(int))
@@ -322,10 +322,20 @@ static size_t read_size_t(const void *ptr)
   return v;
 }
 
+/* The room for the state in each block: the core's worst case, and the 256 KB more that Paprium's chip needs only for that game. */
+static size_t rw_state_cap = STATE_SIZE;
+
+static size_t rw_wanted_cap(void)
+{
+  if (pico_active()) return (size_t)STATE_SIZE + 0x100000;       /* a 32X game: its state is larger (1.5 MB with the 32X on) */
+  return paprium_in_use() ? (size_t)STATE_CAP : (size_t)STATE_SIZE;
+}
+
 static int ring_init(void)
 {
   size_t single_block;
 
+  rw_state_cap = rw_wanted_cap();
   ring_maxcompsize = raw_maxsize(BLOB_SIZE) + sizeof(size_t) * 2;
 
   /* ring_push_do()'s eviction loop assumes capacity can always
@@ -532,6 +542,14 @@ int rewind_ready(void)
 void rewind_reset(void)
 {
   if (!ring_ok) return;
+  if (rw_wanted_cap() != rw_state_cap)               /* a game that needs another room for its state (Paprium): the blocks are made again */
+  {
+    ring_ok = 0;
+    ring_free();
+    ring_ok = ring_init();
+    suppress_next_capture = 0;
+    return;
+  }
 
   ring_head = ring_data + sizeof(size_t);
   ring_tail = ring_data + sizeof(size_t);
@@ -572,7 +590,7 @@ void rewind_capture_tick(const int16 *audio_samples, int audio_frames)
     /* A 32X game: PicoDrive's own state (about 680 KB, it fits the slot); not written to the log at every frame. */
     int n;
     pico_state_quiet(1);
-    n = pico_state_save(blob + BLOB_STATE_OFF, STATE_SIZE);
+    n = pico_state_save(blob + BLOB_STATE_OFF, rw_state_cap);
     pico_state_quiet(0);
     memcpy(blob + BLOB_STATELEN_OFF, &n, sizeof(int));       /* the length of this one: it may differ from a later one (the 32X switched on) */
   }

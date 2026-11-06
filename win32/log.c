@@ -5,7 +5,7 @@
  *
  *  Each line is appended and the file closed again at once, so what happened
  *  right before a crash is still in it. Off by default; the file is started
- *  fresh once it grows past 512 KB.
+ *  fresh once it grows past 1 MB.
  ****************************************************************************/
 
 #include <windows.h>
@@ -23,17 +23,10 @@ static const char *log_file(void)
 {
   if (!log_path[0])
   {
-    char tmp[MAX_PATH], *slash;
-    DWORD n = GetModuleFileNameA(NULL, tmp, sizeof(tmp) - 16);
-    if (n == 0 || n >= sizeof(tmp) - 16) lstrcpyA(tmp, "Logs\\genesis-plus-ex.log");
-    else
-    {
-      slash = strrchr(tmp, '\\');
-      if (slash) slash[1] = 0;
-      lstrcatA(tmp, "Logs");
-      CreateDirectoryA(tmp, NULL);                    /* the log, the crash report and the dump live in a folder of their own */
-      lstrcatA(tmp, "\\genesis-plus-ex.log");
-    }
+    char tmp[MAX_PATH];
+    lstrcpynA(tmp, osd_path("Logs"), sizeof(tmp) - 32);
+    gui_make_dirs(tmp);                               /* the log, the crash report and the dump live in Logs */
+    lstrcatA(tmp, "\\genesis-plus-ex.log");
     lstrcpyA(log_path, tmp);
   }
   return log_path;
@@ -68,7 +61,7 @@ void gui_log(const char *fmt, ...)
     {
       fseek(fp, 0, SEEK_END);
       size = ftell(fp);
-      if (size > 512 * 1024)
+      if (size > 1024 * 1024)
       {
         fclose(fp);
         fp = fopen(log_file(), "wb");

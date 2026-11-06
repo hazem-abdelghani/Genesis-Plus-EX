@@ -55,7 +55,7 @@ static char covers_cache[GUI_PATH_LEN];
 
 static const char *covers_base(void)
 {
-  if (!covers_cache[0]) lstrcpynA(covers_cache, osd_path("Covers"), sizeof(covers_cache));
+  if (!covers_cache[0]) lstrcpynA(covers_cache, osd_path("Images\\Covers"), sizeof(covers_cache));
   return covers_cache;
 }
 

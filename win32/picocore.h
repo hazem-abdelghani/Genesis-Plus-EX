@@ -47,9 +47,16 @@ int  pico_sample_rate(void);      /* the rate the running 32X game was started w
    (3: a = register 0..4, d = value), with the place in the frame as 0..65535. NULL stops it. Returns 0 when it cannot. */
 int pico_sound_log(void (*cb)(int kind, unsigned a, unsigned d, unsigned frac));
 
-/* The memory the cheats work on while a 32X game runs: what 0 is the cartridge ROM, 1 the 68000's work RAM (NULL when there is
-   none, or the library has no such call). */
+/* The memory the cheats and the Memory Viewer work on while a 32X game runs: what 0 is the cartridge ROM, 1 the 68000's work RAM, 2 the SDRAM of the
+   SH-2s, and for the VDP Viewer 3 VRAM, 4 CRAM, 5 VSRAM and 6 the video registers (NULL when there is none, or the library has no such call). */
 unsigned char *pico_memory(int what, unsigned *size);
+int pico_cpu_hook(void (*cb)(int cpu, unsigned pc));    /* the CPU Debugger's hook for the 68000 (0) and the SH-2s (1, 2); 0 when the library cannot */
+void pico_dasm_sh2(char *out, unsigned pc, unsigned opcode);
+int pico_regs(int which, unsigned *out, int max);      /* 0: 68000 (18 values), 1: Z80 (18), 2, 3: the SH-2s (23); -1 when not available */
+int pico_vdp_reg(int reg, int value);                 /* the video chip's register reg gets value; 1 = done */
+int pico_poke(int kind, unsigned off, int value);     /* 3: VRAM, 4: CRAM, 5: VSRAM; 1 = done */
+int pico_pwm_state(int out[8]);        /* the 32X PWM chip: control, cycle, last left and right sample, FIFO fill (2), interrupt interval now and programmed; 1 = filled in */
+int pico_sound_state(unsigned char ym[2][256], unsigned char keyon[8], unsigned tone[3], unsigned char vol[4], unsigned char *noise);   /* 1 = filled in */
 
 size_t pico_state_max(void);
 void   pico_state_quiet(int on);       /* 1: saving and loading states is not written to the log (rewind does it at every frame) */

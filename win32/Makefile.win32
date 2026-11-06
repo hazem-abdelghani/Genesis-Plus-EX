@@ -22,9 +22,10 @@
 #     then, in that shell:
 #       make -f Makefile.win32
 #
-#   To keep both builds side by side, give each its own object directory and
-#   output name so they do not overwrite each other:
-#       make -f Makefile.win32 CROSS=x86_64-w64-mingw32- OBJDIR=./build_w64 NAME="Genesis Plus EX.exe"
+#   Both sizes can be built one after the other with no cleaning in between: each gets its own
+#   object folder (build_win32_64 / build_win32_32), program ("Genesis Plus EX.exe" /
+#   "Genesis Plus EX-32bit.exe") and PicoDrive library (Plugins/picodrive_libretro-64.dll / -32.dll),
+#   chosen from the compiler. OBJDIR=, NAME= and PICONAME= on the command line still override them.
 #
 # Useful overrides:
 #   DEBUG=1     keep symbols, no optimisation
@@ -40,7 +41,7 @@
 # with no exceptions and no RTTI so the finished .exe needs no C++ runtime
 # library -- the link step is still plain gcc.
 
-NAME      = Genesis Plus EX.exe
+# NAME (the program's file name) and OBJDIR (where the objects go) depend on the compiler: see below.
 
 # NAME has a space in it: make needs the target spelled with the space escaped,
 # and the commands need it in quotes.
@@ -55,6 +56,23 @@ CXX       = $(CROSS)g++
 WINDRES   = $(CROSS)windres
 STRIP     = $(CROSS)strip
 
+# 32-bit or 64-bit, from the compiler itself (gcc -dumpmachine: x86_64-w64-mingw32 or i686-w64-mingw32). Each size gets its own
+# object folder, program name and PicoDrive library name by default, so one build can never pick up the objects of the other
+# (make only compares dates: 64-bit objects left in a shared folder were linked into the 32-bit program and the link failed).
+# (Only the command line sets these: a NAME, OBJDIR or PICONAME in the environment is ignored; WSL, for one, sets NAME to the machine's name.)
+MACHINE  := $(shell $(CC) -dumpmachine)
+# (not just "64": i686-w64-mingw32, the 32-bit compiler, has it in its name too)
+ifneq ($(strip $(findstring x86_64,$(MACHINE)) $(findstring aarch64,$(MACHINE)) $(findstring arm64,$(MACHINE))),)
+BITS      = 64
+DEF_NAME  = Genesis Plus EX.exe
+else
+BITS      = 32
+DEF_NAME  = Genesis Plus EX-32bit.exe
+endif
+ifneq ($(origin NAME),command line)
+NAME      = $(DEF_NAME)
+endif
+
 CHD      ?= 1
 OGG      ?= 1
 DEBUG    ?= 0
@@ -64,7 +82,9 @@ SRCDIR    = ../core
 SDLDIR    = ../sdl
 GUIDIR    = .
 CHDLIBDIR = $(SRCDIR)/cd_hw/libchdr
-OBJDIR    = ./build_win32
+ifneq ($(origin OBJDIR),command line)
+OBJDIR    = ./build_win32_$(BITS)
+endif
 
 # ---------------------------------------------------------------------------
 # Flags
@@ -85,12 +105,14 @@ INCLUDES  = -I$(GUIDIR) \
             -I$(SRCDIR)/input_hw \
             -I$(SRCDIR)/cart_hw \
             -I$(SRCDIR)/cart_hw/svp \
+            -I$(SRCDIR)/debug \
             -I$(SRCDIR)/cd_hw \
             -I$(SRCDIR)/ntsc
 
 DEFINES   = -DLSB_FIRST \
+            -DHOOK_CPU \
             -DUSE_16BPP_RENDERING \
-            -DMAXROMSIZE=33554432 \
+            -DMAXROMSIZE=100663296 \
             -DHAVE_YM3438_CORE \
             -DHAVE_OPLL_CORE \
             -DENABLE_SUB_68K_ADDRESS_ERROR_EXCEPTIONS \
@@ -106,6 +128,9 @@ else
 endif
 
 CFLAGS   += -std=gnu99
+
+# The core's CPU hook header (HOOK_CPU) defines its variable in every file that includes it, which the linker joins only with this.
+CFLAGS   += -fcommon
 
 # Track header dependencies (writes a .d file next to every .o), so editing a
 # header such as config.h, gui.h or resource.h rebuilds everything that
@@ -127,6 +152,13 @@ XBRZDIR   = $(GUIDIR)/xbrz
 
 # -mwindows produces a GUI subsystem binary, so no console window appears.
 LDFLAGS  += -mwindows -Wl,--wrap=psg_write -Wl,--wrap=system_init -Wl,--wrap=system_reset
+
+# Paprium (paprium.c) is attached to the core from outside: these calls of the core go through it.
+LDFLAGS  += -Wl,--wrap=load_rom -Wl,--wrap=md_cart_init -Wl,--wrap=md_cart_reset -Wl,--wrap=md_cart_context_save \
+            -Wl,--wrap=md_cart_context_load -Wl,--wrap=audio_init -Wl,--wrap=yx5200_update -Wl,--wrap=vdp_68k_ctrl_w -Wl,--wrap=render_line
+
+# fopen() goes through main.c (a .cue sheet that names its .bin without the extension; see __wrap_fopen).
+LDFLAGS  += -Wl,--wrap=fopen
 
 # zlib is linked statically so the finished .exe does not need zlib1.dll
 # sitting next to it. XInput is absent on purpose: input.c loads it at
@@ -196,7 +228,8 @@ OBJECTS  += $(OBJDIR)/sram.o \
             $(OBJDIR)/yx5200.o \
             $(OBJDIR)/md_cart.o \
             $(OBJDIR)/sms_cart.o \
-            $(OBJDIR)/megasd.o
+            $(OBJDIR)/megasd.o \
+            $(OBJDIR)/cpuhook.o
 
 OBJECTS  += $(OBJDIR)/scd.o \
             $(OBJDIR)/cdd.o \
@@ -242,11 +275,22 @@ OBJECTS  += $(OBJDIR)/main.o \
             $(OBJDIR)/theme.o \
             $(OBJDIR)/extras.o \
             $(OBJDIR)/log.o \
+            $(OBJDIR)/i18n.o \
             $(OBJDIR)/upnp.o \
             $(OBJDIR)/patches.o \
             $(OBJDIR)/movie.o \
             $(OBJDIR)/vgm.o \
+            $(OBJDIR)/paprium.o \
+            $(OBJDIR)/memview.o \
+            $(OBJDIR)/debugwin.o \
+            $(OBJDIR)/debugger.o \
+            $(OBJDIR)/deint.o \
+            $(OBJDIR)/ramwatch.o \
+            $(OBJDIR)/dbgcpu.o \
+            $(OBJDIR)/ramsearch.o \
             $(OBJDIR)/picocore.o \
+            $(OBJDIR)/picobook.o \
+            $(OBJDIR)/picopcm.o \
             $(OBJDIR)/eggs.o \
             $(OBJDIR)/gpex_res.o
 
@@ -259,7 +303,8 @@ endif
 ifeq ($(XBRZ),1)
   DEFINES += -DGPEX_XBRZ
   OBJECTS += $(OBJDIR)/xbrz.o \
-             $(OBJDIR)/xbrz_glue.o
+             $(OBJDIR)/xbrz_glue.o \
+             $(OBJDIR)/mmpx_ex.o
 endif
 
 ifeq ($(OGG),1)
@@ -308,8 +353,12 @@ ifeq ($(CHD),1)
   # the LzmaDec/CpuArch objects just above rather than a second copy of the
   # same SDK version -- see lzmasdk/README-lzmasdk.txt -- so it only builds
   # alongside CHD.
-  DEFINES  += -DZ7_NO_METHODS_FILTERS
-  OBJECTS  += $(OBJDIR)/sevenzip.o \
+  # (The Delta and branch filters are built in: 7-Zip puts WAV files through the Delta filter by itself, so an archive of audio needs it.)
+  OBJECTS  += $(OBJDIR)/Bra.o \
+              $(OBJDIR)/Bra86.o \
+              $(OBJDIR)/BraIA64.o \
+              $(OBJDIR)/Delta.o \
+              $(OBJDIR)/sevenzip.o \
               $(OBJDIR)/7zArcIn.o \
               $(OBJDIR)/7zBuf.o \
               $(OBJDIR)/7zCrc.o \
@@ -325,7 +374,7 @@ endif
 # Rules
 # ---------------------------------------------------------------------------
 
-.PHONY: all clean pack picodrive
+.PHONY: all clean pack picodrive pot
 
 all: $(TARGET) picodrive
 
@@ -381,6 +430,9 @@ $(OBJDIR)/xbrz.o: $(XBRZDIR)/xbrz.cpp $(XBRZDIR)/xbrz.h $(XBRZDIR)/xbrz_config.h
 	$(CXX) -c $(CXXFLAGS) -I$(XBRZDIR) $< -o $@
 $(OBJDIR)/xbrz_glue.o: $(GUIDIR)/xbrz_glue.cpp $(GUIDIR)/xbrz_glue.h $(XBRZDIR)/xbrz.h
 	$(CXX) -c $(CXXFLAGS) -I$(GUIDIR) $< -o $@
+# MMPX Enhanced (C++, the shader's rules carried over; built with the xBRZ filters)
+$(OBJDIR)/mmpx_ex.o: $(GUIDIR)/mmpx_ex.cpp
+	$(CXX) -c $(CXXFLAGS) $< -o $@
 $(OBJDIR)/audio.o:   $(GUIDIR)/audio.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/audio_be.o: $(GUIDIR)/audio_be.c $(GUIDIR)/audio_be.h
@@ -405,6 +457,8 @@ $(OBJDIR)/rewind.o: $(GUIDIR)/rewind.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/theme.o: $(GUIDIR)/theme.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/i18n.o: $(GUIDIR)/i18n.c $(GUIDIR)/i18n.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/log.o: $(GUIDIR)/log.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/upnp.o: $(GUIDIR)/upnp.c $(GUIDIR)/upnp.h
@@ -416,6 +470,26 @@ $(OBJDIR)/patches.o: $(GUIDIR)/patches.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/movie.o: $(GUIDIR)/movie.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/paprium.o: $(GUIDIR)/paprium.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/memview.o: $(GUIDIR)/memview.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/debugwin.o: $(GUIDIR)/debugwin.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/deint.o: $(GUIDIR)/deint.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/debugger.o: $(GUIDIR)/debugger.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/ramwatch.o: $(GUIDIR)/ramwatch.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/picobook.o: $(GUIDIR)/picobook.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/picopcm.o: $(GUIDIR)/picopcm.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/dbgcpu.o: $(GUIDIR)/dbgcpu.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/ramsearch.o: $(GUIDIR)/ramsearch.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/vgm.o: $(GUIDIR)/vgm.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/picocore.o: $(GUIDIR)/picocore.c $(GUIDIR)/picocore.h
@@ -423,7 +497,7 @@ $(OBJDIR)/picocore.o: $(GUIDIR)/picocore.c $(GUIDIR)/picocore.h
 $(OBJDIR)/sevenzip.o: $(GUIDIR)/sevenzip.c $(GUIDIR)/sevenzip.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 
-$(OBJDIR)/gpex_res.o: $(GUIDIR)/gpex.rc $(GUIDIR)/resource.h $(GUIDIR)/gpex.manifest $(GUIDIR)/pad.bin $(GUIDIR)/genres.bin $(GUIDIR)/sega.wav $(GUIDIR)/ring_sfx.wav
+$(OBJDIR)/gpex_res.o: $(GUIDIR)/gpex.rc $(GUIDIR)/resource.h $(GUIDIR)/gpex.manifest $(GUIDIR)/pad.bin $(GUIDIR)/genres.bin $(GUIDIR)/controllerdb.bin $(GUIDIR)/sega.wav $(GUIDIR)/ring_sfx.wav
 	$(WINDRES) -I$(GUIDIR) $< -O coff -o $@
 
 # Core and shared sources
@@ -434,6 +508,8 @@ $(OBJDIR)/%.o: $(SRCDIR)/sound/%.c
 $(OBJDIR)/%.o: $(SRCDIR)/input_hw/%.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/%.o: $(SRCDIR)/cart_hw/%.c
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/%.o: $(SRCDIR)/debug/%.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/%.o: $(SRCDIR)/cart_hw/svp/%.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
@@ -475,7 +551,9 @@ $(OBJDIR)/%.o: $(CHDLIBDIR)/deps/zstd-1.5.6/lib/decompress/%.c
 # ---------------------------------------------------------------------------
 PICO      ?= 1
 PICODRC   ?= 0
-PICONAME  ?= picodrive_libretro.dll
+ifneq ($(origin PICONAME),command line)
+PICONAME   = picodrive_libretro-$(BITS).dll
+endif
 PICODIR    = $(GUIDIR)/picodrive
 PICOBUILD  = $(OBJDIR)/picodrive
 
@@ -491,6 +569,10 @@ else
 picodrive:
 	@echo "PICO=0: picodrive_libretro.dll is not built"
 endif
+
+# make pot: Languages/Template.pot again from the source (run it after the text of the program changed)
+pot:
+	cd $(GUIDIR) && python3 tools/make_pot.py
 
 pack: $(TARGET)
 	$(STRIP) "$(NAME)"

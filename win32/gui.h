@@ -13,7 +13,7 @@
 #define APP_NAME    "Genesis Plus EX"
 #define APP_NAME_W  L"Genesis Plus EX"
 #define APP_CLASS   "GenesisPlusEXWindow"
-#define APP_VERSION "3.0.3"
+#define APP_VERSION "3.1.0"
 #ifdef _WIN64
 #define APP_BITS    "64-bit"
 #else
@@ -52,6 +52,7 @@ extern int  emu_can_undo_load(void);
 extern void emu_undo_save_state(void);   /* put the slot back as it was before the last save */
 extern int  emu_can_undo_save(void);
 extern void gui_snprintf(char *out, int out_len, const char *fmt, ...);   /* never overruns out */
+extern void gui_utf8_trim(char *s);        /* takes off a last character (UTF-8) that a cut left half there */
 extern void emu_apply_region(void);
 
 /* Per-game data files (battery saves, save states, cheats) live in
@@ -64,6 +65,10 @@ extern void emu_apply_region(void);
    there is one, else the same game under another console folder, else the
    old flat name from earlier versions, else the new name. */
 extern void emu_data_path(const char *kind, const char *ext, int for_read, char *out, int out_len);
+/* ...and the same for a game that is not loaded (its path and the console the game list shows): a file, and the game's folder in Saves or States. */
+extern void emu_game_data_path(const char *rom_file, const char *console_label, const char *kind, const char *ext, int for_read, char *out, int out_len);
+extern void emu_game_console_file(const char *rom_file, const char *console_label, const char *kind, const char *ext, char *out, int out_len);
+extern void emu_game_data_dir(const char *rom_file, const char *console_label, const char *kind, char *out, int out_len);
 extern void emu_ensure_data_dir(const char *kind);
 extern void emu_console_file_path(const char *kind, const char *ext, char *out, int out_len);   /* <kind>\\<Console>\\<ROM name><ext>; makes the folders */
 extern void state_delete(int slot);
@@ -79,6 +84,9 @@ extern void gui_notify(const char *fmt, ...);
 extern int  gui_port_index(int port);   /* which device (0..9, as in the Port A / B lists) is plugged into controller port 0 / 1 */
 extern void waveout_set_enhance(int bass, int normalize, int overdrive);   /* Bass Boost, Even Out Loudness and Overdrive */
 extern void waveout_meter(int *l, int *r);                  /* peak levels since the last call, for the meter */
+extern int  gui_rate_locked(int id);                  /* 1 for a Sample Rate choice that is shut off while a game with CD audio runs at 44100 Hz */
+extern int  gui_cd_rate;                           /* the sound rate a 32X+ game runs at (44100, the rate of its audio tracks), 0 for the setting's rate */
+extern int  cheats_count(void);
 extern void gui_diag_start(void);                  /* log the frame rate and sound queue for a few seconds (when logging is on) */
 extern void gui_pad_back(const char *name);        /* a pad is connected again: resumes a game paused by gui_pad_lost */
 extern void gui_pad_lost(const char *name);        /* Player 1's pad went away: pauses when asked to */
@@ -122,7 +130,8 @@ extern void  video_show_notice(const char *text, int ms);
 extern void  video_osd_font_changed(void);     /* Font Size under Settings > OSD */
 extern int   rewind_set_memory(int mb);                      /* the history's size; 0 = not enough memory */
 extern int  extras_make_shortcut(const char *rom_path, int start_menu);
-extern void emu_insert_disc(void);                    /* File > Insert Disc... */
+extern int  gui_pick_folder(HWND parent, const char *title, char *out, int out_len);   /* the folder picker (Browse for Folder) */
+extern void emu_insert_disc(void);                    /* File > Change Disc... */
 extern void emu_save_state_file(const char *path);     /* a state in a file of the player's choice */
 extern void emu_load_state_file(const char *path);
 extern void browser_density_changed(void);
@@ -162,6 +171,7 @@ extern unsigned video_bar_color(void);                      /* 0xRRGGBB of the b
 extern void video_adjust_changed(void);
 extern void video_restore_display_mode(void);
 extern int  video_fullscreen_modes(int *ws, int *hs, int max);
+extern int  gui_slider_step(int id);                                /* how much one notch of a Picture Adjustments slider changes it */
 extern int  gui_slider_range(int id, int *lo, int *hi, int *def);   /* a Picture Adjustments slider: 1 if id is one */
 extern int  gui_slider_get(int id);
 extern void gui_slider_set(int id, int v);
@@ -196,6 +206,89 @@ extern void cheat_search_close(void);             /* when the game stops */
 extern void cheat_search_invalidate(void);        /* reset / state load: the search starts again */
 extern void cheat_search_enable(int on);          /* off while a modal window is open */
 extern HWND cheat_search_hwnd(void);
+extern void dlg_memory_viewer(HWND parent);       /* Tools > Memory Viewer: a window that stays open while the game runs (memview.c) */
+extern int  memview_message(MSG *msg);            /* keyboard handling for it; 1 = used the message */
+extern void memview_close(void);                  /* when the game stops */
+extern void memview_enable(int on);               /* off while a modal window is open */
+extern HWND memview_hwnd(void);
+/* The memories the Memory Viewer, the RAM Watch and the VDP Viewer's dump buttons work on (memview.c). */
+enum
+{
+  MV_WRAM, MV_ZRAM, MV_VRAM, MV_CRAM, MV_VSRAM, MV_ROM, MV_PRG, MV_WORD,
+  MV_PWRAM, MV_PROM, MV_PSDRAM, MV_R68K, MV_RZ80, MV_RVDP       /* the last three: the registers of the 68000, the Z80 and the video chip, as bytes */
+};
+extern int  dbg_cpu_regs(int which, unsigned *v);           /* the registers of a processor (see debugwin.c): 0 = 68000, 1 = Z80, 2 and 3 = SH-2; the count, or -1 */
+extern void dbg_vdp_reg_set(int reg, int value);            /* sets a register of the video chip the way a game does */
+extern int  dbgmem_get(int kind, int off);                 /* one byte of a memory (as the game sees it; CRAM as the game writes it); -1 outside it */
+extern void dbgmem_put(int kind, int off, int value);      /* changes one byte (the video memories the way the chip would) */
+extern HFONT dbg_ui_font(void);                            /* the look of the debug windows: the program's text font, */
+extern HFONT dbg_mono_font(void);                          /* and a fixed-width one of about the same size */
+extern int  dbg_scale(int px);                             /* a size in pixels as it would be at the Classic style's normal text size, scaled to the text size now */
+extern HWND dbg_tips_new(HWND parent);                     /* tooltips of a debug window: one tooltip window, and a tip on a control by dbg_tip */
+extern void dbg_tip(HWND tt, HWND parent, HWND ctl, const char *text);
+extern UINT_PTR dbg_look(void);                            /* changes when the text size, style or scale changed: a window lays itself out again */
+extern int  dbgmem_size(int kind);                         /* how many bytes it has; 0 when the game has no such memory */
+extern int  dbg_save_file(HWND owner, const char *title, const char *defname, const char *filter, const void *data, size_t len);   /* filter: "Name|*.ext|Name|*.ext" */
+extern unsigned char *dbg_open_file(HWND owner, const char *title, const char *filter, size_t *len);                              /* the file's bytes (free() them), NULL if none */
+extern void dlg_cpu_debugger(HWND parent);                 /* Tools > Debug > CPU Debugger (dbgcpu.c) */
+extern int  dbgcpu_message(MSG *msg);
+extern void dbgcpu_close(void);
+extern void dbgcpu_enable(int on);
+extern int  browser_is_game_name(const char *name);      /* a cartridge game's file name (not a CD image, archive, track ...) */
+extern void dbgcpu_release(void);                /* a game stopped at a breakpoint goes on (the breakpoints stay) */
+
+/* The Debugger window (debugger.c): one window with the CPU Debugger on top and the other debug windows on tabs below. The windows
+   of the modules are made as children of it: while one is made, gui_debug_host is the window that holds it. */
+enum { DBGPANE_MEMORY, DBGPANE_VDP, DBGPANE_SOUND, DBGPANE_CPUVIEW, DBGPANE_SEARCH, DBGPANE_WATCH, DBGPANE_CPUDBG, DBGPANE_COUNT };
+extern HWND gui_debug_host;                      /* non-NULL only while a pane is made: the window makes itself a child of it */
+extern HWND gui_debug_last;                      /* the window that was just made */
+extern void gui_debug_close(HWND h);             /* Esc in a debug window: closes the window, or the Debugger window when it is a pane of it */
+extern void debugger_ensure(int pane);
+extern int  debugwin_view_count(int which);       /* the views of the VDP (0), Sound (1) and CPU (2) viewers: for the Debugger window's View menu */
+extern const char *debugwin_view_name(int which, int i);
+extern int  debugwin_view_current(int which);
+extern void debugwin_view_select(int which, int i);           /* a pane made without showing it */
+extern void debugger_open(HWND parent, int pane);
+extern void debugger_close(void);
+extern void debugger_enable(int on);
+extern int  debugger_owns(HWND h);
+extern unsigned long gui_rom_header_end(void);           /* the ROM End the header states */
+extern unsigned long gui_rom_header_size(void);          /* ROM Info: what the header says (Mega Drive) */
+extern unsigned long gui_rom_check_end(int *clamped);    /* where the header's checksum range ends (exclusive) */
+extern unsigned short gui_rom_sum(unsigned long from, unsigned long to);
+void paprium_source_set(const char *path);      /* the real place of a game loaded from a temporary copy (NULL: none) */
+extern void emu_timing_resync(void);                       /* the game was stopped for a while: it carries on from now, not at a catching-up speed */
+extern void ramsearch_open(HWND parent);                  /* Tools > Debug > RAM Search (ramsearch.c) */
+extern int  ramsearch_message(MSG *msg);
+extern void ramsearch_close(void);
+extern void ramsearch_enable(int on);
+extern void ramwatch_add(unsigned addr, int nbytes, int type);   /* a watch from the RAM Search */
+extern void ramwatch_open(HWND parent);                    /* Tools > Debug > RAM Watch (ramwatch.c) */
+extern int  ramwatch_message(MSG *msg);
+extern void picobook_show(int page);        /* Sega Pico: the window with the picture of the open page of the book (picobook.c) */
+extern void picobook_close(void);
+extern void picobook_show_closed(void);      /* a Sega Pico game was loaded: page 0 is shown if it has a picture */
+extern int  picobook_owns(HWND h);
+extern int  picobook_active(void);
+extern void picobook_main_minimized(int minimized);     /* the program's window was minimized (1) or brought back (0): the Storyware window goes with it */
+extern void picobook_retheme(void);
+extern void picopcm_attach(void);           /* Sega Pico voices (picopcm.c): put in after system_init, reset with system_reset, run from render_line, mixed after audio_update */
+extern void picopcm_reset(void);
+extern int  picopcm_state_save(unsigned char *buf);                 /* the speech chip's state to add after the core's state (bytes added) */
+extern void picopcm_state_load(const unsigned char *buf, size_t len);   /* ... and read back from the end of a state of len bytes */
+extern void picopcm_line(int line);
+extern void picopcm_mix(short *out, int frames);
+extern int  picobook_pen(int *x, int *y, int *pen, int *red);   /* the pen pad: the mouse over the page picture */
+extern void ramwatch_close(void);
+extern void ramwatch_enable(int on);
+extern void dlg_vdp_viewer(HWND parent);          /* Tools > VDP Viewer, Sound Viewer, CPU Viewer: windows that stay open while the game runs (debugwin.c) */
+extern void dlg_sound_viewer(HWND parent);
+extern void dlg_cpu_viewer(HWND parent);
+extern int  debugwin_message(MSG *msg);           /* keyboard handling for them; 1 = used the message */
+extern void debugwin_close(void);                 /* when the game stops */
+extern void debugwin_enable(int on);              /* off while a modal window is open */
+extern int  debugwin_owns(HWND h);
+extern int  vgm_sound_snapshot(unsigned char ym[2][256], unsigned char keyon[8], unsigned tone[3], unsigned char vol[4], unsigned char *noise);
 extern int  gui_input_gun_cursor(void);          /* 1 = crosshair over the picture with a light gun, else 0 */
 extern int  gui_input_ff_latched(void);          /* Emulation > Fast Forward is ticked */
 extern int  gui_input_rewind_latched(void);
@@ -203,6 +296,7 @@ extern void gui_input_toggle_ff(void);
 extern void gui_input_toggle_rewind(void);
 extern void gui_input_clear_latches(void);
 extern const char *gui_input_xpad_name(int slot);   /* "" when not known */
+extern void gui_input_poll_xpads(void);               /* look at the four XInput slots now */
 extern void gui_input_devices_changed(void);        /* a USB / Bluetooth device came or went */
 extern int  gui_input_xpad_connected(int slot);    /* an XInput pad is plugged into this slot */
 extern int  gui_input_toggle_turbo(void);       /* gamepad hotkey: Turbo buttons on / off (returns on = 1); the buttons keep their Turbo setting */
@@ -220,7 +314,8 @@ extern int  gui_input_load_slot_shortcut(void);
 extern void        gui_input_refresh_joysticks(void);
 extern int         gui_input_joystick_count(void);
 extern const char *gui_input_joystick_name(int index);      /* 0-based DI index */
-extern void        gui_input_default_buttons(int device, int *button);   /* the pad buttons a mapping starts with on that device (PAD_KEYS values) */
+extern void        gui_input_default_buttons(int device, padmask_t *button);
+extern void        gui_input_fit_buttons(t_pad_map *m);                  /* the mapping's buttons follow its device's kind (XInput or DirectInput) while they are still defaults */   /* the pad buttons a mapping starts with on that device (PAD_KEYS values) */
 
 /* Best current device index for a mapping saved/opened with this device
    value and (if it was a DirectInput one) this product name: re-matches by
@@ -235,15 +330,18 @@ extern void        gui_input_default_buttons(int device, int *button);   /* the 
 extern int  gui_input_resolve_device(int device, const char *joy_name, int avoid_device);
 
 extern int  input_capture_key(void);
-extern int  input_capture_gamepad(int device);
+extern padmask_t input_capture_gamepad(int device);
+extern void gui_input_pad_held_text(int device, char *out, int len);   /* every pad button or axis pressed now, by name (test mode of Controls) */
+extern void gui_input_capture_ignore_clear(void);       /* listen for every button again */
+extern padmask_t gui_input_capture_ignore_held(int device);   /* leave out what a pad keeps reporting as held; returns it */
 extern int  gui_input_menu_pad(void);                  /* pause menu: 1 up, 2 down, 4 choose, 8 back (new presses) */
 extern void video_show_menu(const char *const *items, int n, int sel);   /* the pause menu over the picture; n = 0 removes it */
 extern int  gui_input_pad_hotkey(void);                  /* Back + button: the menu command, or 0 */
-extern int  input_pad_button_down(int device, int mask);   /* is that assigned button held right now */
+extern int  input_pad_button_down(int device, padmask_t mask);   /* is that assigned button held right now */
 extern int  input_any_input_down(int device);
 
 extern const char *input_key_name(int vk);
-extern const char *input_pad_button_name(int device, int mask);
+extern const char *input_pad_button_name(int device, padmask_t mask);
 extern const char *input_button_label(int index);
 
 /****************************************************************************
@@ -271,10 +369,13 @@ extern int  patches_make_copy(const char *rom_path, const char *load_path, char 
 extern void browser_capture_columns(void);
 extern int  browser_type_ahead(MSG *msg);   /* a letter typed elsewhere goes to the game list (type to find a game) */
 extern void browser_cover_style_changed(void);
+void browser_list_cache_clear(void);
+void browser_redraw_covers(void);
 extern void browser_covers_shutdown(void);          /* at exit: stops the cover threads */
 extern void browser_refilter(void);
 extern void browser_layout_changed(void);   /* the A-Z strip was switched on or off */
 extern void dlg_rom_folders(HWND parent);
+extern void dlg_directories(HWND parent);        /* Settings > General > Data Folders... */
 extern void cheats_suspend(void);
 extern void cheats_ram_update(void);
 extern void ROMCheatUpdate(void);          /* called by the core on rebanking */
@@ -291,8 +392,8 @@ extern int  cheats_effective(void);        /* 0 while Enable Cheats is off */
 extern void cheats_set_all_enabled(int on);
 extern int  cheats_is_valid(int index);
 
-/* Accent colors: 0 the default, 1..GUI_ACCENT_HIDDEN-1 the listed ones, GUI_ACCENT_HIDDEN the one found by an easter egg (eggs.c). */
-#define GUI_ACCENT_HIDDEN 19
+/* Accent colors: 0 the default (the color of the theme), 1..GUI_ACCENT_HIDDEN-1 the listed ones (1 is Blue), GUI_ACCENT_HIDDEN the one found by an easter egg (eggs.c). */
+#define GUI_ACCENT_HIDDEN 20
 extern void cheats_load_for_rom(const char *rom_base);
 extern void cheats_save_for_rom(const char *rom_base);
 extern void cheats_sync_with_disk(const char *rom_base);
@@ -302,6 +403,7 @@ extern void cheats_sync_current(void);
 extern void cheats_save_current(void);
 
 extern void dlg_cheats(HWND parent);
+extern int  gui_apply_profile(const char *name);        /* --profile NAME: a controls profile put into the settings (1 = found) */
 
 /****************************************************************************
  * browser.c
@@ -310,6 +412,7 @@ extern void dlg_cheats(HWND parent);
 extern void browser_panel_create(HWND parent);
 extern void browser_panel_show(int show);
 extern int  browser_panel_visible(void);
+extern void browser_status_count_show(void);          /* the game count in the status bar's pane (while the game list is shown) */
 extern int  browser_has_selection(void);
 extern void browser_show_rom_info(void);   /* File > ROM Information on the game picked in the list */
 extern void browser_edit_cheats(void);      /* Tools > Cheats on the game picked in the list (no game running) */
@@ -408,6 +511,11 @@ extern int gui_pick_file(HWND owner, int which, const char *title, const char *f
 extern void dlg_state_manager(HWND parent);
 extern void dlg_input(HWND parent, int player);
 extern void dlg_audio(HWND parent);
+/* The room for one state: the core's worst case (a Mega CD game) and, after it, what Paprium's chip adds (about 170 KB; a Mega CD sized state fills the core's own size). */
+#define STATE_CAP (STATE_SIZE + 0x40000)
+
+extern int  paprium_in_use(void);                  /* the game in the core is Paprium (its state needs more room: STATE_CAP) */
+extern void paprium_unload(void);                  /* Frees the Paprium soundtrack (paprium.c) */
 extern void dlg_picture_adjust(HWND parent);       /* Video > Picture Adjustments... */
 extern void dlg_shortcuts(HWND parent);
 extern void dlg_user_guide(HWND parent);
@@ -441,8 +549,8 @@ extern unsigned long long history_last(const char *path);   /* when the game was
 /* hotkeys.c: the keyboard shortcuts */
 extern int  hotkeys_count(void);
 extern const char *hotkey_owner_of_key(int vk);          /* the shortcut that is this plain key, or NULL */
-extern int  padhk_mask(int i);                          /* the pad button of gamepad hotkey i for Player 1's pad (XInput or DirectInput numbers) */
-extern const char *padhk_owner_of_button(int mask);     /* the gamepad hotkey on this pad button, or NULL */
+extern padmask_t padhk_mask(int i);                          /* the pad button of gamepad hotkey i for Player 1's pad (XInput or DirectInput numbers) */
+extern const char *padhk_owner_of_button(padmask_t mask);     /* the gamepad hotkey on this pad button, or NULL */
 extern int  hotkey_hold_vk(int cmd);   /* the key held for Fast Forward / Rewind */
 #define HK_FASTFWD IDM_EMU_FASTFWD
 #define HK_REWIND  IDM_EMU_REWINDNOW
@@ -452,7 +560,7 @@ extern int  padhk_is_hold(int i);
 extern void padhk_ini_key(int i, char *out);
 extern int  padhk_count(void);          /* gamepad hotkeys (hold Back + a button) */
 extern int  padhk_cmd(int i);
-extern int  padhk_default(int i);
+extern padmask_t padhk_default(int i);
 extern void dlg_pad_hotkeys(HWND parent, int dev);   /* Controls > Gamepad Hotkeys... */
 extern const char *hotkey_name(int i);
 extern int  hotkey_default(int i);
@@ -473,5 +581,7 @@ extern int  settings_tab_height(void);
 extern void settings_set_tabs(HWND tab, const char *const *titles, int n);
 #define GP_TABS_CHANGED 0x1000           /* WM_COMMAND code the tab strip sends; the selection is its GWLP_USERDATA */
 extern void dlg_rom_info(HWND parent);
+
+#include "i18n.h"      /* translations: from here on, the Windows calls that take text look it up in the language file */
 
 #endif /* _GUI_H_ */

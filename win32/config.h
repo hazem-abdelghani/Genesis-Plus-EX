@@ -70,6 +70,8 @@ typedef struct
  ****************************************************************************/
 
 #define GUI_PATH_LEN    512
+#define GUI_DIR_N       10      /* the folders beside the program that Settings > General > Data Folders can move (not Plugins; Images holds Bezels, Covers and Pico-Storyware) */
+extern const char *const gui_dir_names[GUI_DIR_N];
 #define GUI_RECENT_MAX  10
 #define GUI_SLOT_MAX    10
 
@@ -91,10 +93,17 @@ enum
   PAD_KEYS
 };
 
+/* A pad button (or POV direction, or stick direction) as a bit of a mask, for one device. 64 bits: bits 0-31 are what has always been stored
+   (the saved settings, profiles and gamepad hotkeys of earlier versions load as they were); bits 32 and up are for the analog axes used as buttons. */
+typedef unsigned long long padmask_t;
+#define PADBIT(n) ((padmask_t)1 << (n))
+extern void pad_mask_to_text(padmask_t value, char *out);                 /* as the settings file and the profiles hold it (config.c) */
+extern padmask_t pad_mask_from_text(const char *s, const char **end);
+
 typedef struct
 {
   int key[PAD_KEYS];    /* Windows virtual-key code per button */
-  int button[PAD_KEYS]; /* button/POV/stick mask per button (namespace depends
+  padmask_t button[PAD_KEYS]; /* button/POV/stick mask per button (namespace depends
                             on device: XInput below GUI_INPUT_XPAD_COUNT,
                             DirectInput at or above it), 0 = unassigned */
   unsigned turbo;       /* bit per PAD_* index: that button fires on and off while held (A B C X Y Z) */
@@ -118,6 +127,7 @@ typedef struct
   /* video */
   int scale;              /* 1-4, integer window scale at 320x224 */
   int aspect;             /* one of the ASPECT_* values */
+  int rotation;           /* Video > Rotation: the picture turned clockwise by 0, 90, 180 or 270 degrees (0-3) */
   int smooth;             /* 1 = smooth scaling (HALFTONE), 0 = nearest */
   int scanline_pct;       /* 0/25/50/75/100 -- darkens alternating output rows */
   int nuked_ym2612;       /* Nuked FM core: 1 = behave as a YM2612, 0 = as a YM3438 */
@@ -129,6 +139,8 @@ typedef struct
   int frameskip;          /* 0 off, 1 auto, 2-5 manual (25/33/50/75% audio buffer) */
   int sms_show_border;    /* 1 = show the Master System's 8-pixel side borders (0 crops them) */
   int background_input;   /* 1 = controller input keeps working while the window is not focused */
+  int deinterlace;        /* 1 = Video > Visual Effects > Deinterlacing: the VDP draws both fields every frame (deint.c); Interlaced Mode is Double Field while it is on */
+  int deint_saved;        /* the Interlaced Mode to go back to when it is switched off */
   int brighten;           /* 1 = lift the picture's brightness (offsets scanline darkening) */
 
   /* netplay (LAN) -- last values used in the Netplay dialog */
@@ -165,6 +177,7 @@ typedef struct
   int fullscreen_on_load;  /* persists across runs, unlike fullscreen itself --
                                enters fullscreen automatically whenever a ROM loads */
   int show_fps;
+  int allow_opposing;      /* Controls: Left+Right and Up+Down may be held together (they cannot on a real pad) */
   int turbo_rate;          /* 0-4: how fast Turbo buttons fire (Controls): 7.5, 10, 15, 22.5 or 30 presses a second */
   int confirm_exit;        /* ask before exiting while a game is running */
   int single_instance;     /* a second launch hands its game to the copy already running */
@@ -178,19 +191,21 @@ typedef struct
   char shader_params[1024];                /* "name=value;" for the shader settings changed from the preset's own */
   char shader_params_for[GUI_PATH_LEN];    /* the preset they belong to */
   int padhk_hold_on;       /* gamepad hotkeys only work while the Hold Button is held */
-  int padhk_hold[2];       /* that button: [0] XInput pad, [1] DirectInput joystick */
+  padmask_t padhk_hold[2];       /* that button: [0] XInput pad, [1] DirectInput joystick */
   int group_console;       /* 1 = the list is grouped into collapsible sections, one per console */
   int az_strip;            /* 1 = a letter strip beside the list jumps to games starting with that letter */
   int cover_shape;         /* grid covers: 0 square, 1 box (portrait), 2 wide */
   int toolbar_size;        /* toolbar icon size: 0 small, 1 normal (the default), 2 large */
   int toolbar_labels;      /* 1 = the name of each toolbar button is written under its icon */
   int cover_cache;         /* keep finished cover thumbnails on disk (covers\thumbs.dat) so they load fast the next time */
+  int console_badge;        /* grid covers: a small tag naming the game's console in a corner of the cover (on by default) */
   int cover_card;          /* grid covers: a frame around the cover and its name */
   int color_icons;         /* 1: the menu icons, the toolbar and the star are in color, 0: in the color of the text */
   int crash_report;        /* write genesis-plus-ex-crash.txt and .dmp after a crash */
   int accent;              /* accent color: 0 default (blue in the dark theme, the Windows color in the light one), 1 to 13 a color, 14 a hidden one */
   int cover_round;         /* grid covers: 0 square corners, 1 rounded */
   int cover_caption;       /* grid covers: 0 name below the cover, 1 no name */
+  char dir_path[GUI_DIR_N][GUI_PATH_LEN];   /* Settings > General > Data Folders: where each folder beside the program is instead ("" = beside the program) */
   char rom_extra[6][GUI_PATH_LEN];   /* more ROM folders */
   int rom_extra_n;
   char rom_exclude[6][GUI_PATH_LEN]; /* folders left out of the scan */
@@ -198,7 +213,7 @@ typedef struct
   int stereo_idx;          /* stereo width: 0 narrow, 1 normal, 2 wide, 3 extra wide */
   int mouse_sens;          /* mouse / light gun speed: 0..4 = 50, 75, 100, 150, 200 % */
   int gun_ox, gun_oy;      /* light gun aim offset, 0..6 = -12, -8, -4, 0, 4, 8, 12 pixels */
-  int adj_contrast, adj_sat, adj_gamma, adj_hue;   /* picture adjustments: contrast 50-150 %, saturation 0-200 %, gamma 50-150 (/100), hue -30 to 30 degrees; 100, 100, 100, 0 = unchanged */
+  int adj_bright, adj_contrast, adj_sat, adj_gamma, adj_hue;   /* picture adjustments: brightness -50 to 50 %, contrast 50-150 %, saturation 0-200 %, gamma 50-150 (/100), hue -30 to 30 degrees; 100, 100, 100, 0 = unchanged */
   int bar_color;           /* color of the bars around the picture (index into video.c's list) */
   int fs_res_w, fs_res_h;  /* exclusive fullscreen resolution; 0 = the desktop's own */
   int fs_exclusive;        /* 1 = fullscreen changes the display mode instead of a borderless window */
@@ -207,6 +222,7 @@ typedef struct
   int row_density;         /* 0 compact, 1 normal, 2 roomy rows in the game list */
   int browser_gridlines;   /* lines between the columns of the game list */
   int scan_subfolders;     /* the ROM directory is searched including its subfolders */
+  char language[48];       /* the language file in the Languages folder ("" = English) */
   char filter_console[40]; /* the filter bar choices, kept between runs ("" = all) */
   char filter_genre[28];
   int  filter_genre_on;    /* filter_genre is "" for an unknown genre, so it needs its own flag */
@@ -215,8 +231,8 @@ typedef struct
   int recent_mode;         /* the last few games are grouped at the top of the list */
   int favorites_only;      /* the game list shows only the favorites */
   int hotkey[96];          /* the keyboard shortcuts: virtual key + 0x10000 Ctrl / 0x20000 Shift / 0x40000 Alt (hotkeys.c) */
-  int padhk_di[24];        /* the same for a DirectInput pad as Player 1 (its own button numbers); 0 = none, nothing is set by default */
-  int padhk[24];           /* the pad button (XInput mask) for each gamepad hotkey action, 0 = none; the first two are Fast Forward and Rewind (hotkeys.c) */
+  padmask_t padhk_di[24];        /* the same for a DirectInput pad as Player 1 (its own button numbers); 0 = none, nothing is set by default */
+  padmask_t padhk[24];           /* the pad button (XInput mask) for each gamepad hotkey action, 0 = none; the first two are Fast Forward and Rewind (hotkeys.c) */
   int integer_scale;       /* the picture is enlarged by whole multiples only (sharp pixels) */
   int mute_fm;             /* silence the FM chip alone */
   int mute_psg;            /* silence the PSG chip alone */
@@ -272,6 +288,8 @@ extern t_config config;
 extern t_gui_config gui;
 
 extern void set_config_defaults(void);
+extern int gui_scale_saved;                  /* 1 when the settings file had a Window Size: the first run has none */
+const char *config_ini_path(void);          /* the settings file in use (genesis-plus-ex.ini, or the one --config names) */
 extern void config_load(void);
 extern void config_save(void);
 extern void config_save_wait(void);       /* waits until the settings file is written (the write runs on its own thread) */

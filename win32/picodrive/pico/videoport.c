@@ -465,6 +465,35 @@ static NOINLINE void VideoWriteVRAM128(u32 a, u16 d)
     UpdateSAT(a, d);
 }
 
+/* Genesis Plus EX: the program's Memory Viewer changes one byte of the video memories (kind 3: VRAM, 4: CRAM, 5: VSRAM; the byte as the game sees
+ * it, the high byte of a word first), the way the chip would have written it: the sprite and palette caches are told. */
+void gpex_vdp_poke_do(int kind, unsigned off, unsigned value)
+{
+  unsigned a = off & 0xFFFE, i = (off >> 1) & 0x3F;
+  u16 d;
+
+  if (kind == 3)
+  {
+    d = PicoMem.vram[(a >> 1) & 0x7FFF];
+    d = (off & 1) ? (u16)((d & 0xFF00) | (value & 0xFF)) : (u16)((d & 0x00FF) | ((value & 0xFF) << 8));
+    VideoWriteVRAM(a, d);
+  }
+  else if (kind == 4)
+  {
+    d = PicoMem.cram[i];
+    d = (off & 1) ? (u16)((d & 0xFF00) | (value & 0xFF)) : (u16)((d & 0x00FF) | ((value & 0xFF) << 8));
+    d &= 0xeee;
+    if (PicoMem.cram[i] != d) Pico.m.dirtyPal = 1;
+    PicoMem.cram[i] = d;
+  }
+  else if (kind == 5)
+  {
+    d = PicoMem.vsram[i];
+    d = (off & 1) ? (u16)((d & 0xFF00) | (value & 0xFF)) : (u16)((d & 0x00FF) | ((value & 0xFF) << 8));
+    PicoMem.vsram[i] = d & 0x7ff;
+  }
+}
+
 static void VideoWrite(u16 d)
 {
   struct PicoVideo *pvid = &Pico.video;

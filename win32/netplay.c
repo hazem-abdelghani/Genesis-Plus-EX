@@ -35,6 +35,8 @@
 #include "netplay.h"
 #include "upnp.h"
 
+extern void gui_utf8_trim(char *s);        /* (main.c) takes off a last character (UTF-8) that a cut left half there */
+
 #define NP_PROTO          1
 #define NP_DISC_PORT      55456
 #define NP_RING           64
@@ -1221,6 +1223,7 @@ static void answer_discovery(void)
 
       GetComputerNameA(name, &nl);
       lstrcpynA(game, title ? title : "", sizeof(game));
+      gui_utf8_trim(game);
 
       memcpy(reply, "GPNP!", 5); k = 5;
       reply[k++] = NP_PROTO;

@@ -69,6 +69,7 @@ void d3d11_overlay_slot(int slot);     /* which of two overlay textures the next
 int  d3d11_draw_overlay(const uint32 *argb_pixels, int argb_pitch,
                          int w, int h, const RECT *screen_area);
 
+void d3d11_set_sync(int on);          /* VSync: the next d3d11_present() waits for the display's refresh (1) or not (0) */
 void d3d11_present(void);
 
 /* For shader post-processing (librashader, shader_chain.c): the live device

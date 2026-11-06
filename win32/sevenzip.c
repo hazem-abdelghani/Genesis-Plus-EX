@@ -9,6 +9,7 @@
  *  LzmaDec_ and CpuArch_ symbols twice. See Makefile.win32 and lzmasdk/README.
  ****************************************************************************/
 
+#include <stdio.h>
 #include <windows.h>
 #include <stdlib.h>
 #include <string.h>
@@ -146,6 +147,20 @@ int sevenzip_extract(sevenzip_t *sz, int i, unsigned char *buffer, int maxsize)
   if (copy > maxsize) copy = maxsize;
   if (copy > 0) memcpy(buffer, sz->outBuffer + offset, (size_t)copy);
   return copy;
+}
+
+/* Unpacks entry i straight into an open file (no second copy of it in memory). Returns the bytes written, or -1. */
+long long sevenzip_extract_to_file(sevenzip_t *sz, int i, FILE *fp)
+{
+  size_t offset = 0, outSizeProcessed = 0;
+
+  if (SzArEx_Extract(&sz->db, &sz->lookStream.vt, (UInt32)i,
+                      &sz->blockIndex, &sz->outBuffer, &sz->outBufferSize,
+                      &offset, &outSizeProcessed,
+                      &s_alloc, &s_alloc) != SZ_OK)
+    return -1;
+  if (outSizeProcessed && fwrite(sz->outBuffer + offset, 1, outSizeProcessed, fp) != outSizeProcessed) return -1;
+  return (long long)outSizeProcessed;
 }
 
 void sevenzip_close(sevenzip_t *sz)

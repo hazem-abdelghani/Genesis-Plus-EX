@@ -905,6 +905,10 @@ void PicoCartUnload(void)
     PicoCartUnloadHook = NULL;
   }
 
+  // the idle-loop patches of the 68000 can point into the 32X memory that PicoUnload32x() gives back:
+  // they are taken out first (a state loaded in a 32X game with a CD, MSU, put them there: a crash at close)
+  SekFinishIdleDet();
+
   PicoUnload32x();
 
   if (Pico.rom != NULL) {

@@ -109,6 +109,8 @@ static unsigned int op_refs[0x10000];
 
 #ifndef DRC_CMP
 
+extern void (*gpex_cpu_hook)(int cpu, unsigned pc);
+
 int sh2_execute_interpreter(SH2 *sh2, int cycles)
 {
 	UINT32 opcode;
@@ -146,6 +148,9 @@ int sh2_execute_interpreter(SH2 *sh2, int cycles)
 
 		sh2->delay = 0;
 		sh2->pc += 2;
+
+		if (gpex_cpu_hook)	/* Genesis Plus EX: the program's CPU Debugger looks at every instruction */
+			gpex_cpu_hook(1 + sh2->is_slave, sh2->ppc);
 
 		switch ((opcode >> 12) & 15)
 		{

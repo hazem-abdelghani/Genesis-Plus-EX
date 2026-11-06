@@ -276,12 +276,6 @@ static const char *const credit_lines[] =
   "Nuked OPN2 / OPLL",
   "Nuked",
   "",
-  "xBRZ",
-  "Zenju",
-  "",
-  "librashader",
-  "SnowflakePowered",
-  "",
   "Thanks for playing!",
   "",
   "(click or press a key)"

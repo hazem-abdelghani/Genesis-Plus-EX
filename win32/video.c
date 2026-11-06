@@ -500,6 +500,10 @@ static int filter_run(const uint16 *src, int src_pitch, int src_w, int src_h, HD
   int scale;
 
   if (nf.index < 0 || !nf.pixels) return 0;
+  {
+    const filter_def_t *fd = filter_get(nf.index);          /* a picture turned on its side may not fit what a filter works on or makes */
+    if (src_w > FILTER_MAX_W || src_h > FILTER_MAX_H || (fd && (src_w * fd->scale > FILTER_DST_MAX_W || src_h * fd->scale > FILTER_DST_MAX_H))) return 0;
+  }
 
   scale = filter_apply(nf.index,
                        (const uint16_t *)src, src_pitch,
@@ -1015,6 +1019,7 @@ static void get_dest_rect(const RECT *area, int sw, int sh, RECT *out)
   else
   {
     ar = corrected_width(sw, sh) / shape_height(sh);
+    if (gui.rotation & 1) ar = 1.0 / ar;              /* turned a quarter: the picture is as tall as it was wide */
 
     dh = ah;
     dw = (int)(ah * ar + 0.5);
@@ -1030,6 +1035,7 @@ static void get_dest_rect(const RECT *area, int sw, int sh, RECT *out)
     {
       int bw = uses_corrected_width() ? (int)(corrected_width(sw, sh) + 0.5) : native_width(sw), bh = sh, k;
       if (double_lines()) bw *= 2;                       /* (twice the lines: twice the width keeps the shape) */
+      if (gui.rotation & 1) { int t = bw; bw = bh; bh = t; }
       if (bw > 0 && bh > 0)
       {
         k = aw / bw;
@@ -1086,6 +1092,8 @@ void video_preferred_size(int scale, int *w, int *h)
     *w = sw * scale;
     *h = sh * scale;
   }
+
+  if (gui.rotation & 1) { int t = *w; *w = *h; *h = t; }          /* (Video > Rotation: a quarter turn) */
 }
 
 /****************************************************************************
@@ -1217,20 +1225,33 @@ static struct
   void   *pixels;
 } fx;
 
-/* Picture adjustments (contrast, saturation, gamma, hue): one table that maps every
+/* Video > Rotation: the picture turned by 90, 180 or 270 degrees before the render filter, in a buffer of its own (big enough for
+   a frame turned on its side). */
+#define ROT_DIM 720
+typedef char rot_dim_check[(FRAME_MAX_W <= ROT_DIM && FRAME_MAX_H <= ROT_DIM) ? 1 : -1];
+static struct
+{
+  HBITMAP dib;
+  HDC     mem_dc;
+  HGDIOBJ old_bmp;
+  void   *pixels;
+} rotb;
+
+/* Picture adjustments (brightness, contrast, saturation, gamma, hue): one table that maps every
    RGB565 color, rebuilt whenever a slider moves. */
 static uint16 *adj_lut;
 static int adj_dirty = 1;
 
 static int adj_active(void)
 {
-  return gui.adj_contrast != 100 || gui.adj_sat != 100 || gui.adj_gamma != 100 || gui.adj_hue != 0;
+  return gui.adj_bright != 0 || gui.adj_contrast != 100 || gui.adj_sat != 100 || gui.adj_gamma != 100 || gui.adj_hue != 0;
 }
 
 static void adj_build(void)
 {
   double c = gui.adj_contrast / 100.0, s = gui.adj_sat / 100.0, ig = 100.0 / (gui.adj_gamma > 0 ? gui.adj_gamma : 100);
   double h = gui.adj_hue * 3.14159265358979 / 180.0;
+  double bri = gui.adj_bright / 200.0;                   /* brightness: every color moved up or down by this part of the whole range (the readout's 50% is a quarter of it) */
   double ch = cos(h) * s, sh = sin(h) * s;
   static float gam[1025];          /* the gamma curve, sampled: 65536 colors times three pow() calls took long enough to be seen as a stutter */
   int p, k;
@@ -1244,7 +1265,7 @@ static void adj_build(void)
     double y, i, q, o[3];
     int v[3];
 
-    r = (r - 0.5) * c + 0.5; g = (g - 0.5) * c + 0.5; b = (b - 0.5) * c + 0.5;
+    r = (r - 0.5) * c + 0.5 + bri; g = (g - 0.5) * c + 0.5 + bri; b = (b - 0.5) * c + 0.5 + bri;
     y = 0.299 * r + 0.587 * g + 0.114 * b;
     i = 0.596 * r - 0.274 * g - 0.322 * b;
     q = 0.211 * r - 0.523 * g + 0.312 * b;
@@ -1321,8 +1342,62 @@ static int ensure_fx_dib(void)
   return 1;
 }
 
+/* The buffer for a turned picture; created on first use. */
+static int ensure_rot_dib(void)
+{
+  struct
+  {
+    BITMAPINFOHEADER hdr;
+    DWORD mask[3];
+  } bi;
+  HDC screen;
+
+  if (rotb.dib && rotb.pixels && rotb.mem_dc) return 1;
+
+  ZeroMemory(&bi, sizeof(bi));
+  bi.hdr.biSize        = sizeof(BITMAPINFOHEADER);
+  bi.hdr.biWidth       = ROT_DIM;
+  bi.hdr.biHeight      = -ROT_DIM;
+  bi.hdr.biPlanes      = 1;
+  bi.hdr.biBitCount    = 16;
+  bi.hdr.biCompression = BI_BITFIELDS;
+  bi.mask[0]           = 0xF800;
+  bi.mask[1]           = 0x07E0;
+  bi.mask[2]           = 0x001F;
+
+  screen = GetDC(NULL);
+  rotb.dib = CreateDIBSection(screen, (BITMAPINFO *)&bi, DIB_RGB_COLORS, &rotb.pixels, NULL, 0);
+  ReleaseDC(NULL, screen);
+  if (!rotb.dib || !rotb.pixels) { rotb.dib = NULL; return 0; }
+
+  rotb.mem_dc = CreateCompatibleDC(NULL);
+  if (!rotb.mem_dc) { DeleteObject(rotb.dib); rotb.dib = NULL; return 0; }
+  rotb.old_bmp = SelectObject(rotb.mem_dc, rotb.dib);
+  return 1;
+}
+
+/* The w x h picture turned clockwise by rot quarter turns (1..3) into the buffer, whose rows are ROT_DIM pixels long. A quarter
+   turn makes it h wide and w tall. */
+static void rotate_frame(const uint16 *src, int src_pitch, int w, int h, int rot)
+{
+  uint16 *dst = (uint16 *)rotb.pixels;
+  int x, y;
+
+  for (y = 0; y < h; y++)
+  {
+    const uint16 *s = (const uint16 *)((const uint8 *)src + (size_t)y * (size_t)src_pitch);
+
+    if (rot == 1)       for (x = 0; x < w; x++) dst[(size_t)x * ROT_DIM + (h - 1 - y)] = s[x];
+    else if (rot == 3)  for (x = 0; x < w; x++) dst[(size_t)(w - 1 - x) * ROT_DIM + y] = s[x];
+    else                for (x = 0; x < w; x++) dst[(size_t)(h - 1 - y) * ROT_DIM + (w - 1 - x)] = s[x];
+  }
+}
+
 static void fx_free(void)
 {
+  if (rotb.mem_dc) { SelectObject(rotb.mem_dc, rotb.old_bmp); DeleteDC(rotb.mem_dc); rotb.mem_dc = NULL; }
+  if (rotb.dib) { DeleteObject(rotb.dib); rotb.dib = NULL; }
+  rotb.pixels = NULL;
   if (fx.mem_dc)
   {
     SelectObject(fx.mem_dc, fx.old_bmp);
@@ -1367,7 +1442,37 @@ static int deint_moved(uint16 a, uint16 b)
   return deint_diff(a, b) > 32;
 }
 
-void video_deinterlace_reset(void) { deint_prev_ok = 0; }
+/* Does the old line d, around pixel x, look like the new lines above and below it, only shifted sideways? That is what a picture that
+   scrolls leaves: the old line is a field behind, and where the pattern repeats (blades of grass, stripes) the movement check, which looks
+   two fields back, sees the same picture again and says nothing moved. Matching the five pixels around x with both lines at a shift of
+   up to 20 pixels either way finds it, where a still thin line (which matches nothing but itself) is left alone. */
+static int deint_shifted(const uint16 *d, const uint16 *up, const uint16 *dn, int x, int sw)
+{
+  int s, k;
+
+  for (s = 1; s <= 20; s++)
+  {
+    int sg;
+    for (sg = -1; sg <= 1; sg += 2)
+    {
+      int sh = s * sg, err = 0;
+      for (k = -2; k <= 2 && err <= 140; k++)
+      {
+        int a = x + k, b = x + k + sh;
+        if (a < 0 || a >= sw || b < 0 || b >= sw) { err = 1 << 20; break; }
+        err += deint_diff(d[a], up[b]) + deint_diff(d[a], dn[b]);
+      }
+      if (err <= 140) return 1;
+    }
+  }
+  return 0;
+}
+
+/* Per pixel of the old lines: for how many updates in a row it has stayed as it was, and for how many its new neighbours above and below have
+   changed. A pixel that stays while everything around it changes is an overlay (the text of a HUD over a scrolling picture): it is kept. */
+static uint8 deint_still[FRAME_MAX_H][FRAME_MAX_W], deint_around[FRAME_MAX_H][FRAME_MAX_W];
+static void deint_forget(void) { deint_prev_ok = 0; memset(deint_still, 0, sizeof(deint_still)); memset(deint_around, 0, sizeof(deint_around)); }
+void video_deinterlace_reset(void) { deint_forget(); }
 
 void video_deinterlace(void)
 {
@@ -1375,10 +1480,15 @@ void video_deinterlace(void)
   size_t row;
   static uint8 mv[FRAME_MAX_W + 4];
   static uint8 mask[FRAME_MAX_H][FRAME_MAX_W];                          /* where something moves, for each old line (its pair too) */
+  static uint8 alone[FRAME_MAX_H][FRAME_MAX_W];                         /* an old pixel far from both new lines above and below it, which are alike */
 
-  if (!emu_running || !bitmap.data || pico_active() || !interlaced || !config.render) { deint_prev_ok = 0; return; }
+  if (!emu_running || !bitmap.data || pico_active() || !interlaced || !config.render || gui.deinterlace) { if (deint_prev_ok) deint_forget(); return; }       /* (with Deinterlacing on the graphics processor has drawn whole pictures: deint.c) */
   get_source_size(&sw, &sh);
   if (sw < 1 || sh < 4) return;
+  {
+    static int last_w, last_h;
+    if (sw != last_w || sh != last_h) { deint_forget(); last_w = sw; last_h = sh; }        /* (another size of picture: the counters are of the old one) */
+  }
   row = (size_t)sw * sizeof(uint16);
   stale = odd_frame ^ 1;                       /* the lines the new field did not draw */
 
@@ -1393,6 +1503,12 @@ void video_deinterlace(void)
   {
     for (y = stale; y < sh; y += 2)
     {
+      const uint16 *d = LINE(y), *up = y > 0 ? LINE(y - 1) : NULL, *dn = y + 1 < sh ? LINE(y + 1) : NULL;
+      for (x = 0; x < sw; x++)
+        alone[y][x] = (uint8)(up && dn && deint_diff(d[x], up[x]) > 100 && deint_diff(d[x], dn[x]) > 100 && deint_diff(up[x], dn[x]) < 60);
+    }
+    for (y = stale; y < sh; y += 2)
+    {
       uint16 *d = LINE(y);
       const uint16 *up = y > 0 ? LINE(y - 1) : NULL, *dn = y + 1 < sh ? LINE(y + 1) : NULL;
       const uint16 *pu = y > 0 ? deint_prev + (size_t)(y - 1) * FRAME_MAX_W : NULL;
@@ -1401,8 +1517,36 @@ void video_deinterlace(void)
 
       if (!up && !dn) continue;
       for (x = 0; x < sw; x++) mv[x + 2] = (uint8)((up && deint_moved(up[x], pu[x])) || (dn && deint_moved(dn[x], pd[x])) || deint_moved(d[x], ps[x]));
+      if (up && dn)         /* (a pattern that repeats and scrolls: see deint_shifted) */
+        for (x = 0; x < sw; x++)
+          if (!mv[x + 2] && deint_diff(d[x], avg565(up[x], dn[x])) > 120 && deint_shifted(d, up, dn, x, sw)) mv[x + 2] = 1;
+      /* An area where every other line is alone between its neighbours, line after line, is two pictures woven together: a pattern that
+         flips from one frame to the next (the movement check, which looks two fields back, sees the same picture again). A single thin
+         line is not, so a still one is left alone. */
+      for (x = 0; x < sw; x++)
+        if (!mv[x + 2] && alone[y][x])
+        {
+          int k, n = 0;
+          for (k = -2; k <= 2; k++) if (y + 2 * k >= 0 && y + 2 * k < sh) n += alone[y + 2 * k][x];
+          if (n >= 4) mv[x + 2] = 1;
+        }
+      for (x = 0; x < sw; x++)
+      {
+        int around = (up && deint_moved(up[x], pu[x])) || (dn && deint_moved(dn[x], pd[x]));
+        deint_still[y][x] = deint_diff(d[x], ps[x]) <= 8 ? (uint8)(deint_still[y][x] < 255 ? deint_still[y][x] + 1 : 255) : 0;
+        deint_around[y][x] = around ? (uint8)(deint_around[y][x] < 255 ? deint_around[y][x] + 1 : 255) : 0;
+      }
       mv[0] = mv[1] = mv[sw + 2] = mv[sw + 3] = 0;
-      for (x = 0; x < sw; x++) mask[y][x] = (uint8)(mv[x] | mv[x + 1] | mv[x + 2] | mv[x + 3] | mv[x + 4]);
+      for (x = 0; x < sw; x++)
+      {
+        int n = 0, k;
+        mask[y][x] = (uint8)(mv[x] | mv[x + 1] | mv[x + 2] | mv[x + 3] | mv[x + 4]);          /* 1: something moves near here */
+        if (mask[y][x] && x >= 1 && x + 5 < sw + 4)
+        {
+          for (k = x - 1; k <= x + 5; k++) n += mv[k];
+          if (n >= 5) mask[y][x] = 2;                       /* 2: a wide area moves (a sprite): the old line is not trusted at all */
+        }
+      }
     }
   }
 
@@ -1415,40 +1559,39 @@ void video_deinterlace(void)
 
   if (deint_prev_ok >= 4)
   {
-    /* Where something moves, the old line is rebuilt from the new lines above and below it, along the edge that runs through the
-       pixel, and both lines of the pair are then drawn half of the way to what the new field says about the middle of the pair
-       (3/4 of the new line, 1/4 of the next one over). The new lines alone would be sharp and the rebuilt ones soft, and which are
-       which swaps every frame: a scrolling picture shakes. Made wholly alike the shaking is gone, but a sprite is drawn in blocks. */
-    int f = odd_frame;                                    /* the field just drawn */
-
+    /* Where something moves, the old line is rebuilt from the new lines above and below it: along the edge that runs through the pixel
+       when there clearly is one, else the plain average of the two. The new lines are left exactly as the game drew them, so a moving
+       object is as sharp as the game made it (blending the pair, as this did before, made it soft and its dither blocky). */
     for (y = stale; y < sh; y += 2)
     {
-      int yf = (f == 0) ? y - 1 : y + 1;                  /* the new line of this pair (its copy in the history: the picture may have been changed already) */
-      int yn = (f == 0) ? yf + 2 : yf - 2;                /* the new line next to it, on the side the pair's middle is not */
-      uint16 *d = LINE(y), *e = (yf >= 0 && yf < sh) ? LINE(yf) : NULL;
-      const uint16 *a = (yf >= 0 && yf < sh) ? deint_prev + (size_t)yf * FRAME_MAX_W : NULL;
-      const uint16 *c = (yn >= 0 && yn < sh) ? deint_prev + (size_t)yn * FRAME_MAX_W : a;
-      const uint16 *up = y > 0 ? deint_prev + (size_t)(y - 1) * FRAME_MAX_W : NULL;
+      uint16 *d = LINE(y);
+      const uint16 *up = y > 0 ? deint_prev + (size_t)(y - 1) * FRAME_MAX_W : NULL;       /* (the new lines, from the history: the picture may have been changed already) */
       const uint16 *dn = y + 1 < sh ? deint_prev + (size_t)(y + 1) * FRAME_MAX_W : NULL;
 
-      if (!a) continue;
+      if (!up && !dn) continue;
       for (x = 0; x < sw; x++)
       {
-        uint16 mid, rebuilt;
+        uint16 rebuilt;
 
         if (!mask[y][x]) continue;
-        mid = avg565(a[x], avg565(a[x], c[x]));
+        if (deint_still[y][x] >= 6 && deint_around[y][x] >= 6) continue;        /* it stays while everything around it changes (a HUD over a scrolling picture): not rebuilt */
+        /* An old pixel that agrees with the new line above or below it sits on one side of an edge, or is part of what did not move:
+           it is right as it is (but not inside a wide moving area, a sprite, where it is a leftover of the last position). Rebuilding it drew grey specks where two colors meet (and made a still edge jump half a line from one
+           frame to the next). */
+        if (mask[y][x] == 1 && up && dn && (deint_diff(d[x], up[x]) <= 24 || deint_diff(d[x], dn[x]) <= 24)) continue;
         if (up && dn)
         {
           int xl = x > 0 ? x - 1 : x, xr = x + 1 < sw ? x + 1 : x;
           int d0 = deint_diff(up[x], dn[x]), d1 = deint_diff(up[xl], dn[xr]), d2 = deint_diff(up[xr], dn[xl]);
-          if (d1 < d0 && d1 <= d2)      rebuilt = avg565(up[xl], dn[xr]);
-          else if (d2 < d0)             rebuilt = avg565(up[xr], dn[xl]);
+          if (d0 > 150 && d1 <= 24 && d1 <= d2 && deint_diff(up[xl], up[x]) > 24) rebuilt = up[xl];     /* a slanting edge: the same color runs along it */
+          else if (d0 > 150 && d2 <= 24 && deint_diff(up[xr], up[x]) > 24) rebuilt = up[xr];
+          else if (d0 > 150)            rebuilt = deint_diff(d[x], up[x]) <= deint_diff(d[x], dn[x]) ? up[x] : dn[x];       /* a hard edge: one of its two sides, not a color between them */
+          else if (d1 * 3 < d0 && d1 <= d2)  rebuilt = avg565(up[xl], dn[xr]);
+          else if (d2 * 3 < d0)         rebuilt = avg565(up[xr], dn[xl]);
           else                          rebuilt = avg565(up[x], dn[x]);
         }
-        else rebuilt = a[x];
-        d[x] = avg565(rebuilt, mid);
-        e[x] = avg565(a[x], mid);
+        else rebuilt = up ? up[x] : dn[x];
+        d[x] = rebuilt;
       }
     }
   }
@@ -1860,12 +2003,13 @@ static void present(HDC hdc)
   HDC src_dc, base_dc;
   int src_w, src_h;
   const uint16 *base_pixels;
+  int base_pitch = bitmap.pitch;
 
   get_video_rect(&area);
 
   if (!emu_running || !bitmap.data)
   {
-    HBRUSH br = CreateSolidBrush(theme_is_dark() ? RGB(0x20, 0x20, 0x20) : RGB(0xFF, 0xFF, 0xFF));
+    HBRUSH br = CreateSolidBrush(theme_is_dark() ? theme_dk(RGB(0x20, 0x20, 0x20)) : RGB(0xFF, 0xFF, 0xFF));
     FillRect(hdc, &area, br);
     DeleteObject(br);
     draw_overlay(hdc, &area);
@@ -1893,6 +2037,24 @@ static void present(HDC hdc)
     }
   }
 
+  /* Video > Rotation: from here on the picture is the turned one (a quarter turn swaps its width and height; the box on the screen
+     was worked out above for that). The emulator's own picture, screenshots and recordings stay as the game draws it. */
+  if (gui.rotation & 3)
+  {
+    int rot = gui.rotation & 3;
+    int rw = (rot & 1) ? sh : sw, rh = (rot & 1) ? sw : sh;
+
+    if (rw <= ROT_DIM && rh <= ROT_DIM && ensure_rot_dib())
+    {
+      rotate_frame(base_pixels, base_pitch, sw, sh, rot);
+      base_pixels = (const uint16 *)rotb.pixels;
+      base_pitch  = ROT_DIM * FRAME_BPP;
+      base_dc     = rotb.mem_dc;
+      sw = rw;
+      sh = rh;
+    }
+  }
+
   if (!vid.dest_valid || !EqualRect(&dest, &vid.last_dest))
   {
     fill_borders(hdc, &area, &dest);
@@ -1910,7 +2072,7 @@ static void present(HDC hdc)
 
   {
     const uint16 *src_pixels = base_pixels;
-    int src_pitch = bitmap.pitch;
+    int src_pitch = base_pitch;
 
     /* With "Skip Render Filter with Shaders" a shader is given the game's own picture, not one the filter already
        enlarged (shaders that scale by whole multiples or place a bezel work their sizes out from the picture they get). */
@@ -1919,7 +2081,7 @@ static void present(HDC hdc)
       HDC filtered_dc;
       int filtered_w, filtered_h;
 
-      if (filter_run(base_pixels, bitmap.pitch, sw, sh, &filtered_dc, &filtered_w, &filtered_h))
+      if (filter_run(base_pixels, base_pitch, sw, sh, &filtered_dc, &filtered_w, &filtered_h))
       {
         src_dc = filtered_dc;
         src_w  = filtered_w;
@@ -2110,11 +2272,17 @@ static void present(HDC hdc)
 void video_frame(void)
 {
   HDC hdc = GetDC(g_hwnd);
+  /* Direct3D 11: the swap chain waits for the display's refresh itself (a real VSync). The other renderers wait for the compositor
+     after the frame is shown (vsync_wait). Either way not when the sound buffer is low. */
+  int swap_sync = gui.vsync && vsync_allowed && gui.renderer == RENDERER_D3D11 && hw_renderer_active();
+
   if (!hdc) return;
   new_frame = 1;
+  d3d11_set_sync(swap_sync);
   present(hdc);
+  d3d11_set_sync(0);                  /* (a repaint of the window must not wait) */
   new_frame = 0;
-  vsync_wait();
+  if (!swap_sync) vsync_wait();
   ReleaseDC(g_hwnd, hdc);
 }
 

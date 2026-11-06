@@ -44,13 +44,14 @@ typedef struct { const char *title; const SRow *rows; int count; } SPage;
 #define DYNCHOICE(l, id, tip)      { K_DYN,    l, id, 0, NULL, tip }       /* a drop-down filled when the window opens: gui_dyn_list() */
 
 static const char *const it_viewmode[] = { "List View", "Grid View" };
-static const char *const it_theme[]    = { "System", "Light", "Dark" };
+static const char *const it_theme[]    = { "System", "Light", "Dark", "Sapphire", "Ruby", "Emerald", "Amethyst", "Amber", "Aquamarine", "Diamond" };
 static const char *const it_style[]    = { "Classic", "Modern" };
-static const char *const it_scale[]    = { "1x", "2x", "3x", "4x", "5x", "6x" };
+static const char *const it_scale[]    = { "1x", "2x", "3x", "4x", "5x", "6x", "7x", "8x", "9x", "10x" };
 static const char *const it_lcd[]      = { "Off", "Light", "Medium", "Heavy" };
 static const char *const it_scan[]     = { "Off", "25%", "50%", "75%", "100%" };
 static const char *const it_ntsc[]     = { "Off", "Composite", "S-Video", "RGB" };
 static const char *const it_aspect[]   = { "Original Console Pixels", "1:1 (Square Pixels)", "4:3 (Standard)", "16:9 (Widescreen)" };
+static const char *const it_rotation[] = { "None", "90 Degrees Clockwise", "180 Degrees", "90 Degrees Counterclockwise" };
 static const char *const it_borders[]  = { "Hide All", "Top and Bottom", "Left and Right", "Show All" };
 static const char *const it_interlace[] = { "Single Field", "Double Field" };
 static const char *const it_frameskip[] = { "Off", "Auto", "Manual (Below 25% Audio Buffer)",
@@ -79,11 +80,11 @@ static const char *const it_msens[]   = { "50%", "75%", "100%", "150%", "200%" }
 static const char *const it_gunoff[]  = { "-12 px", "-8 px", "-4 px", "0 px", "+4 px", "+8 px", "+12 px" };
 static const char *const it_barcol[]  = { "Black", "Dark Gray", "Gray", "White", "Navy", "Dark Green", "Dark Red" };
 static const char *const it_fsmode[]  = { "Borderless Window", "Exclusive Fullscreen" };
-static const char *const it_accent[] = { "Blue", "Brown", "Crimson", "Gold", "Gray", "Green", "Indigo", "Lime", "Magenta", "Navy", "Olive", "Orange", "Pink", "Purple", "Red", "Sky Blue", "Teal", "Violet", "Yellow" };
+static const char *const it_accent[] = { "Default", "Blue", "Brown", "Crimson", "Gold", "Gray", "Green", "Indigo", "Lime", "Magenta", "Navy", "Olive", "Orange", "Pink", "Purple", "Red", "Sky Blue", "Teal", "Violet", "Yellow" };
 static const char *const it_tbsize[] = { "Small", "Normal", "Large" };
 static const char *const it_coversize[] = { "Tiny", "Extra Small", "Small", "Medium", "Medium Large", "Large", "Extra Large" };
 static const char *const it_coverbox[] = { "Square", "Box (Portrait)", "Wide" };
-static const char *const it_cursor[]  = { "Never", "After 2 Seconds", "After 3 Seconds", "After 5 Seconds", "After 10 Seconds" };
+static const char *const it_cursor[]  = { "Never", "Always", "After 2 Seconds", "After 3 Seconds", "After 5 Seconds", "After 10 Seconds" };
 static const char *const it_fcap[]    = { "Off", "30 per Second", "40 per Second", "50 per Second", "60 per Second" };
 static const char *const it_bass[]    = { "Off", "Light", "Medium", "Strong" };
 static const char *const it_abackup[] = { "Off", "Every Minute", "Every 2 Minutes", "Every 5 Minutes", "Every 10 Minutes" };
@@ -99,24 +100,24 @@ static const char *const it_lockon[]   = { "None", "Game Genie", "Action Replay 
 static const SRow rows_view[] =
 {
   { K_GROUP, "View", 0, 0, NULL, NULL },
+  DYNCHOICE("Language:",          IDM_OPT_LANGUAGE_BASE, "The language of the menus, windows and messages: English or a .po file in the Languages folder. Changing it asks to restart the program."),
   CHOICE("View Mode:",            IDM_VIEW_LIST, it_viewmode, "How the game browser shows your games: a list or a grid of covers."),
   CHOICE("Style:",                IDM_SET_STYLE_BASE, it_style, "Classic keeps the look the program has always had. Modern gives flat rounded buttons, check boxes, drop-down lists and tabs, softer toolbar buttons, rounded corners and a title bar in the theme's color (Windows 11), and Segoe UI text, all at once."),
-  CHOICE("Theme:",                IDM_VIDEO_THEME_BASE, it_theme, "System follows Windows; Light or Dark forces one."),
-  CHOICE("Accent Color:",         IDM_SET_ACCENT_BASE, it_accent, "The color of the selected row in the program's own lists (User Guide, Saved Combos, the Settings drop-downs) and of the button that waits for a key. The default is blue in the dark theme and the Windows accent color in the light one."),
-  CHECK ("Colorful Icons", IDM_OPT_COLORICONS, "Draw the icons of the menus, the toolbar and the favorite star in color, one color for each kind of action. Off (the default) draws them black and white, in the color of the text."),
+  CHOICE("Theme:",                IDM_VIDEO_THEME_BASE, it_theme, "System follows Windows; Light or Dark forces one. Sapphire, Ruby, Emerald, Amethyst, Amber, Aquamarine and Diamond are dark themes with colors of their own."),
+  CHOICE("Accent Color:",         IDM_SET_ACCENT_BASE, it_accent, "The color of the selected row in the program's own lists (User Guide, Saved Combos, the Settings drop-downs) and of the button that waits for a key. Default follows the theme: blue in the dark theme (the color of the theme in the colored themes) and the Windows accent color in the light one."),
+  CHECK ("Colorful Icons", IDM_OPT_COLORICONS, "Draw the icons of the menus, the toolbar and the favorite star in color, one color for each kind of action. Off draws them black and white, in the color of the text."),
   CHOICE("Interface Size:",       IDM_SET_UISIZE_BASE, it_uisize, "Normal or Large menus, dialogs and toolbar. Changing it restarts the program (it asks first, and your game is opened again)."),
   CHOICE("Toolbar Icon Size:",    IDM_SET_TBSIZE_BASE, it_tbsize, "How big the buttons of the toolbar are: Small, Normal (the default) or Large (also in View > Toolbars > Toolbar Size)."),
+  { K_GROUPEND, NULL, 0, 0, NULL, NULL },
+  { K_GROUP, "Covers", 0, 0, NULL, NULL },
   CHOICE("Cover Size:",             IDM_SET_COVERSIZE_BASE, it_coversize, "How big the covers are in the grid view, from Tiny to Extra Large (also in View > View Mode > Grid Size). Only with the Grid View chosen. Ctrl + mouse wheel over the grid sets any size in between."),
   CHOICE("Cover Frame:",            IDM_SET_COVERSHAPE_BASE, it_coverbox, "The shape of the covers in the grid view: Square, Box (portrait, like a game case) or Wide."),
   CHECK ("Rounded Cover Corners",   IDM_OPT_COVERROUND, "Round the corners of the covers in the grid view."),
   CHECK ("Show Name Under Covers",  IDM_OPT_COVERCAP, "Show the game's name under each cover in the grid view; switch it off for only the pictures."),
   CHECK ("Frame Around Cover and Name", IDM_OPT_COVERCARD, "Draw a frame around each cover and its name in the grid view, so every game looks like a card."),
-  CHECK ("Keep a Cover Cache",      IDM_OPT_COVERCACHE, "Save each finished cover in one file (Covers\\thumbs.dat), so the next time the program starts the covers appear almost at once instead of being read and scaled again. A cover that changes, or a new size or frame, is made again by itself."),
-  BUTTON("Clear Cover Cache",       IDM_OPT_COVERCACHE_CLEAR, "Delete the saved covers; they are made again as you browse."),
-  { K_GROUPEND, NULL, 0, 0, NULL, NULL },
-  { K_GROUP, "Game Directories", 0, 0, NULL, NULL },
-  BUTTON("ROM Directories...",      IDM_FILE_ROMFOLDERS, "Choose the directories the game list is made of: add more or remove some, and exclude some from the scan."),
-  CHECK ("Scan ROM Subfolders", IDM_VIEW_SCANSUB, "Also look for games in the folders inside the ROM directory. Switch it off to list only the games directly in it."),
+  CHECK ("Console Badge on Covers", IDM_OPT_CONSOLEBADGE, "Draw a small tag (MD, MCD, 32X, SMS, GG, SG, PICO) in the corner of each cover in the grid view, to tell the consoles apart at a glance."),
+  CHECK ("Keep a Cover Cache",      IDM_OPT_COVERCACHE, "Save each finished cover in one file (Images\\Covers\\thumbs.dat), so the next time the program starts the covers appear almost at once instead of being read and scaled again. A cover that changes, or a new size or frame, is made again by itself. The game list keeps what it found out about each file (Covers\\library.dat) too, so the list loads faster."),
+  BUTTON("Clear Cover Cache",       IDM_OPT_COVERCACHE_CLEAR, "Delete the saved covers and the saved game list information; they are made again as you browse."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_BREAK, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Program Behavior", 0, 0, NULL, NULL },
@@ -127,6 +128,10 @@ static const SRow rows_view[] =
   CHECK ("Keep the PC Awake While Playing", IDM_OPT_KEEPAWAKE, "Stop Windows from sleeping, dimming the screen or starting the screen saver while a game is running."),
   CHECK ("Confirm Exit While Playing", IDM_OPT_CONFIRMEXIT, "Ask \"Exit?\" when you close the program while a game is running."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
+  { K_GROUP, "Directories", 0, 0, NULL, NULL },
+  BUTTON("Data Folders...",          IDM_FILE_DIRECTORIES, "Choose where each folder beside the program is: BIOS, Saves, States, Cheats, Covers, Recordings, Screenshots, Languages, Shaders, Bezels, Profiles and Logs. Files already in the old place are not moved."),
+  BUTTON("ROM Directories...",      IDM_FILE_ROMFOLDERS, "Choose the directories the game list is made of: add more or remove some, and exclude some from the scan."),
+  { K_GROUPEND, NULL, 0, 0, NULL, NULL },
 };
 
 
@@ -134,7 +139,7 @@ static const SRow rows_view[] =
 static const SRow rows_video[] =
 {
   { K_GROUP, "Window and Screen", 0, 0, NULL, NULL },
-  CHOICE("Window Size:",          IDM_VIDEO_SCALE_BASE, it_scale, "Size of the game window, 1x to 6x the console's picture."),
+  CHOICE("Window Size:",          IDM_VIDEO_SCALE_BASE, it_scale, "Size of the game window, 1x to 10x the console's picture."),
   CHOICE("Fullscreen Mode:",      IDM_SET_FSMODE_BASE, it_fsmode, "Borderless Window fills the screen without changing it. Exclusive Fullscreen switches the screen to the Fullscreen Resolution while the game is fullscreen."),
   DYNCHOICE("Fullscreen Resolution:", IDM_SET_FSRES_BASE, "The screen size used in fullscreen when Fullscreen Mode is Exclusive Fullscreen: the screen is switched to it while the game is fullscreen and put back after. Desktop Resolution changes nothing."),
   CHECK ("Start ROM in Fullscreen", IDM_VIDEO_FULLSCREEN_START, "Start every game in fullscreen. Esc or Alt+Enter toggles it."),
@@ -143,8 +148,9 @@ static const SRow rows_video[] =
   { K_FILTER, "Render Filter:", 0, 0, NULL, "Pixel-art scalers and CRT looks (Scale2x, xBR, HQ2x, xBRZ, Catmull-Rom, Scanlines, CRT...) applied before the picture is shown. They run on the processor: xBRZ 5x and 6x and CRT Geom are very heavy and can make a game run below full speed (watch the frame rate); 2x to 4x are much lighter, and a shader below is lighter still." },
   CHECK ("Integer Scaling",       IDM_VIDEO_INTSCALE, "Enlarge the picture by whole multiples only (1x, 2x, 3x ...), so every pixel is the same size. It is centered, with borders, when the window is between two sizes."),
   CHOICE("Aspect Ratio:",         IDM_VIDEO_ASPECT_BASE, it_aspect, "The console's original pixel shape (the default; the Mega Drive's own pixels: 8:7 wide in the 256-pixel mode, 32:35 in the 320-pixel one; other consoles use square pixels), 1:1 square pixels, 4:3 as on a CRT television, or 16:9 (stretches the picture to fill a widescreen window)."),
+  CHOICE("Rotation:",             IDM_VIDEO_ROTATE_BASE, it_rotation, "Turn the picture by a quarter, half or three quarters of a turn, for games and demos made to be played with the screen on its side. Only what is on the screen is turned: screenshots, recordings and light-gun aiming are not."),
   CHOICE("Borders:",              IDM_VIDEO_OVERSCAN_BASE, it_borders, "Hide or show the overscan borders (top/bottom, left/right). This covers every console; the Master System side borders and the Game Gear screen have their own options in Settings > Options."),
-  CHOICE("Interlaced Mode:",      IDM_VIDEO_INTERLACE_BASE, it_interlace, "Single Field (the default) or Double Field, for games that use the 448-line interlaced mode. Single Field shows the same half of the picture every frame, so it stays steady. Double Field shows both fields at once; where something moves, the older field's lines are rebuilt from the new ones and both lines of each pair are drawn partly alike, so there are no comb teeth and the picture hardly shakes (a moving part is a little softer than a still one)."),
+  CHOICE("Interlaced Mode:",      IDM_VIDEO_INTERLACE_BASE, it_interlace, "Not used while Deinterlacing (Visual Effects) is on. Single Field or Double Field, for games that use the 448-line interlaced mode. Single Field shows the same half of the picture every frame, so it stays steady. Double Field shows both fields at once; where something moves, the older field's lines are rebuilt from the new ones (the new lines stay exactly as the game drew them), so there are hardly any comb teeth and a moving object stays sharp (a pattern that repeats and scrolls, such as blades of grass, is found too); a still picture keeps both fields."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Bezel and Border", 0, 0, NULL, NULL },
   BUTTON("Bezel Image...",        IDM_VIDEO_BEZEL, "Draw an image (a PNG with a see-through middle: a TV, an arcade cabinet) over the picture as a frame. Shown in fullscreen only."),
@@ -157,10 +163,11 @@ static const SRow rows_video[] =
   CHOICE("LCD Ghosting:",         IDM_VIDEO_LCD_BASE, it_lcd, "Bright pixels fade slowly, like a handheld screen."),
   CHOICE("Scanlines:",            IDM_VIDEO_SCANLINE_BASE, it_scan, "Dark lines between rows: Off, 25, 50, 75 or 100%."),
   CHECK ("Smooth Scaling",        IDM_VIDEO_SMOOTH, "Soft edges when the picture is enlarged."),
+  CHECK ("Deinterlacing",         IDM_VIDEO_DEINTERLACE, "For games that use the 448-line interlaced mode (Sonic the Hedgehog 2 in 2P Vs., Ys III, Air Strike Patrol ...): the graphics processor draws both fields of the picture from the same moment in every frame, so every frame is a whole picture and nothing that moves is combed. While it is on, Interlaced Mode is not used."),
   CHECK ("Dither Smoothing",      IDM_VIDEO_DITHER, "Smooths the checkerboard patterns many Genesis games use to fake extra colors."),
   CHECK ("Flicker Blending",      IDM_VIDEO_FLICKER, "Some games fake transparency by showing an object every other frame. This blends the two frames so it looks solid."),
   CHECK ("Brighten",              IDM_VIDEO_BRIGHTEN, "A gentle brightness lift."),
-  BUTTON("Picture Adjustments...", IDM_VIDEO_PICTUREADJ, "Open the window with the Contrast, Saturation, Gamma and Hue sliders (also in the Video menu)."),
+  BUTTON("Picture Adjustments...", IDM_VIDEO_PICTUREADJ, "Open the window with the Brightness, Contrast, Saturation, Gamma and Hue sliders (also in the Video menu)."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Speed and Smoothness", 0, 0, NULL, NULL },
   CHOICE("Renderer:",             IDM_VIDEO_RENDERER_BASE, it_renderer, "GDI draws with the CPU; Direct3D 9 and 11 use the graphics card (each falls back to GDI if unavailable). Shaders need Direct3D 11."),
@@ -242,9 +249,9 @@ static const SRow rows_input[] =
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Mouse", 0, 0, NULL, NULL },
   CHOICE("Mouse Speed:",          IDM_SET_MOUSESENS_BASE, it_msens, "How fast the Sega Mouse moves for the same hand movement."),
-  CHOICE("Hide Mouse Pointer:",   IDM_SET_CURSORIDLE_BASE, it_cursor, "Hide the pointer over the game after it has not moved for this long (in a window and in fullscreen). Moving the mouse shows it again."),
+  CHOICE("Hide Mouse Pointer:",   IDM_SET_CURSORIDLE_BASE, it_cursor, "Hide the pointer over the game after it has not moved for this long (in a window and in fullscreen). Moving the mouse shows it again. Always hides it over the game all the time. In Sega Pico games the pointer is always hidden whatever is chosen here (the game draws the pen itself)."),
   CHECK ("Invert Mouse Y Axis",   IDM_INPUT_INVERTMOUSE, "Flip the up/down movement of the Sega Mouse."),
-  CHECK ("Confine Mouse to the Picture", IDM_OPT_CONFINE, "While a Sega Mouse or light gun game runs, keep the pointer inside the picture. Pause the game (or press Alt+Tab) to let it go."),
+  CHECK ("Confine Mouse to the Picture", IDM_OPT_CONFINE, "While a Sega Mouse or light gun game runs, keep the pointer inside the picture. Pause the game, press the Windows key or press Alt+Tab to let it go; a click in the picture holds it again."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_BREAK, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Light Gun", 0, 0, NULL, NULL },
@@ -263,11 +270,11 @@ static const SRow rows_options[] =
   CHOICE("Lock-On Cartridge:",    IDM_EMU_LOCKON_BASE, it_lockon, "Attach a Game Genie, Action Replay or Sonic & Knuckles to the game."),
   CHECK ("Boot from BIOS When Available", IDM_EMU_BIOS, "Run the console's start-up ROM when a BIOS file is present in the BIOS folder."),
   CHECK ("Show Extended Game Gear Screen", IDM_VIDEO_GGEXTRA, "Show the whole Game Gear picture instead of only the part its screen displayed."),
-  CHECK ("Show Master System Side Borders", IDM_VIDEO_SMSBORDER, "Show the 8-pixel columns at each side, which are cropped by default."),
+  CHECK ("Show Master System Side Borders", IDM_VIDEO_SMSBORDER, "Show the 8-pixel columns at each side of the picture, which are otherwise cropped."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Accuracy", 0, 0, NULL, NULL },
   CHECK ("Emulate Address Error Exceptions", IDM_EMU_ADDRERROR, "Hardware-accurate crashes on bad memory access; turn off only for a few hacked games."),
-  CHECK ("Emulate Mega CD Disc Latency", IDM_EMU_CDLATENCY, "Make the Mega CD drive seek slowly like the real one; some games need it; off (the default) makes loading instant."),
+  CHECK ("Emulate Mega CD Disc Latency", IDM_EMU_CDLATENCY, "Make the Mega CD drive seek slowly like the real one; some games need it; off makes loading instant."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Video Recording", 0, 0, NULL, NULL },
   CHOICE("Recording Size:",       IDM_SET_RECSIZE_BASE, it_shotsize, "How big a video recording (Video + Audio) is, as a multiple of the console's own picture: 1x is for example 320x224, 2x (default) 640x448, 4x 1280x896. Enlarged in whole pixels, so it stays sharp. Used for the next recording."),
@@ -287,11 +294,11 @@ static const SRow rows_options[] =
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Start and Backup", 0, 0, NULL, NULL },
   CHOICE("Backup State:",         IDM_SET_AUTOSAVE_BASE, it_abackup, "While a game runs, quietly save its state every few minutes into a rolling backup (Emulation > Load State > Load Backup State), so a crash never loses much."),
-  CHOICE("Skip Intro on Launch:", IDM_SET_SKIPLEN_BASE, it_skiplen, "When a game starts, run its first few seconds at full speed to get past logos and intros. A press of a game button ends the skip early. Not used when resuming a game or during netplay."),
+  CHOICE("Skip Intro on Launch:", IDM_SET_SKIPLEN_BASE, it_skiplen, "When a game starts, run its first few seconds of game time at full speed to get past logos and intros; this takes much less real time than the seconds chosen. A press of a game button ends the skip early. Not used when resuming a game or during netplay."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Troubleshooting", 0, 0, NULL, NULL },
-  CHECK ("Enable Log",      IDM_OPT_LOG, "Write genesis-plus-ex.log in the Logs folder next to the program: the program version, Windows and the main settings, games loaded and closed, resets, states, cheat codes and their timing, errors and netplay events. Off by default. Send it along with a bug report."),
-  CHECK ("Enable Crash Report", IDM_OPT_CRASHREPORT, "If the program crashes, write genesis-plus-ex-crash.txt and genesis-plus-ex-crash.dmp in the Logs folder next to the program (only the last crash is kept). Off by default; send both with a bug report."),
+  CHECK ("Enable Log",      IDM_OPT_LOG, "Write genesis-plus-ex.log in the Logs folder next to the program (Settings > General > Data Folders can move it): the machine and the whole settings file at the start; for each game its file, ROM header, console set-up, picture and sound and, at the end, how it went (time, frames, slowest frame); resets, states, cheat codes and their timing, messages, errors and netplay events. Send it along with a bug report."),
+  CHECK ("Enable Crash Report", IDM_OPT_CRASHREPORT, "If the program crashes, write genesis-plus-ex-crash.txt and genesis-plus-ex-crash.dmp in the Logs folder next to the program (only the last crash is kept). Send both with a bug report."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
 };
 
@@ -352,14 +359,17 @@ static UINT find_state(HMENU menu, int id)
 
 static UINT menu_state(int id)
 {
+  if (gui_rate_locked(id)) return MF_GRAYED | MF_DISABLED;                  /* a 32X+ game runs at 44100 Hz */
   if (gui_pico_unsupported(id) || gui_pico_only(id)) return MF_GRAYED | MF_DISABLED;      /* a 32X game is running: nothing here applies to it */
-  if (id == IDM_VIEW_SCANSUB) return gui.scan_subfolders ? MF_CHECKED : 0;   /* a setting with no menu item */
+  if (id >= IDM_VIDEO_INTERLACE_BASE && id < IDM_VIDEO_INTERLACE_BASE + 2)      /* Interlaced Mode: no longer in the Video menu, only here */
+    return ((gui.deinterlace ? gui.deint_saved : config.render) == id - IDM_VIDEO_INTERLACE_BASE ? MF_CHECKED : 0) | (gui.deinterlace ? (MF_GRAYED | MF_DISABLED) : 0);
   if (id == IDM_OPT_CONFIRMEXIT) return gui.confirm_exit ? MF_CHECKED : 0;
   if (id == IDM_OPT_LOG) return gui.log_on ? MF_CHECKED : 0;
   if (id == IDM_OPT_CRASHREPORT) return gui.crash_report ? MF_CHECKED : 0;
   if (id == IDM_EMU_REWIND) return gui.rewind ? MF_CHECKED : 0;      /* no longer in a menu: asked here */
   if (id == IDM_OPT_COVERCACHE) return gui.cover_cache ? MF_CHECKED : 0;
   if (id == IDM_OPT_COVERCARD) return gui.cover_card ? MF_CHECKED : 0;
+  if (id == IDM_OPT_CONSOLEBADGE) return gui.console_badge ? MF_CHECKED : 0;
   if (id == IDM_OPT_COLORICONS) return gui.color_icons ? MF_CHECKED : 0;
   if (id == IDM_OPT_PAUSEPAD) return gui.pause_pad ? MF_CHECKED : 0;
   if (id == IDM_OPT_OSDOPTS) return gui.osd_opts ? MF_CHECKED : 0;
@@ -534,11 +544,11 @@ static void tabs_colors(COLORREF *face, COLORREF *page, COLORREF *idle, COLORREF
   int dark = theme_is_dark();
   *face   = dark ? THEME_DARK_BG    : GetSysColor(COLOR_BTNFACE);     /* behind the control */
   *page   = page_color();                                               /* the page and the selected tab */
-  *idle   = dark ? RGB(44, 44, 44)    : RGB(226, 226, 226);             /* the other tabs */
-  *hot    = dark ? RGB(58, 58, 58)    : RGB(238, 238, 238);             /* a tab under the mouse */
+  *idle   = dark ? theme_dk(RGB(44, 44, 44))    : RGB(226, 226, 226);             /* the other tabs */
+  *hot    = dark ? theme_dk(RGB(58, 58, 58))    : RGB(238, 238, 238);             /* a tab under the mouse */
   *text   = dark ? THEME_DARK_TEXT : GetSysColor(COLOR_BTNTEXT);
-  *dim    = dark ? RGB(175, 175, 175) : RGB(70, 70, 70);
-  *border = dark ? RGB(95, 95, 95)    : RGB(160, 160, 160);
+  *dim    = dark ? theme_dk(RGB(175, 175, 175)) : theme_dk(RGB(70, 70, 70));
+  *border = dark ? theme_dk(RGB(95, 95, 95))    : theme_dk(RGB(160, 160, 160));
 }
 
 /* The strip shows the Settings pages unless a window gave it its own titles
@@ -552,7 +562,7 @@ static int tab_count(HWND h)
 static const char *tab_title(HWND h, int i)
 {
   const char *const *t = (const char *const *)GetPropA(h, "gp_tabs");
-  return t ? t[i] : pages[i].title;
+  return tr(t ? t[i] : pages[i].title);
 }
 
 /* Width of tab i: its text and some room either side. */
@@ -874,7 +884,7 @@ static void frame_title(HDC dc, HWND page, const RECT *fr, const char *title)
   int tx = fr->left + TBS(12);
 
   tabs_colors(&face, &pg, &idle, &hotc, &text, &dim, &border);
-  GetTextExtentPoint32A(dc, title, lstrlenA(title), &sz);
+  GetTextExtentPoint32A(dc, tr(title), lstrlenA(tr(title)), &sz);
   SetRect(&gap, tx - TBS(4), fr->top - sz.cy / 2, tx + sz.cx + TBS(4), fr->top - sz.cy / 2 + sz.cy);
   FillRect(dc, &gap, gb);
   SetBkMode(dc, TRANSPARENT);
@@ -903,7 +913,7 @@ void settings_draw_frame(HDC dc, HWND dlg, const RECT *fr, const char *title)
   DeleteObject(pen);
 
   of = SelectObject(dc, f ? f : GetStockObject(DEFAULT_GUI_FONT));
-  GetTextExtentPoint32A(dc, title, lstrlenA(title), &sz);
+  GetTextExtentPoint32A(dc, tr(title), lstrlenA(tr(title)), &sz);
   SetRect(&gap, tx - TBS(4), fr->top - sz.cy / 2, tx + sz.cx + TBS(4), fr->top - sz.cy / 2 + sz.cy);
   FillRect(dc, &gap, gb);
   SetBkMode(dc, TRANSPARENT);
@@ -1031,7 +1041,7 @@ static LRESULT CALLBACK page_proc(HWND h, UINT m, WPARAM w, LPARAM l)
         return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
       }
 
-      br = theme_ctlcolor((HDC)w);
+      br = theme_ctlcolor_ctl((HDC)w, (HWND)l);
       if (br) return (LRESULT)br;
 
       /* Light theme: text boxes and drop-down lists keep their normal white. */
@@ -1061,11 +1071,11 @@ static LRESULT CALLBACK page_proc(HWND h, UINT m, WPARAM w, LPARAM l)
       {
         int dark = theme_is_dark(), sel = (di->itemState & ODS_SELECTED) && !(di->itemState & ODS_COMBOBOXEDIT);
         int off = (di->itemState & ODS_DISABLED) != 0;
-        COLORREF bg = sel ? theme_accent_bg() : (dark ? RGB(0x2D, 0x2D, 0x2D) : GetSysColor(COLOR_WINDOW));
+        COLORREF bg = sel ? theme_accent_bg() : (dark ? theme_dk(RGB(0x2D, 0x2D, 0x2D)) : GetSysColor(COLOR_WINDOW));
         int colors = s_row[idx]->id == IDM_SET_ACCENT_BASE || s_row[idx]->id == IDM_SET_BARCOLOR_BASE || s_row[idx]->id == IDM_SET_OSDCOLOR_BASE;
         COLORREF fg = off ? GetSysColor(COLOR_GRAYTEXT) : (sel ? (dark ? RGB(255, 255, 255) : GetSysColor(COLOR_HIGHLIGHTTEXT)) : (dark ? RGB(0xE0, 0xE0, 0xE0) : GetSysColor(COLOR_WINDOWTEXT)));
         HBRUSH bb = CreateSolidBrush(bg), sw = CreateSolidBrush(!colors || off ? RGB(0x80, 0x80, 0x80) : (s_row[idx]->id == IDM_SET_ACCENT_BASE ? theme_accent_swatch((int)di->itemID) : (s_row[idx]->id == IDM_SET_BARCOLOR_BASE ? video_bar_color_of((int)di->itemID) : video_osd_color_of((int)di->itemID))));
-        HBRUSH edge = CreateSolidBrush(dark ? RGB(0x90, 0x90, 0x90) : RGB(0x60, 0x60, 0x60));
+        HBRUSH edge = CreateSolidBrush(dark ? theme_dk(RGB(0x90, 0x90, 0x90)) : theme_dk(RGB(0x60, 0x60, 0x60)));
         RECT r = di->rcItem, box;
         char text[64] = "";
         int sh = TBS(10), sw_w = TBS(16);
@@ -1156,12 +1166,12 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
       const SRow *lr = &pg->rows[i];
       SIZE sz;
       if ((lr->kind == K_CHOICE || lr->kind == K_DYN || lr->kind == K_FILTER) && lr->label &&
-          GetTextExtentPoint32A(mdc, lr->label, lstrlenA(lr->label), &sz) && sz.cx + TBS(14) > lwp)
+          GetTextExtentPoint32A(mdc, tr(lr->label), lstrlenA(tr(lr->label)), &sz) && sz.cx + TBS(14) > lwp)
         lwp = sz.cx + TBS(14);
     }
     SelectObject(mdc, of);
     ReleaseDC(dlg, mdc);
-    if (lwp > (colw0 - TBS(24)) * 3 / 5) lwp = (colw0 - TBS(24)) * 3 / 5;
+    if (lwp > (colw0 - TBS(24)) * 3 / 5) lwp = (colw0 - TBS(24)) * 3 / 5;      /* (a translation may need all of it: the fit pass widens what is left cut) */
   }
 
   s_page[p] = CreateWindowExA(WS_EX_CONTROLPARENT, "GPSettingsPage", "",
@@ -1227,9 +1237,9 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
       int cw = colw;
       {
         HDC mdc = GetDC(dlg);
-        HGDIOBJ of = SelectObject(mdc, font);
+        HGDIOBJ of = SelectObject(mdc, theme_style_font(font));       /* (the words as they are drawn: the translation, in the style's font) */
         SIZE sz;
-        if (GetTextExtentPoint32A(mdc, r->label, lstrlenA(r->label), &sz)) cw = sz.cx + TBS(26);
+        if (GetTextExtentPoint32A(mdc, tr(r->label), lstrlenA(tr(r->label)), &sz)) cw = sz.cx + TBS(34);
         SelectObject(mdc, of);
         ReleaseDC(dlg, mdc);
         if (cw > colw) cw = colw;
@@ -1430,6 +1440,7 @@ static void restore_defaults(HWND dlg, int page)     /* page: the tab to restore
     }
     else if (r->kind == K_DYN)
     {
+      if (r->id == IDM_OPT_LANGUAGE_BASE) continue;                   /* it restarts the program: left as it is */
       SendMessage(g_hwnd, WM_COMMAND, MAKEWPARAM(r->id, 0), 0);      /* the first entry is the default */
     }
     else if (r->kind == K_FILTER)
@@ -1503,7 +1514,7 @@ static void cancel_changes(void)
     if (now == s_snap[i]) continue;
     if (r->kind == K_CHECK) SendMessage(g_hwnd, WM_COMMAND, MAKEWPARAM(r->id, 0), 0);
     else if (r->kind == K_CHOICE) { if (s_snap[i] >= 0) SendMessage(g_hwnd, WM_COMMAND, MAKEWPARAM(r->id + s_snap[i], 0), 0); }
-    else if (r->kind == K_DYN) SendMessage(g_hwnd, WM_COMMAND, MAKEWPARAM(r->id + s_snap[i], 0), 0);
+    else if (r->kind == K_DYN) { if (r->id != IDM_OPT_LANGUAGE_BASE) SendMessage(g_hwnd, WM_COMMAND, MAKEWPARAM(r->id + s_snap[i], 0), 0); }
     else if (r->kind == K_FILTER) SendMessage(g_hwnd, WM_COMMAND, MAKEWPARAM(s_snap[i] < 0 ? IDM_VIDEO_FILTER_NONE : IDM_VIDEO_FILTER_BASE + s_snap[i], 0), 0);
   }
 }
@@ -1611,6 +1622,56 @@ static INT_PTR CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         }
       }
 
+      /* A language with longer words: the window is made wide enough for the longest label of a check box or a drop-down, so none is cut. */
+      if (i18n_on)
+      {
+        HDC mdc = GetDC(dlg);
+        HGDIOBJ mold = SelectObject(mdc, theme_style_font(font));
+        int pi, ri, need = 0, want, diff;
+        RECT cr;
+
+        for (pi = 0; pi < NPAGES; pi++)
+          for (ri = 0; ri < pages[pi].count; ri++)
+          {
+            const SRow *rr = &pages[pi].rows[ri];
+            SIZE sz;
+            int cw = 0;
+
+            if (!rr->label || (rr->kind != K_CHECK && rr->kind != K_CHOICE && rr->kind != K_DYN)) continue;
+            if (!GetTextExtentPoint32A(mdc, tr(rr->label), lstrlenA(tr(rr->label)), &sz)) continue;
+            if (rr->kind == K_CHECK) cw = sz.cx + TBS(44);                                   /* the box, a gap, the text, a little room */
+            else
+            {
+              int by_share = (sz.cx + TBS(14)) * 5 / 3, by_combo = sz.cx + TBS(14) + TBS(130);        /* (the labels get 60% of a column at most) */
+
+              cw = by_share > by_combo ? by_share : by_combo;
+            }
+            if (cw > need) need = cw;
+          }
+        SelectObject(mdc, mold);
+        ReleaseDC(dlg, mdc);
+        want = (2 * (need + 4 * TBS(12)) + 2 * TBS(12) + TBS(16)) * 106 / 100;          /* (two columns, each with the room its frame takes) */
+        if (want > GetSystemMetrics(SM_CXSCREEN) * 92 / 100) want = GetSystemMetrics(SM_CXSCREEN) * 92 / 100;
+        GetClientRect(dlg, &cr);
+        diff = want - (cr.right - cr.left);
+        if (diff > 0)
+        {
+          RECT wr, tr2, ok2, cn2;
+
+          GetWindowRect(dlg, &wr);
+          SetWindowPos(dlg, NULL, wr.left - diff / 2, wr.top, wr.right - wr.left + diff, wr.bottom - wr.top, SWP_NOZORDER | SWP_NOACTIVATE);
+          GetWindowRect(tab, &tr2);
+          MapWindowPoints(NULL, dlg, (POINT *)&tr2, 2);
+          SetWindowPos(tab, NULL, 0, 0, tr2.right - tr2.left + diff, tr2.bottom - tr2.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+          GetWindowRect(GetDlgItem(dlg, IDOK), &ok2);
+          MapWindowPoints(NULL, dlg, (POINT *)&ok2, 2);
+          SetWindowPos(GetDlgItem(dlg, IDOK), NULL, ok2.left + diff, ok2.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+          GetWindowRect(GetDlgItem(dlg, IDCANCEL), &cn2);
+          MapWindowPoints(NULL, dlg, (POINT *)&cn2, 2);
+          SetWindowPos(GetDlgItem(dlg, IDCANCEL), NULL, cn2.left + diff, cn2.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+      }
+
       /* The tab strip is as tall as its tabs; the pages (each with its own
          frame) fill the rest, down to the Close button. */
       {
@@ -1668,7 +1729,7 @@ static INT_PTR CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           HDC hdc = GetDC(dlg);
           HGDIOBJ of = SelectObject(hdc, font);
           SIZE tsz;
-          GetTextExtentPoint32A(hdc, "Restore Defaults", 16, &tsz);
+          GetTextExtentPoint32A(hdc, tr("Restore Defaults"), lstrlenA(tr("Restore Defaults")), &tsz);
           tsz.cx += TBS(18);                                                  /* room for the arrow */
           SelectObject(hdc, of);
           ReleaseDC(dlg, hdc);
@@ -1720,7 +1781,7 @@ static INT_PTR CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CTLCOLORBTN:
     case WM_CTLCOLORLISTBOX:
     {
-      HBRUSH br = theme_ctlcolor((HDC)wp);
+      HBRUSH br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
       if (br) return (LRESULT)br;
       break;
     }
@@ -1948,4 +2009,131 @@ void dlg_settings_tab(HWND parent, int tab)
 void dlg_settings(HWND parent)
 {
   dlg_settings_tab(parent, 0);
+}
+
+
+/****************************************************************************
+ * Directories: where each folder beside the program is (Settings > General > Data Folders...). A list of the folders and their
+ * paths; Change... picks another place, Use Default puts it back beside the program. OK keeps the choices.
+ ****************************************************************************/
+
+static char dd_path[GUI_DIR_N][GUI_PATH_LEN];          /* what OK keeps: "" = beside the program */
+
+/* The folder beside the program, whatever has been chosen. */
+static void dd_default(int k, char *out, int len)
+{
+  char keep[GUI_DIR_N][GUI_PATH_LEN];
+
+  memcpy(keep, gui.dir_path, sizeof(keep));
+  memset(gui.dir_path, 0, sizeof(gui.dir_path));
+  lstrcpynA(out, osd_path(gui_dir_names[k]), len);
+  memcpy(gui.dir_path, keep, sizeof(keep));
+}
+
+/* The text of a box is the folder to use; the folder beside the program is kept as "" (so the program can still be moved). */
+static void dd_commit(HWND dlg, int k)
+{
+  char path[GUI_PATH_LEN], def[GUI_PATH_LEN];
+  int n;
+
+  GetDlgItemTextA(dlg, IDC_DIR_EDIT_BASE + k, path, sizeof(path));
+  n = lstrlenA(path);
+  while (n > 3 && (path[n - 1] == '\\' || path[n - 1] == '/' || path[n - 1] == ' ')) path[--n] = '\0';
+  dd_default(k, def, sizeof(def));
+  lstrcpynA(dd_path[k], (!path[0] || !lstrcmpiA(path, def)) ? "" : path, GUI_PATH_LEN);
+}
+
+static INT_PTR CALLBACK directories_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+  switch (msg)
+  {
+    case WM_INITDIALOG:
+    {
+      HFONT font = (HFONT)SendMessage(dlg, WM_GETFONT, 0, 0);
+      int k;
+
+      memcpy(dd_path, gui.dir_path, sizeof(dd_path));
+      SetDlgItemTextA(dlg, IDC_DIR_HELP, tr("Type a path or press ... to choose a folder. An empty box is the folder beside the program. Files in the old place are not moved. The languages use the new place after a restart. Images holds the Bezels, Covers and Pico-Storyware folders."));
+      for (k = 0; k < GUI_DIR_N; k++)
+      {
+        char def[GUI_PATH_LEN];
+        RECT lab = { 10, 44 + k * 16, 62, 56 + k * 16 }, ed = { 64, 43 + k * 16, 284, 57 + k * 16 }, bt = { 288, 43 + k * 16, 320, 57 + k * 16 };
+        HWND h;
+
+        MapDialogRect(dlg, &lab);
+        MapDialogRect(dlg, &ed);
+        MapDialogRect(dlg, &bt);
+        h = CreateWindowExA(0, "STATIC", tr(gui_dir_names[k]), WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, lab.left, ed.top, lab.right - lab.left, ed.bottom - ed.top, dlg, NULL, g_inst, NULL);
+        SendMessage(h, WM_SETFONT, (WPARAM)font, TRUE);
+        dd_default(k, def, sizeof(def));
+        h = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", dd_path[k][0] ? dd_path[k] : def, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                            ed.left, ed.top, ed.right - ed.left, ed.bottom - ed.top, dlg, (HMENU)(INT_PTR)(IDC_DIR_EDIT_BASE + k), g_inst, NULL);
+        SendMessage(h, WM_SETFONT, (WPARAM)font, TRUE);
+        h = CreateWindowExA(0, "BUTTON", "...", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                            bt.left, bt.top, bt.right - bt.left, bt.bottom - bt.top, dlg, (HMENU)(INT_PTR)(IDC_DIR_BROWSE_BASE + k), g_inst, NULL);
+        SendMessage(h, WM_SETFONT, (WPARAM)font, TRUE);
+      }
+      theme_apply_to_window(dlg);
+      SendMessage(dlg, DM_SETDEFID, IDOK, 0);                   /* OK is the default button, and has the focus (not Defaults) */
+      SetFocus(GetDlgItem(dlg, IDOK));
+      return FALSE;
+    }
+
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    {
+      HBRUSH br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
+      if (br) return (INT_PTR)br;
+      break;
+    }
+
+    case WM_COMMAND:
+    {
+      int id = LOWORD(wp);
+
+      if (id == IDC_DIR_DEFAULT && HIWORD(wp) == BN_CLICKED)
+      {
+        int k;
+        for (k = 0; k < GUI_DIR_N; k++)
+        {
+          char def[GUI_PATH_LEN];
+          dd_default(k, def, sizeof(def));
+          SetDlgItemTextA(dlg, IDC_DIR_EDIT_BASE + k, def);          /* every folder beside the program again (OK keeps it, Cancel does not) */
+        }
+        return TRUE;
+      }
+
+      if (id >= IDC_DIR_BROWSE_BASE && id < IDC_DIR_BROWSE_BASE + GUI_DIR_N && HIWORD(wp) == BN_CLICKED)
+      {
+        char path[GUI_PATH_LEN];
+        int k = id - IDC_DIR_BROWSE_BASE;
+
+        if (gui_pick_folder(dlg, "Choose a folder", path, sizeof(path))) SetDlgItemTextA(dlg, IDC_DIR_EDIT_BASE + k, path);
+        return TRUE;
+      }
+      if (id == IDOK)
+      {
+        int k;
+        for (k = 0; k < GUI_DIR_N; k++) dd_commit(dlg, k);
+        memcpy(gui.dir_path, dd_path, sizeof(gui.dir_path));
+        config_save();
+        EndDialog(dlg, IDOK);
+        return TRUE;
+      }
+      if (id == IDCANCEL)
+      {
+        EndDialog(dlg, IDCANCEL);
+        return TRUE;
+      }
+      break;
+    }
+  }
+  return FALSE;
+}
+
+void dlg_directories(HWND parent)
+{
+  gui_dialog_box(gui.large_ui ? IDD_DIRECTORIES_LARGE : IDD_DIRECTORIES, parent, directories_proc);
 }

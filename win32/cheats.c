@@ -59,6 +59,7 @@ typedef struct
 
 static t_cheat cheats[CHEAT_MAX];
 static int     cheat_count;
+int cheats_count(void) { return cheat_count; }          /* how many cheats are in the list (for the log) */
 
 /* Indexes of the active patches: RAM grows from the front, ROM from the back. */
 static unsigned short cheat_index[CHEAT_MAX];
@@ -1502,9 +1503,7 @@ static INT_PTR CALLBACK cheatconv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CTLCOLOREDIT:
     {
       /* the code box has the color of the Name and Code boxes of the Cheats window */
-      int cid = GetDlgCtrlID((HWND)lp);
-      HBRUSH br = (cid == IDC_CC_IN) ? theme_ctlcolor_custom((HDC)wp, RGB(0x38, 0x38, 0x38), 1)
-                                                          : theme_ctlcolor((HDC)wp);
+      HBRUSH br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
       if (br) return (LRESULT)br;
       break;
     }
@@ -1604,7 +1603,7 @@ static void cheats_make_header_images(void)
   HDC mem = CreateCompatibleDC(screen);
   HBITMAP bm = CreateCompatibleBitmap(screen, HDR_BOX * 2, HDR_BOX);
   HGDIOBJ old = SelectObject(mem, bm);
-  COLORREF bg = theme_is_dark() ? RGB(0x19, 0x19, 0x19) : RGB(255, 255, 255);        /* the color of a header cell */
+  COLORREF bg = theme_is_dark() ? theme_dk(RGB(0x19, 0x19, 0x19)) : RGB(255, 255, 255);        /* the color of a header cell */
 
   theme_draw_tickbox(mem, 0, 0, HDR_BOX, 0, bg);
   theme_draw_tickbox(mem, HDR_BOX, 0, HDR_BOX, 1, bg);
@@ -2068,7 +2067,7 @@ static void cheats_update_enable_state(HWND dlg)
   {
     int dark = theme_is_dark();
     COLORREF normal = dark ? RGB(240, 240, 240) : RGB(0, 0, 0);
-    COLORREF gray   = dark ? RGB(120, 120, 120) : GetSysColor(COLOR_GRAYTEXT);
+    COLORREF gray   = dark ? theme_dk(RGB(120, 120, 120)) : GetSysColor(COLOR_GRAYTEXT);
 
     EnableWindow(list, TRUE);
     ListView_SetTextColor(list, on ? normal : gray);
@@ -2236,14 +2235,9 @@ static INT_PTR CALLBACK cheats_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
     {
-      HWND ctrl = (HWND)lp;
-      int ctrl_id = GetDlgCtrlID(ctrl);
       HBRUSH br;
 
-      if (ctrl_id == IDC_CHEATS_CODE || ctrl_id == IDC_CHEATS_DESC)
-        br = theme_ctlcolor_custom((HDC)wp, RGB(0x38, 0x38, 0x38), 1);
-      else
-        br = theme_ctlcolor((HDC)wp);
+      br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
 
       if (br) return (LRESULT)br;
       break;
@@ -2772,9 +2766,10 @@ static void cs_add_cheat(void)
     if (cheat_count + 2 > CHEAT_MAX) { cs_set_text("The cheat list is full (%d cheats).", CHEAT_MAX); return; }
     {
       char base[128];
-      lstrcpynA(base, name, sizeof(base));       /* the name is both read and rewritten: from a copy */
-      gui_snprintf(name2, sizeof(name2), "%.100s (2/2)", base);
-      gui_snprintf(name, sizeof(name), "%.100s (1/2)", base);
+      lstrcpynA(base, name, 101);                /* the name is both read and rewritten: from a copy (cut to 100 bytes, between two characters) */
+      gui_utf8_trim(base);
+      gui_snprintf(name2, sizeof(name2), "%s (2/2)", base);
+      gui_snprintf(name, sizeof(name), "%s (1/2)", base);
     }
     cheats_add(code, name);
     cheats_add(code2, name2);
@@ -2868,12 +2863,8 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
     {
-      int id = GetDlgCtrlID((HWND)lp);
       HBRUSH br;
-      if (id == IDC_CS_VALUE || id == IDC_CS_NAME || id == IDC_CS_SETVAL)
-        br = theme_ctlcolor_custom((HDC)wp, RGB(0x38, 0x38, 0x38), 1);
-      else
-        br = theme_ctlcolor((HDC)wp);
+      br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
       if (br) return (LRESULT)br;
       break;
     }

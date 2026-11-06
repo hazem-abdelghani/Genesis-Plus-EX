@@ -26,7 +26,7 @@
 #ifndef THEME_H
 #define THEME_H
 
-enum { THEME_AUTO = 0, THEME_LIGHT = 1, THEME_DARK = 2 };
+enum { THEME_AUTO = 0, THEME_LIGHT = 1, THEME_DARK = 2, THEME_SAPPHIRE = 3, THEME_RUBY = 4, THEME_EMERALD = 5, THEME_AMETHYST = 6, THEME_AMBER = 7, THEME_AQUAMARINE = 8, THEME_DIAMOND = 9, THEME_COUNT = 10 };      /* 3 and up: dark themes with a tint of their own */
 
 /* Call once at startup, after the main window exists. Detects the
    current Windows setting and loads the uxtheme.dll entry points --
@@ -68,6 +68,7 @@ int theme_handle_settingchange(HWND hwnd);
    meaning the caller should fall through to its own default handling
    instead. */
 HBRUSH theme_ctlcolor(HDC hdc);
+HBRUSH theme_ctlcolor_ctl(HDC hdc, HWND ctl);                  /* the same for a given control: a text box is #383838, or #2D2D2D when greyed out or read-only */
 void theme_fit_dropdown(HWND combo);      /* the list as wide as its longest entry */
 
 /* cache_id: a small, distinct integer (0-3) per call site, so each
@@ -121,13 +122,15 @@ HFONT theme_menu_font(void);             /* the font the program draws its menus
 void theme_menu_icon(HMENU menu, UINT id, unsigned short glyph);   /* a picture for one item of a menu built on the spot */
 void theme_draw_dropdown_button(const DRAWITEMSTRUCT *di);   /* a button that opens a list: its text and a whole down arrow */
 /* The dark theme's flat colors, in one place (the same values everywhere they were written out by hand). */
-#define THEME_DARK_BG      RGB(32, 32, 32)      /* behind everything */
-#define THEME_DARK_MENU    RGB(44, 44, 44)      /* the background of the menus (Large interface) */
-#define THEME_DARK_MENUBAR RGB(0x27, 0x27, 0x27) /* the background of the menu bar (File, Emulation ...) */
-#define THEME_DARK_TEXT    RGB(240, 240, 240)
-#define THEME_DARK_MUTED   RGB(120, 120, 120)   /* disabled text */
-#define THEME_DARK_HOT     RGB(62, 62, 62)      /* the item under the pointer / selected */
-#define THEME_DARK_LINE    RGB(85, 85, 85)      /* thin frames */
+int theme_colored(void);                /* 1 in the colored themes (Sapphire, Ruby, Emerald ...) */
+COLORREF theme_dk(COLORREF gray);       /* a gray of the dark theme as the theme in use draws it: itself in Dark, tinted in the colored themes */
+#define THEME_DARK_BG      theme_dk(RGB(32, 32, 32))      /* behind everything */
+#define THEME_DARK_MENU    theme_dk(RGB(44, 44, 44))      /* the background of the menus (Large interface) */
+#define THEME_DARK_MENUBAR theme_dk(RGB(0x27, 0x27, 0x27)) /* the background of the menu bar (File, Emulation ...) */
+#define THEME_DARK_TEXT    theme_dk(RGB(240, 240, 240))
+#define THEME_DARK_MUTED   theme_dk(RGB(120, 120, 120))   /* disabled text */
+#define THEME_DARK_HOT     theme_dk(RGB(62, 62, 62))      /* the item under the pointer / selected */
+#define THEME_DARK_LINE    theme_dk(RGB(85, 85, 85))      /* thin frames */
 #define THEME_LIGHT_LINE   RGB(205, 205, 205)
 
 COLORREF theme_accent_bg(void);     /* the accent color (Settings > General > Accent Color) */

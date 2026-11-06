@@ -115,6 +115,15 @@ static void draw_icon(Canvas *c, int icon)
       poly(c, p, 6, 0, 1.9);
       break;
 
+    case TI_DISC:      /* a disc: the rim, the hole and a glint */
+    {
+      double d = PI_ / 180.0;
+      ellipse(c, 12, 12, 9, 0, 2.0);
+      ellipse(c, 12, 12, 2.6, 0, 2.0);
+      arc(c, 12, 12, 5.9, 250 * d, 200 * d, 1.7);
+      break;
+    }
+
     case TI_REFRESH:   /* Lucide "RefreshCw": two arcs with arrowheads, clockwise */
     {
       double d = PI_ / 180.0;
@@ -373,7 +382,7 @@ int tb_bar_h_rows(int rows)
   return rows * tb_button_h() + (rows - 1) * TBS(2) + TBS(8);
 }
 
-void tb_set_label(HWND b, const char *label) { if (b) SetPropA(b, "tblabel", (HANDLE)label); }
+void tb_set_label(HWND b, const char *label) { if (b) SetPropA(b, "tblabel", (HANDLE)tr(label)); }       /* (the translation: the width of the button follows it) */
 
 int tb_button_w(HWND b)
 {
@@ -400,6 +409,7 @@ COLORREF tb_icon_color(int icon)
   {
     case TI_OPEN:       return dark ? RGB(0xF5, 0xB8, 0x3D) : RGB(0xB9, 0x78, 0x00);
     case TI_REFRESH:
+    case TI_DISC:
     case TI_PLAY:       return dark ? RGB(0x4C, 0xC7, 0x64) : RGB(0x1E, 0x8A, 0x3A);
     case TI_STOP:       return dark ? RGB(0xFF, 0x6B, 0x6B) : RGB(0xC6, 0x28, 0x28);
     case TI_RESET:
@@ -419,10 +429,10 @@ COLORREF tb_icon_color(int icon)
 
 COLORREF tb_face_color(void)
 {
-  return theme_is_dark() ? RGB(32, 32, 32) : GetSysColor(COLOR_BTNFACE);
+  return theme_is_dark() ? theme_dk(RGB(32, 32, 32)) : GetSysColor(COLOR_BTNFACE);
 }
 static COLORREF text_color(void) { return theme_is_dark() ? RGB(240, 240, 240) : GetSysColor(COLOR_BTNTEXT); }
-static COLORREF gray_color(void) { return theme_is_dark() ? RGB(120, 120, 120) : GetSysColor(COLOR_GRAYTEXT); }
+static COLORREF gray_color(void) { return theme_is_dark() ? theme_dk(RGB(120, 120, 120)) : GetSysColor(COLOR_GRAYTEXT); }
 
 /****************************************************************************
  * The buttons
@@ -524,6 +534,60 @@ void tb_set_checked(HWND b, int on)
   InvalidateRect(b, NULL, FALSE);
 }
 
+/* A rounded plate with smooth (anti-aliased) corners: GDI's RoundRect has none, and its corners look jagged. Each pixel in a corner gets the
+   share of it that lies inside the curve (4 x 4 samples), blended between the color around the plate and the plate's. */
+static void tb_plate(HDC dc, int x0, int y0, int x1, int y1, int rad, COLORREF around, COLORREF plate)
+{
+  int w = x1 - x0, h = y1 - y0, x, y, sx, sy;
+  BITMAPINFO bi;
+  unsigned *bits = NULL;
+  HDC mdc;
+  HBITMAP bmp, old;
+
+  if (w <= 0 || h <= 0) return;
+  if (rad * 2 > w) rad = w / 2;
+  if (rad * 2 > h) rad = h / 2;
+  memset(&bi, 0, sizeof(bi));
+  bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+  bi.bmiHeader.biWidth = w;
+  bi.bmiHeader.biHeight = -h;
+  bi.bmiHeader.biPlanes = 1;
+  bi.bmiHeader.biBitCount = 32;
+  bi.bmiHeader.biCompression = BI_RGB;
+  mdc = CreateCompatibleDC(dc);
+  bmp = CreateDIBSection(mdc, &bi, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+  if (!bmp) { DeleteDC(mdc); return; }
+  old = (HBITMAP)SelectObject(mdc, bmp);
+
+  for (y = 0; y < h; y++)
+    for (x = 0; x < w; x++)
+    {
+      int cx = x < rad ? rad : x >= w - rad ? w - rad : -1, cy = y < rad ? rad : y >= h - rad ? h - rad : -1;
+      int a = 255;
+
+      if (cx >= 0 && cy >= 0)       /* in a corner square */
+      {
+        int inside = 0;
+
+        for (sy = 0; sy < 4; sy++)
+          for (sx = 0; sx < 4; sx++)
+          {
+            double dx = (x + (sx + 0.5) / 4.0) - cx, dy = (y + (sy + 0.5) / 4.0) - cy;
+
+            if (dx * dx + dy * dy <= (double)rad * rad) inside++;
+          }
+        a = inside * 255 / 16;
+      }
+      bits[y * w + x] = ((unsigned)((GetRValue(around) * (255 - a) + GetRValue(plate) * a) / 255) << 16) |
+                        ((unsigned)((GetGValue(around) * (255 - a) + GetGValue(plate) * a) / 255) << 8) |
+                        (unsigned)((GetBValue(around) * (255 - a) + GetBValue(plate) * a) / 255);
+    }
+  BitBlt(dc, x0, y0, w, h, mdc, 0, 0, SRCCOPY);
+  SelectObject(mdc, old);
+  DeleteObject(bmp);
+  DeleteDC(mdc);
+}
+
 int tb_draw(const DRAWITEMSTRUCT *di)
 {
   if (!di) return 0;
@@ -564,13 +628,13 @@ int tb_draw(const DRAWITEMSTRUCT *di)
     {
       if (gui.ui_style)      /* Modern: softer plates with a hint of blue */
       {
-        if (down)      bg = dark ? RGB(70, 76, 92) : RGB(205, 214, 230);
-        else if (hot)  bg = dark ? RGB(56, 60, 72) : RGB(224, 230, 241);
-        else           bg = dark ? RGB(50, 58, 78) : RGB(214, 224, 242);
+        if (down)      bg = dark ? theme_dk(RGB(70, 76, 92)) : RGB(205, 214, 230);
+        else if (hot)  bg = dark ? theme_dk(RGB(56, 60, 72)) : RGB(224, 230, 241);
+        else           bg = dark ? theme_dk(RGB(50, 58, 78)) : RGB(214, 224, 242);
       }
-      else if (down) bg = dark ? RGB(92, 92, 92) : RGB(196, 196, 196);
-      else if (hot)  bg = dark ? RGB(68, 68, 68) : RGB(222, 222, 222);
-      else           bg = dark ? RGB(62, 62, 62) : RGB(214, 214, 214);
+      else if (down) bg = dark ? theme_dk(RGB(92, 92, 92)) : theme_dk(RGB(196, 196, 196));
+      else if (hot)  bg = dark ? theme_dk(RGB(68, 68, 68)) : RGB(222, 222, 222);
+      else           bg = dark ? theme_dk(RGB(62, 62, 62)) : RGB(214, 214, 214);
     }
 
     hb = CreateSolidBrush(face);
@@ -578,13 +642,7 @@ int tb_draw(const DRAWITEMSTRUCT *di)
     DeleteObject(hb);
 
     if (bg != face)   /* a soft rounded plate under the icon */
-    {
-      HBRUSH pb = CreateSolidBrush(bg);
-      HGDIOBJ ob = SelectObject(di->hDC, pb), op = SelectObject(di->hDC, GetStockObject(NULL_PEN));
-      RoundRect(di->hDC, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, TBS(8), TBS(8));
-      SelectObject(di->hDC, ob); SelectObject(di->hDC, op);
-      DeleteObject(pb);
-    }
+      tb_plate(di->hDC, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, TBS(4), face, bg);
 
     mk = mask_for(icon, sz);
     if (!mk) return 1;

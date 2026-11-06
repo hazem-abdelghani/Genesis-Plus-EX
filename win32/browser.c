@@ -93,14 +93,17 @@ static int spare_matches(int k, const char *full, const WIN32_FIND_DATAA *fd)
          CompareFileTime(&spare[k].mtime, &fd->ftLastWriteTime) == 0 && !lstrcmpA(spare[k].full_path, full);
 }
 
+static int scan_known, scan_unknown;       /* (for the log) files found in the last scan or saved list, and files looked at again */
+
 /* Console label of an unchanged file from the previous scan, or NULL. */
 static const char *cached_archive_console(const char *full, const WIN32_FIND_DATAA *fd)
 {
   int k;
 
-  if (spare_hint < spare_count && spare_matches(spare_hint, full, fd)) return spare[spare_hint++].console;
+  if (spare_hint < spare_count && spare_matches(spare_hint, full, fd)) { scan_known++; return spare[spare_hint++].console; }
   for (k = 0; k < spare_count; k++)
-    if (spare_matches(k, full, fd)) { spare_hint = k + 1; return spare[k].console; }
+    if (spare_matches(k, full, fd)) { spare_hint = k + 1; scan_known++; return spare[k].console; }
+  scan_unknown++;
   return NULL;
 }
 
@@ -125,10 +128,15 @@ static const char *heading_label(int kind)
 }
 static int heading_rows;     /* heading rows in the list (0, 1 or 2) */
 static int recent_group_n;   /* games in the Recently Played group at the top */
+static int *recent_extra;    /* while the list is made: the games the filter bar left out that may still be in Recently Played, which ignores it */
+static int recent_extra_n;
 static int recent_dup;       /* 1: those games are in the list a second time, in All Games (when there is room for the copies) */
 static void browser_apply_filter(void);
 static void grid_hide_top_blank(void);
 void browser_grid_check_cols(void);
+static void grid_schedule_settle(void);
+static int grid_icon_cal;        /* where a cover sits in its item has been measured (see grid_icon_rect) */
+static int grid_icon_dy, grid_icon_w, grid_icon_h;
 static int grid_headed;      /* the grid has heading rows (with empty cells that fill the rest of their rows) */
 static int grid_built_cols;  /* how many covers a row held when they were made */
 static int grid_cols_force;  /* the number measured on screen, when it was not what was worked out */
@@ -149,6 +157,7 @@ static HWND panel_toolbar;   /* the toolbar: also shown while a game runs in a w
 static HWND panel_bar;       /* search bar and filter bar */
 static HWND panel_search;
 static HWND panel_search_label;
+static HWND panel_filter_label;     /* "Filters:" */
 static HWND panel_search_close;
 static HWND panel_search_clear;     /* the x inside the search box */
 static HWND panel_filter[3];       /* console, region, folder */
@@ -200,7 +209,7 @@ static int fixed_col_w(int i)
     case COL_GENRE: return TBS(120);
     case COL_REGION: return TBS(90);
     case COL_SIZE:  return TBS(80);
-    case COL_TYPE:  return TBS(70);
+    case COL_TYPE:  return TBS(90);
   }
   return 0;
 }
@@ -249,11 +258,30 @@ static const char *classify_extension(const char *ext)
   return NULL;
 }
 
+/* Is this file name a game of its own (a cartridge game: Mega Drive, 32X, Master System, Game Gear, SG-1000), not a CD image, an archive,
+   a track or a picture? For choosing the game among the files of an archive. */
+int browser_is_game_name(const char *name)
+{
+  const char *dot = strrchr(name, '.'), *c;
+
+  if (!dot || !dot[1]) return 0;
+  c = classify_extension(dot + 1);
+  return c && lstrcmpiA(c, "Archive") && lstrcmpiA(c, "Mega CD / Sega CD");
+}
+
 /* A Mega Drive file whose header (at 0x100) says SEGA PICO is a Pico game. */
 #define PICO_LABEL "Sega Pico"
+#define PICO_PROBE 0x310          /* bytes read to look for it: the header at 0x100, or at 0x300 behind a 512-byte copier header */
+static int header_has_pico(const unsigned char *b)
+{
+  int i;
+  for (i = 0; i <= 16 - 9; i++)           /* (the core looks for it anywhere in the 16-byte console field) */
+    if (!memcmp(b + i, "SEGA PICO", 9)) return 1;
+  return 0;
+}
 static int header_is_pico(const unsigned char *b, int n)
 {
-  return n >= 0x110 && !memcmp(b + 0x100, "SEGA PICO", 9);
+  return (n >= 0x110 && header_has_pico(b + 0x100)) || (n >= PICO_PROBE && header_has_pico(b + 0x300));
 }
 
 static int is_md_label(const char *console)
@@ -264,7 +292,7 @@ static int is_md_label(const char *console)
 /* The console of a plain Mega Drive file: Sega Pico when its header says so. */
 static const char *refine_pico_file(const char *console, const char *full_path)
 {
-  unsigned char b[0x110];
+  unsigned char b[PICO_PROBE];
   DWORD got = 0;
   HANDLE f;
 
@@ -308,16 +336,35 @@ const char *browser_console_for_path(const char *full_path)
   return console;
 }
 
+/* In an archive, a .bin beside a .cue sheet (and with no cartridge ROM in it) is a track of a Mega CD disc, not a Mega Drive game: what the
+   names of the entries say. kind: 1 a .cue, 2 a cartridge ROM (not a .bin), 0 anything else. */
+static int archive_name_kind(const char *name)
+{
+  const char *d = strrchr(name, '.');
+
+  if (!d || !d[1]) return 0;
+  if (!lstrcmpiA(d, ".cue")) return 1;
+  if (!lstrcmpiA(d, ".bin") || !lstrcmpiA(d, ".iso") || !lstrcmpiA(d, ".chd")) return 0;
+  return browser_is_game_name(name) ? 2 : 0;
+}
+
 #ifdef USE_LIBCHDR
 /* Same idea as classify_archive's zip branch below, for a .7z archive. */
 static const char *classify_7z(const char *full_path, int look)
 {
   sevenzip_t *sz = sevenzip_open(full_path);
-  int i, count;
+  int i, count, disc_sheet = 0, cart_rom = 0;
 
   if (!sz) return "Archive";
 
   count = sevenzip_count(sz);
+  for (i = 0; i < count; i++)                                           /* (a disc sheet and no cartridge ROM: see archive_name_kind) */
+  {
+    char nm[MAX_PATH];
+    if (sevenzip_entry_is_dir(sz, i)) continue;
+    sevenzip_entry_name(sz, i, nm, sizeof(nm));
+    { int kd = archive_name_kind(nm); if (kd == 1) disc_sheet = 1; else if (kd == 2) cart_rom = 1; }
+  }
   for (i = 0; i < count; i++)
   {
     char inner_name[MAX_PATH];
@@ -330,11 +377,12 @@ static const char *classify_7z(const char *full_path, int look)
     if (inner_dot && inner_dot[1])
     {
       const char *console = classify_extension(inner_dot + 1);
+      if (console && disc_sheet && !cart_rom && !lstrcmpiA(inner_dot, ".bin")) console = "Mega CD / Sega CD";
       if (console && lstrcmpiA(console, "Archive") != 0)
       {
         if (look && is_md_label(console))
         {
-          unsigned char b[0x110];
+          unsigned char b[PICO_PROBE];
           int got = sevenzip_extract(sz, i, b, (int)sizeof(b));
           if (got > 0 && header_is_pico(b, got)) console = PICO_LABEL;
         }
@@ -360,7 +408,7 @@ static const char *classify_7z(const char *full_path, int look)
 static const char *classify_archive(const char *full_path, int look)
 {
   unzFile zf;
-  int result;
+  int result, disc_sheet = 0, cart_rom = 0;
 
 #ifdef USE_LIBCHDR
   if (is_7z_path(full_path)) return classify_7z(full_path, look);
@@ -368,6 +416,13 @@ static const char *classify_archive(const char *full_path, int look)
 
   zf = unzOpen(full_path);
   if (!zf) return "Archive";
+
+  for (result = unzGoToFirstFile(zf); result == UNZ_OK; result = unzGoToNextFile(zf))          /* (a disc sheet and no cartridge ROM: see archive_name_kind) */
+  {
+    char nm[MAX_PATH];
+    if (unzGetCurrentFileInfo(zf, NULL, nm, sizeof(nm), NULL, 0, NULL, 0) == UNZ_OK)
+    { int kd = archive_name_kind(nm); if (kd == 1) disc_sheet = 1; else if (kd == 2) cart_rom = 1; }
+  }
 
   result = unzGoToFirstFile(zf);
   while (result == UNZ_OK)
@@ -381,13 +436,14 @@ static const char *classify_archive(const char *full_path, int look)
       if (inner_dot && inner_dot[1])
       {
         const char *console = classify_extension(inner_dot + 1);
+        if (console && disc_sheet && !cart_rom && !lstrcmpiA(inner_dot, ".bin")) console = "Mega CD / Sega CD";
         /* Recognized and not itself another archive -- zip-in-zip isn't
            worth recursing into for a file browser column. */
         if (console && lstrcmpiA(console, "Archive") != 0)
         {
           if (look && is_md_label(console) && unzOpenCurrentFile(zf) == UNZ_OK)
           {
-            unsigned char b[0x110];
+            unsigned char b[PICO_PROBE];
             int got = unzReadCurrentFile(zf, b, sizeof(b));
             unzCloseCurrentFile(zf);
             if (header_is_pico(b, got)) console = PICO_LABEL;
@@ -518,7 +574,7 @@ static void classify_region(const char *name, char *out, int out_len)
  *
  * Which genre a game has comes from a small table built into the program
  * (genres.bin: the genre lists of the libretro database for the Mega Drive,
- * Master System, Game Gear and SG-1000), looked up by the game's title: the
+ * Master System, Game Gear, SG-1000 and 32X; a Pico game with no entry is "Educational"), looked up by the game's title: the
  * file name up to its first "(" or "[", without the extension, "The", spaces
  * or punctuation, in lower case. A game that is not in it has no genre.
  ****************************************************************************/
@@ -726,6 +782,43 @@ static void cue_file_n(const char *cue, int nth, char *out, int out_len)
   fclose(fp);
 }
 
+/* An MD+ or MSU-MD game is a cartridge ROM with a .cue sheet of the same name beside it that has MegaSD lines (REM LOOP, REM NOLOOP) or lists audio tracks only, and plays its
+   music from the audio files of the sheet. The ROM is the game; the .cue is not listed as a Mega CD game of its own. (A Mega CD disc has
+   a big .bin, not a ROM of up to 8 MB, and no such lines.) */
+static int cue_is_md_plus(const char *dir, const char *cue_name)
+{
+  static const char *const rom_ext[] = { ".md", ".gen", ".smd", ".mdx", ".68k", ".bin", ".32x" };
+  char base[MAX_PATH], path[GUI_PATH_LEN], buf[8192];
+  const char *dot = strrchr(cue_name, '.');
+  WIN32_FIND_DATAA fd;
+  HANDLE h;
+  FILE *fp;
+  size_t got, k;
+  int rom = 0;
+
+  if (!dot || dot == cue_name || dot - cue_name >= (int)sizeof(base)) return 0;
+  memcpy(base, cue_name, (size_t)(dot - cue_name));
+  base[dot - cue_name] = '\0';
+  for (k = 0; k < sizeof(rom_ext) / sizeof(rom_ext[0]) && !rom; k++)
+  {
+    gui_snprintf(path, (int)sizeof(path), "%s\\%s%s", dir, base, rom_ext[k]);
+    h = FindFirstFileA(path, &fd);
+    if (h == INVALID_HANDLE_VALUE) continue;
+    FindClose(h);
+    if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && fd.nFileSizeHigh == 0 && fd.nFileSizeLow <= 0x800000) rom = 1;
+  }
+  if (!rom) return 0;
+  gui_snprintf(path, (int)sizeof(path), "%s\\%s", dir, cue_name);
+  fp = fopen(path, "rb");
+  if (!fp) return 0;
+  got = fread(buf, 1, sizeof(buf) - 1, fp);
+  fclose(fp);
+  buf[got] = '\0';
+  if (strstr(buf, "REM LOOP") != NULL || strstr(buf, "REM NOLOOP") != NULL) return 1;
+  for (k = 0; k < got; k++) if (buf[k] >= 'a' && buf[k] <= 'z') buf[k] = (char)(buf[k] - 32);
+  return strstr(buf, "TRACK") != NULL && strstr(buf, "MODE1") == NULL && strstr(buf, "MODE2") == NULL;      /* a sheet of audio tracks only (MSU-MD, 32X+): no disc */
+}
+
 #define CUE_REFS_MAX 256
 
 /* Every file the .cue sheets of a folder name (the tracks of a disc: they are not games of their own). */
@@ -849,6 +942,7 @@ static void scan_dir(const char *dir, const char *rel, int depth)
       else if (!lstrcmpiA(dot, ".cue"))
       {
         char first[GUI_PATH_LEN];
+        if (cue_is_md_plus(dir, fd.cFileName)) continue;          /* (an MD+ game: its ROM is the game) */
         cue_file_n(full, 0, first, (int)sizeof(first));
         if (first[0] && !disc_header_ok(first, 1)) continue;
       }
@@ -874,6 +968,7 @@ static void scan_dir(const char *dir, const char *rel, int depth)
         if (base_len >= (int)sizeof(base)) base_len = sizeof(base) - 1;
         memcpy(base, fd.cFileName, (size_t)base_len);
         base[base_len] = '\0';
+        gui_utf8_trim(base);
 
         gui_snprintf(cue_path, (int)sizeof(cue_path), "%s\\%s.cue", dir, base);
         if (GetFileAttributesA(cue_path) != INVALID_FILE_ATTRIBUTES) continue;
@@ -895,6 +990,7 @@ static void scan_dir(const char *dir, const char *rel, int depth)
       e->cover_ext = COVERART_UNCHECKED;
       classify_region(fd.cFileName, e->region, (int)sizeof(e->region));
       classify_genre(fd.cFileName, e->genre, (int)sizeof(e->genre));
+      if (!e->genre[0] && !lstrcmpA(e->console, PICO_LABEL)) lstrcpynA(e->genre, "Educational", sizeof(e->genre));   /* (a Pico game kept from the last scan) */
       e->img_slot = -1;
       e->img_gen = 0;
       e->outside = 0;
@@ -919,6 +1015,19 @@ static void scan_dir(const char *dir, const char *rel, int depth)
  * Folder picker
  ****************************************************************************/
 
+static int pick_folder(HWND parent, char *out, int out_len);
+int gui_pick_folder(HWND parent, const char *title, char *out, int out_len);
+static const char *pick_title = "Choose a folder to scan for ROMs";
+
+int gui_pick_folder(HWND parent, const char *title, char *out, int out_len)
+{
+  int ok;
+  pick_title = title;
+  ok = pick_folder(parent, out, out_len);
+  pick_title = "Choose a folder to scan for ROMs";
+  return ok;
+}
+
 static int pick_folder(HWND parent, char *out, int out_len)
 {
   BROWSEINFOA bi;
@@ -927,7 +1036,7 @@ static int pick_folder(HWND parent, char *out, int out_len)
 
   ZeroMemory(&bi, sizeof(bi));
   bi.hwndOwner = parent;
-  bi.lpszTitle = "Choose a folder to scan for ROMs";
+  bi.lpszTitle = tr(pick_title);
   bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
 
   {
@@ -998,6 +1107,7 @@ static void fill_filters(void)
   {
     int sel = 0;
 
+    SendMessage(panel_filter[k], WM_SETREDRAW, FALSE, 0);        /* (no drawing of its own in between: it showed as a white flash) */
     SendMessageA(panel_filter[k], CB_RESETCONTENT, 0, 0);
     SendMessageA(panel_filter[k], CB_ADDSTRING, 0, (LPARAM)all_text[k]);
     for (i = 0; i < f_count[k]; i++)
@@ -1010,6 +1120,8 @@ static void fill_filters(void)
       if (k == 2 && sel_reg[0] && !lstrcmpiA(s, sel_reg)) sel = i + 1;
     }
     SendMessageA(panel_filter[k], CB_SETCURSEL, (WPARAM)sel, 0);
+    SendMessage(panel_filter[k], WM_SETREDRAW, TRUE, 0);
+    RedrawWindow(panel_filter[k], NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
 
     if (!sel && entry_count > 0)   /* what was chosen is gone from the folder (an empty list says nothing) */
     {
@@ -1080,6 +1192,20 @@ static void update_status_count(void)
    filtering, before any rows are actually inserted, so rows always go
    into the ListView already in the right order rather than needing a
    second re-sort pass afterward. */
+/* The short tag of a console (MD, MCD, 32X, SMS, GG, SG, PICO), NULL for anything else. */
+static const char *console_tag(const char *console)
+{
+  if (!console) return NULL;
+  if (!lstrcmpiA(console, "Mega Drive / Genesis")) return "MD";
+  if (!lstrcmpiA(console, "Mega CD / Sega CD")) return "MCD";
+  if (!lstrcmpiA(console, "32X")) return "32X";
+  if (!lstrcmpiA(console, "Master System")) return "SMS";
+  if (!lstrcmpiA(console, "Game Gear")) return "GG";
+  if (!lstrcmpiA(console, "SG-1000")) return "SG";
+  if (!lstrcmpiA(console, PICO_LABEL)) return "PICO";
+  return NULL;
+}
+
 /* The file's extension without the dot ("" when it has none). */
 static const char *file_ext(const char *path)
 {
@@ -1429,6 +1555,7 @@ void browser_rebuild_grid_images(void)
   int size = gui.browser_grid_size;
   HBITMAP placeholder;
 
+  grid_icon_cal = 0;                                    /* (the tiles may have another size) */
   if (!panel_list) return;
 
   if (grid_imagelist)
@@ -1481,6 +1608,7 @@ void browser_rebuild_grid_images(void)
   browser_grid_check_cols();
   ListView_Arrange(panel_list, LVA_DEFAULT);
   RedrawWindow(panel_list, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+  grid_schedule_settle();                         /* (and once more when the grid has settled: frames and badges are drawn a little outside what the list repaints) */
 }
 
 /* The image-list index to show for an entry, loading its cover the first time. */
@@ -1516,12 +1644,20 @@ static void browser_grid_refresh_cover(int item_index)
   if (gui.browser_grid_view) browser_rebuild_grid_images();
 }
 
+/* Only the badges changed: the covers are drawn again as they are (nothing is read or scaled again). */
+void browser_redraw_covers(void)
+{
+  if (panel_list) InvalidateRect(panel_list, NULL, FALSE);
+}
+
 /* Settings > General: the cover frame, rounded corners or caption changed. */
 void browser_cover_style_changed(void)
 {
+  grid_icon_cal = 0;
   coverart_set_style(gui.cover_shape, gui.cover_round);
   coverart_set_cache(gui.cover_cache);
   if (!panel_list) return;
+  InvalidateRect(panel_list, NULL, TRUE);
   SendMessage(panel_list, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_HIDELABELS, gui.cover_caption == 1 ? LVS_EX_HIDELABELS : 0);
   if (gui.browser_grid_view && grid_imagelist)
   {
@@ -1818,6 +1954,23 @@ static void CALLBACK grid_reflow_timer(HWND hwnd, UINT msg, UINT_PTR id, DWORD n
   (void)msg; (void)now;
 }
 
+/* A frame or badge is drawn a little outside what the list repaints by itself while it is resized, so pieces of one can be left behind
+   where the tiles moved. Once the resizing has stopped the whole grid is painted again (one paint, no matter how many resizes). */
+static void CALLBACK grid_settle_timer(HWND hwnd, UINT msg, UINT_PTR id, DWORD now);
+
+static void grid_schedule_settle(void)
+{
+  if (panel_list && gui.browser_grid_view && (gui.cover_card || gui.console_badge)) SetTimer(panel_list, 0x6A1E, 150, grid_settle_timer);
+}
+
+static void CALLBACK grid_settle_timer(HWND hwnd, UINT msg, UINT_PTR id, DWORD now)
+{
+  KillTimer(hwnd, id);
+  if (panel_list && gui.browser_grid_view && IsWindowVisible(panel_list))
+    RedrawWindow(panel_list, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+  (void)msg; (void)now;
+}
+
 /* The grid's width or cell size changed: with headings, the rows are made again when the number of covers per row differs. */
 void browser_grid_check_cols(void)
 {
@@ -1844,6 +1997,8 @@ static void browser_apply_filter(void)
   query_parse(search, &query);
 
   filtered_count = 0;
+  recent_extra = (int *)malloc(sizeof(int) * (size_t)(entry_count > 0 ? entry_count : 1));
+  recent_extra_n = 0;
   for (i = 0; i < entry_count; i++)
   {
     entries[i].fav = (signed char)config_fav_has(entries[i].full_path);
@@ -1852,9 +2007,14 @@ static void browser_apply_filter(void)
     if (!query_match(&query, &entries[i])) continue;
     if (!gui.hide_filterbar && !searching)
     {
-      if (sel_con[0] && lstrcmpiA(entries[i].console, sel_con)) continue;
-      if (sel_reg[0] && lstrcmpiA(entries[i].region, sel_reg)) continue;
-      if (sel_fol_on && lstrcmpiA(entries[i].genre, sel_fol)) continue;
+      if ((sel_con[0] && lstrcmpiA(entries[i].console, sel_con)) ||
+          (sel_reg[0] && lstrcmpiA(entries[i].region, sel_reg)) ||
+          (sel_fol_on && lstrcmpiA(entries[i].genre, sel_fol)))
+      {
+        /* Left out by the filter bar: not in All Games, but still a candidate for Recently Played, which ignores the filter bar. */
+        if (recent_extra && entries[i].last_played) recent_extra[recent_extra_n++] = i;
+        continue;
+      }
     }
     filtered_index[filtered_count++] = i;
   }
@@ -1866,22 +2026,25 @@ static void browser_apply_filter(void)
   /* The last few games played move to the front, as a group of their own (not when the list is grouped by console). */
   recent_group_n = 0;
   recent_dup = 0;
-  if (gui.recent_mode && filtered_count > 0 && !gui.group_console)
+  if (gui.recent_mode && filtered_count + recent_extra_n > 0 && !gui.group_console)
   {
     int *tmp = (int *)malloc(sizeof(int) * (size_t)(filtered_count + RECENT_GROUP_SIZE));
-    if (tmp)
+    int *cand = (int *)malloc(sizeof(int) * (size_t)(filtered_count + recent_extra_n));      /* the games of the list, then those the filter bar left out */
+    if (tmp && cand)
     {
-      int n = 0, k, best;
-      char *taken = (char *)calloc((size_t)filtered_count, 1);
+      int n = 0, k, best, total = filtered_count + recent_extra_n;
+      char *taken = (char *)calloc((size_t)total, 1);
+      memcpy(cand, filtered_index, sizeof(int) * (size_t)filtered_count);
+      if (recent_extra_n) memcpy(cand + filtered_count, recent_extra, sizeof(int) * (size_t)recent_extra_n);
       while (taken && n < RECENT_GROUP_SIZE)
       {
         best = -1;
-        for (k = 0; k < filtered_count; k++)
-          if (!taken[k] && entries[filtered_index[k]].last_played &&
-              (best < 0 || entries[filtered_index[k]].last_played > entries[filtered_index[best]].last_played)) best = k;
+        for (k = 0; k < total; k++)
+          if (!taken[k] && entries[cand[k]].last_played &&
+              (best < 0 || entries[cand[k]].last_played > entries[cand[best]].last_played)) best = k;
         if (best < 0) break;
         taken[best] = 1;
-        tmp[n++] = filtered_index[best];
+        tmp[n++] = cand[best];
       }
       if (taken && n > 0)
       {
@@ -1895,9 +2058,12 @@ static void browser_apply_filter(void)
         recent_dup = dup;
       }
       free(taken);
-      free(tmp);
     }
+    free(cand);
+    free(tmp);
   }
+  free(recent_extra);
+  recent_extra = NULL;
 
   /* A game from outside the library folders is only for the Recently Played group (the first recent_group_n rows). */
   outside_shown = 0;
@@ -2017,6 +2183,11 @@ static void browser_apply_filter(void)
       else gui_snprintf(sz, sizeof(sz), "%lu KB", kb);
       lstrcpynA(ty, file_ext(entries[idx].full_path), sizeof(ty));
       CharUpperA(ty);
+      if (!lstrcmpA(ty, "ZIP") || !lstrcmpA(ty, "7Z") || !lstrcmpA(ty, "GZ"))        /* an archive: what is in it, then what it is ("MD (ZIP)", "32X (7Z)") */
+      {
+        const char *tag = console_tag(entries[idx].console);
+        if (tag) { char both[16]; gui_snprintf(both, sizeof(both), "%s (%s)", tag, ty); lstrcpynA(ty, both, sizeof(ty)); }
+      }
       item.iSubItem = COL_SIZE;
       item.pszText  = sz;
       SendMessageA(panel_list, LVM_SETITEMTEXTA, (WPARAM)row, (LPARAM)&item);
@@ -2029,6 +2200,7 @@ static void browser_apply_filter(void)
   SendMessage(panel_list, WM_SETREDRAW, TRUE, 0);
   grid_hide_top_blank();
   InvalidateRect(panel_list, NULL, TRUE);
+  grid_schedule_settle();
 
   /* The headings of the grid rely on how many covers a row holds; if the grid shows another number than was worked out
      (a scroll bar took some room), the rows are made again for the real one. */
@@ -2049,6 +2221,8 @@ static void browser_apply_filter(void)
   update_status_count();
   browser_toolbar_update();
 }
+
+void browser_status_count_show(void) { update_status_count(); }
 
 /* A game opened from outside the library folders (the desktop, a download folder) is still one of the last played:
    the newest few history entries the scan did not find are added to the list while their file is still there. */
@@ -2114,6 +2288,7 @@ static void add_outside_recent(void)
 /* Which Mega Drive files are Sega Pico games is found out after the list is shown: opening every file would make a scan of a big library
    slow (a virus scanner looks at each file that is opened). A thread reads the headers of the files not looked at yet and hands back the
    ones that are Pico games; a newer scan makes its answer out of date. */
+static void browser_list_cache_save(void);
 typedef struct { int index; char path[GUI_PATH_LEN]; signed char pico; } pico_job_t;
 typedef struct { LONG gen; int n; pico_job_t job[1]; } pico_scan_t;
 static volatile LONG pico_gen;
@@ -2172,9 +2347,14 @@ void browser_pico_done(LPARAM lp)
       int k = ps->job[i].index;
       if (k >= entry_count || lstrcmpA(entries[k].full_path, ps->job[i].path)) continue;
       entries[k].pico_checked = 1;
-      if (ps->job[i].pico) { lstrcpynA(entries[k].console, PICO_LABEL, sizeof(entries[k].console)); found++; }
+      if (ps->job[i].pico)
+      {
+        lstrcpynA(entries[k].console, PICO_LABEL, sizeof(entries[k].console)); found++;
+        if (!entries[k].genre[0]) lstrcpynA(entries[k].genre, "Educational", sizeof(entries[k].genre));   /* the Pico's library is almost all learning and storybook titles */
+      }
     }
   free(ps);
+  browser_list_cache_save();                    /* (the files just looked at are known next time) */
   if (found && panel_list)
   {
     fill_filters();
@@ -2182,11 +2362,148 @@ void browser_pico_done(LPARAM lp)
   }
 }
 
-static void browser_rescan(void)
+/* The game list kept on disk (Covers\library.dat, with the cover cache): the next start knows the console of each file that has not
+   changed (path, size and date the same) without opening it again, which is what makes a scan of a big library slow. Only that
+   is kept; the list itself is still made by walking the folders, so a file that was added or removed shows up as always. */
+#define LISTCACHE_MAGIC 0x4C585047u      /* "GPXL" */
+#define LISTCACHE_VERSION 3              /* raised when the way a file is classified changes (a list made by an older build is not trusted: 2 = disc archives are Mega CD) */
+
+static void list_cache_path(char *out, int n)
+{
+  lstrcpynA(out, osd_path("Images\\Covers\\library.dat"), n);
+}
+
+static void list_cache_put(unsigned char **p, const void *src, size_t n) { memcpy(*p, src, n); *p += n; }
+
+static void browser_list_cache_save(void)
+{
+  unsigned char *raw, *w;
+  size_t cap = 4;
+  uLongf zlen;
+  Bytef *z;
+  int i, n = 0;
+  unsigned long ncount;
+  char path[GUI_PATH_LEN];
+  HANDLE f;
+  DWORD wrote;
+  unsigned int hdr[3];
+
+  if (!gui.cover_cache || !entries) return;
+  for (i = 0; i < entry_count; i++)
+    if (entries[i].pico_checked && !entries[i].outside)
+    {
+      cap += 2 + (size_t)lstrlenA(entries[i].full_path) + 1 + (size_t)lstrlenA(entries[i].console) + 16;
+      n++;
+    }
+  raw = (unsigned char *)malloc(cap);
+  if (!raw) return;
+  w = raw + 4;
+  for (i = 0; i < entry_count; i++)
+    if (entries[i].pico_checked && !entries[i].outside)
+    {
+      unsigned short pl = (unsigned short)lstrlenA(entries[i].full_path);
+      unsigned char cl = (unsigned char)lstrlenA(entries[i].console);
+      unsigned long long sz = entries[i].size_bytes;
+      DWORD ft[2];
+      ft[0] = entries[i].mtime.dwLowDateTime; ft[1] = entries[i].mtime.dwHighDateTime;
+      list_cache_put(&w, &pl, 2); list_cache_put(&w, entries[i].full_path, pl);
+      list_cache_put(&w, &cl, 1); list_cache_put(&w, entries[i].console, cl);
+      list_cache_put(&w, &sz, 8); list_cache_put(&w, ft, 8);
+    }
+  ncount = (unsigned long)n;
+  memcpy(raw, &ncount, 4);
+  zlen = compressBound((uLong)(w - raw));
+  z = (Bytef *)malloc(zlen);
+  if (z && compress2(z, &zlen, raw, (uLong)(w - raw), 6) == Z_OK)
+  {
+    list_cache_path(path, sizeof(path));
+    f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f != INVALID_HANDLE_VALUE)
+    {
+      hdr[0] = LISTCACHE_MAGIC; hdr[1] = LISTCACHE_VERSION; hdr[2] = (unsigned int)(w - raw);
+      WriteFile(f, hdr, sizeof(hdr), &wrote, NULL);
+      WriteFile(f, z, (DWORD)zlen, &wrote, NULL);
+      CloseHandle(f);
+    }
+  }
+  free(z); free(raw);
+}
+
+/* Fills the (empty) entries with what the last run saved. */
+static void list_cache_load(void)
+{
+  char path[GUI_PATH_LEN];
+  HANDLE f;
+  DWORD size, got;
+  unsigned char *file, *raw, *r, *end;
+  unsigned int hdr[3];
+  unsigned long count, i;
+  uLongf rawlen;
+
+  if (!gui.cover_cache || !entries || entry_count) return;
+  list_cache_path(path, sizeof(path));
+  f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (f == INVALID_HANDLE_VALUE) return;
+  size = GetFileSize(f, NULL);
+  if (size == INVALID_FILE_SIZE || size <= sizeof(hdr) || size > 256u * 1024 * 1024) { CloseHandle(f); return; }
+  file = (unsigned char *)malloc(size);
+  if (!file || !ReadFile(f, file, size, &got, NULL) || got != size) { CloseHandle(f); free(file); return; }
+  CloseHandle(f);
+  memcpy(hdr, file, sizeof(hdr));
+  if (hdr[0] != LISTCACHE_MAGIC || hdr[1] != LISTCACHE_VERSION || hdr[2] < 4 || hdr[2] > 512u * 1024 * 1024) { free(file); return; }
+  rawlen = hdr[2];
+  raw = (unsigned char *)malloc(rawlen);
+  if (!raw || uncompress(raw, &rawlen, file + sizeof(hdr), size - sizeof(hdr)) != Z_OK || rawlen != hdr[2]) { free(file); free(raw); return; }
+  free(file);
+  memcpy(&count, raw, 4);
+  count &= 0xFFFFFFFFul;
+  r = raw + 4; end = raw + rawlen;
+  for (i = 0; i < count && entry_count < BROWSER_MAX_ENTRIES; i++)
+  {
+    unsigned short pl; unsigned char cl; unsigned long long sz; DWORD ft[2];
+    browser_entry_t *e;
+    if (end - r < 2) break;
+    memcpy(&pl, r, 2); r += 2;
+    if (pl >= GUI_PATH_LEN || end - r < (ptrdiff_t)pl + 1) break;
+    e = &entries[entry_count];
+    memset(e, 0, sizeof(*e));
+    memcpy(e->full_path, r, pl); r += pl;
+    cl = *r++;
+    if (cl >= sizeof(e->console) || end - r < (ptrdiff_t)cl + 16) break;
+    memcpy(e->console, r, cl); r += cl;
+    memcpy(&sz, r, 8); r += 8;
+    memcpy(ft, r, 8); r += 8;
+    e->size_bytes = sz;
+    e->mtime.dwLowDateTime = ft[0]; e->mtime.dwHighDateTime = ft[1];
+    e->pico_checked = 1;
+    entry_count++;
+  }
+  free(raw);
+}
+
+/* "Clear Cover Cache" also forgets the saved list. */
+void browser_list_cache_clear(void)
+{
+  char path[GUI_PATH_LEN];
+  list_cache_path(path, sizeof(path));
+  DeleteFileA(path);
+}
+
+/* force: the Refresh button -- every file is looked at again, nothing is taken from the saved list (Covers\library.dat) or from the last scan. */
+static void browser_rescan_ex(int force)
 {
   HCURSOR old_cursor;
 
   if (!entries || !spare) return;
+
+  DWORD t0 = GetTickCount(), t1, t2, t3;
+  int from_file;
+
+  if (force) browser_list_cache_clear();
+  list_cache_load();      /* the first scan of a run: start from what the last run saved */
+  from_file = entry_count;
+  t1 = GetTickCount();
+  scan_known = scan_unknown = 0;
 
   /* Keep the last scan to reuse its archive labels, and scan into the other
      buffer. */
@@ -2199,6 +2516,7 @@ static void browser_rescan(void)
   entry_count = 0;
   outside_n = 0;
   spare_hint = 0;
+  if (force) spare_count = 0;                   /* (no label of the last scan is reused) */
 
   if (gui.rom_dir[0])
   {
@@ -2221,7 +2539,10 @@ static void browser_rescan(void)
     }
     SetCursor(old_cursor);
   }
+  t2 = GetTickCount();
   add_outside_recent();
+  browser_list_cache_save();
+  t3 = GetTickCount();
 
   /* The entries are new objects: start the grid's images over. */
   if (gui.browser_grid_view) browser_rebuild_grid_images();
@@ -2229,7 +2550,11 @@ static void browser_rescan(void)
   fill_filters();
   browser_apply_filter();
   pico_scan_start();
+  gui_log("Game list: %d games; saved list %d entries read in %lu ms; folders scanned in %lu ms (%d files known from before, %d looked at); saved in %lu ms; filters and grid %lu ms",
+          entry_count, from_file, (unsigned long)(t1 - t0), (unsigned long)(t2 - t1), scan_known, scan_unknown, (unsigned long)(t3 - t2), (unsigned long)(GetTickCount() - t3));
 }
+
+static void browser_rescan(void) { browser_rescan_ex(0); }
 
 void browser_panel_change_folder(void)
 {
@@ -2411,15 +2736,19 @@ static void update_sort_arrow(void);
    scrolling in both list and grid view is completely unaffected. */
 /* A heading is a whole row of the grid with its words at the bottom; for the first one the empty part above them is scrolled out of view, and the
    list is kept from scrolling back up to it. */
+static int grid_blank_px;      /* how far the list is scrolled to hide the empty part above the first heading: that is its top, not "scrolled down" */
+
 static void grid_hide_top_blank(void)
 {
   RECT it;
   POINT o;
   int blank;
 
+  grid_blank_px = 0;
   if (!panel_list || !gui.browser_grid_view || !grid_headed || filtered_count <= 0 || filtered_index[0] >= 0) return;
   if (!ListView_GetItemRect(panel_list, 0, &it, LVIR_BOUNDS) || !ListView_GetOrigin(panel_list, &o)) return;
   blank = (it.bottom - it.top) - TBS(34) - TBS(8);
+  if (blank > 0) grid_blank_px = blank;
   if (blank > 0 && o.y < blank) ListView_Scroll(panel_list, 0, blank - o.y);
 }
 
@@ -2498,8 +2827,8 @@ static LRESULT CALLBACK filter_combo_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
     {
       /* The colors of the drop-downs of the Settings window in the dark theme: a light line round the control, a dark gray line and a
          darker one inside it, then the field; a dark line between the field and the arrow's button. */
-      static const COLORREF ring[3] = { RGB(155, 155, 155), RGB(56, 56, 56), RGB(32, 32, 32) };
-      HBRUSH inner = CreateSolidBrush(RGB(0x2D, 0x2D, 0x2D));
+      const COLORREF ring[3] = { RGB(155, 155, 155), theme_dk(RGB(56, 56, 56)), theme_dk(RGB(32, 32, 32)) };
+      HBRUSH inner = CreateSolidBrush(theme_dk(RGB(0x2D, 0x2D, 0x2D)));
       RECT f = ci.rcItem, strip;
       int bx = ci.rcButton.left > 0 ? ci.rcButton.left : rc.right, k;      /* (the arrow's button is left as it is) */
 
@@ -2623,6 +2952,9 @@ void browser_panel_create(HWND parent)
   panel_search_label = CreateWindowExA(0, "STATIC", "Search:", WS_CHILD | SS_LEFT,
                                        0, 0, 0, 0, panel_bar, (HMENU)(UINT_PTR)IDC_BROWSER_SEARCH_LABEL,
                                        g_inst, NULL);
+  panel_filter_label = CreateWindowExA(0, "STATIC", "Filters:", WS_CHILD | SS_LEFT,
+                                       0, 0, 0, 0, panel_bar, (HMENU)(UINT_PTR)IDC_BROWSER_FILTER_LABEL,
+                                       g_inst, NULL);
   panel_search = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
                                  WS_CHILD | WS_CLIPSIBLINGS | ES_AUTOHSCROLL | WS_TABSTOP,
                                  0, 0, 0, 0, panel_bar, (HMENU)(UINT_PTR)IDC_BROWSER_SEARCH,
@@ -2647,7 +2979,7 @@ void browser_panel_create(HWND parent)
                                       (HMENU)(UINT_PTR)(IDC_BROWSER_FILTER_CONSOLE + i), g_inst, NULL);
     SetWindowSubclass(panel_filter[i], filter_combo_proc, 3, 0);
   }
-  panel_filter_reset = CreateWindowExA(0, "BUTTON", "Reset Filters", WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+  panel_filter_reset = CreateWindowExA(0, "BUTTON", "Reset", WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
                                        0, 0, 0, 0, panel_bar, (HMENU)(UINT_PTR)IDC_BROWSER_FILTER_RESET,
                                        g_inst, NULL);
 
@@ -2688,6 +3020,7 @@ void browser_panel_create(HWND parent)
 
   SendMessage(panel_search, WM_SETFONT, (WPARAM)font, TRUE);
   SendMessage(panel_search_label, WM_SETFONT, (WPARAM)font, TRUE);
+  SendMessage(panel_filter_label, WM_SETFONT, (WPARAM)font, TRUE);
   SendMessage(panel_search_close, WM_SETFONT, (WPARAM)font, TRUE);
   SendMessage(panel_search_clear, WM_SETFONT, (WPARAM)font, TRUE);
   {
@@ -2703,6 +3036,12 @@ void browser_panel_create(HWND parent)
       ti.hwnd = panel_bar;
       ti.uId = (UINT_PTR)panel_search_clear;
       ti.lpszText = (LPSTR)"Clear";
+      SendMessageA(clear_tip, TTM_ADDTOOLA, 0, (LPARAM)&ti);
+      ti.uId = (UINT_PTR)panel_search_close;
+      ti.lpszText = (LPSTR)"Hide the search bar";
+      SendMessageA(clear_tip, TTM_ADDTOOLA, 0, (LPARAM)&ti);
+      ti.uId = (UINT_PTR)panel_filter_reset;
+      ti.lpszText = (LPSTR)"Show all games again: clear the console, genre and region choices";
       SendMessageA(clear_tip, TTM_ADDTOOLA, 0, (LPARAM)&ti);
     }
   }
@@ -2763,8 +3102,10 @@ static void show_bars(void)
   ShowWindow(panel_search, sb ? SW_SHOWNA : SW_HIDE);
   ShowWindow(panel_search_close, sb ? SW_SHOWNA : SW_HIDE);
   ShowWindow(panel_search_clear, (sb && GetWindowTextLengthA(panel_search) > 0) ? SW_SHOWNA : SW_HIDE);
+  ShowWindow(panel_filter_label, fb ? SW_SHOWNA : SW_HIDE);
   for (i = 0; i < 3; i++) ShowWindow(panel_filter[i], fb ? SW_SHOWNA : SW_HIDE);
   ShowWindow(panel_filter_reset, fb ? SW_SHOWNA : SW_HIDE);
+  if (sb || fb) RedrawWindow(panel_bar, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);   /* every part painted at once in the theme's colors */
 }
 
 /* Places the bar and its rows; returns the height it takes. */
@@ -2790,11 +3131,12 @@ static int layout_bar(int x, int y, int w)
 
   if (!gui.hide_filterbar)
   {
-    int rw = TBS(96), g3 = TBS(6), eh = TBS(22), k;
-    int cw = (w - 2 * m - rw - 3 * g3) / 3;
+    int lw = TBS(54), rw = TBS(72), g3 = TBS(6), eh = TBS(22), k;      /* (the label as wide as "Search:" has, the button as wide as Close) */
+    int cw = (w - 2 * m - lw - rw - 3 * g3) / 3;
     if (cw < 40) cw = 40;
+    MoveWindow(panel_filter_label, m, ry + TBS(4), lw, TBS(18), TRUE);
     for (k = 0; k < 3; k++)
-      MoveWindow(panel_filter[k], m + k * (cw + g3), ry, cw, TBS(220), TRUE);
+      MoveWindow(panel_filter[k], m + lw + k * (cw + g3), ry, cw, TBS(220), TRUE);
     MoveWindow(panel_filter_reset, w - m - rw, ry - 1, rw, eh + 2, TRUE);
     ry += eh + TBS(6);
     rows++;
@@ -2913,6 +3255,7 @@ void browser_panel_layout(const RECT *area)
 
     MoveWindow(panel_list, x, y, w - strip, list_h, TRUE);
     browser_grid_check_cols();
+    grid_schedule_settle();
     if (panel_az)
     {
       if (strip) MoveWindow(panel_az, x + w - strip, y, strip, list_h, TRUE);
@@ -3042,7 +3385,10 @@ static int top_render(HWND hwnd)
   if (dark)
   {
     int f = top_hot ? 0x5A : 0x44, r = top_hot ? 0x90 : 0x70;
-    face[0] = face[1] = face[2] = f; ring[0] = ring[1] = ring[2] = r; arrow[0] = arrow[1] = arrow[2] = 0xF2;
+    COLORREF fc = theme_dk(RGB(f, f, f)), rc2 = theme_colored() ? theme_accent_edge() : theme_dk(RGB(r, r, r)), ac = theme_dk(RGB(0xF2, 0xF2, 0xF2));      /* (a colored theme: the tinted gray, a ring in its accent) */
+    face[0] = GetRValue(fc); face[1] = GetGValue(fc); face[2] = GetBValue(fc);
+    ring[0] = GetRValue(rc2); ring[1] = GetGValue(rc2); ring[2] = GetBValue(rc2);
+    arrow[0] = GetRValue(ac); arrow[1] = GetGValue(ac); arrow[2] = GetBValue(ac);
   }
   else
   {
@@ -3132,9 +3478,9 @@ static LRESULT CALLBACK top_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
       }
       /* Dark theme: a dark disc with a light arrow. Light theme: the other way round, a light disc with a dark arrow. */
-      COLORREF face = dark ? (top_hot ? RGB(0x5A, 0x5A, 0x5A) : RGB(0x44, 0x44, 0x44)) : (top_hot ? RGB(0xFF, 0xFF, 0xFF) : RGB(0xEC, 0xEC, 0xEC));
-      HBRUSH fb = CreateSolidBrush(face), wb = CreateSolidBrush(dark ? RGB(0xF2, 0xF2, 0xF2) : RGB(0x38, 0x38, 0x38));
-      HPEN ring = CreatePen(PS_SOLID, 1, dark ? RGB(0x70, 0x70, 0x70) : RGB(0xB0, 0xB0, 0xB0));
+      COLORREF face = dark ? (top_hot ? theme_dk(RGB(0x5A, 0x5A, 0x5A)) : theme_dk(RGB(0x44, 0x44, 0x44))) : (top_hot ? RGB(0xFF, 0xFF, 0xFF) : RGB(0xEC, 0xEC, 0xEC));
+      HBRUSH fb = CreateSolidBrush(face), wb = CreateSolidBrush(dark ? RGB(0xF2, 0xF2, 0xF2) : theme_dk(RGB(0x38, 0x38, 0x38)));
+      HPEN ring = CreatePen(PS_SOLID, 1, dark ? (theme_colored() ? theme_accent_edge() : theme_dk(RGB(0x70, 0x70, 0x70))) : theme_dk(RGB(0xB0, 0xB0, 0xB0)));
       HPEN np = ring;
       POINT tri[3];
       HGDIOBJ ob, op;
@@ -3190,8 +3536,13 @@ static LRESULT CALLBACK top_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
       if (wp == 1)
       {
-        static int last_dark = -1;
-        if (top_layered && last_dark != theme_is_dark()) { last_dark = theme_is_dark(); top_render(hwnd); }   /* the theme changed */
+        static int last_look = -1;
+        int look = theme_get_mode() * 4 + theme_is_dark() * 2 + gui.accent * 64;
+        if (last_look != look)                                          /* the theme (or the accent color) changed: drawn again in its colors */
+        {
+          last_look = look;
+          if (top_layered) top_render(hwnd); else InvalidateRect(hwnd, NULL, FALSE);
+        }
         if (panel_list && IsWindowVisible(panel_list))
         {
           /* The horizontal scroll bar of the list comes and goes after the layout (the columns grew wider than the window):
@@ -3208,7 +3559,7 @@ static LRESULT CALLBACK top_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
           MapWindowPoints(NULL, par, (POINT *)&cur, 2);
           if (cur.left != nx || cur.top != ny) SetWindowPos(hwnd, NULL, nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
-        int scrolled = panel_list && (gui.browser_grid_view ? GetScrollPos(panel_list, SB_VERT) > 0 : ListView_GetTopIndex(panel_list) > 0);
+        int scrolled = panel_list && (gui.browser_grid_view ? GetScrollPos(panel_list, SB_VERT) > grid_blank_px + TBS(2) : ListView_GetTopIndex(panel_list) > 0);
         int want = panel_visible && panel_list && IsWindowVisible(panel_list) && scrolled;
         if (want != (IsWindowVisible(hwnd) ? 1 : 0))
         {
@@ -3282,7 +3633,7 @@ static LRESULT CALLBACK az_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       RECT rc;
       int i, dark = theme_is_dark();
       HFONT of = (HFONT)SelectObject(dc, gui_get_ui_font());
-      HBRUSH bg = CreateSolidBrush(dark ? RGB(0x20, 0x20, 0x20) : GetSysColor(COLOR_BTNFACE));
+      HBRUSH bg = CreateSolidBrush(dark ? theme_dk(RGB(0x20, 0x20, 0x20)) : GetSysColor(COLOR_BTNFACE));
 
       GetClientRect(hwnd, &rc);
       FillRect(dc, &rc, bg);
@@ -3297,11 +3648,11 @@ static LRESULT CALLBACK az_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         r.top = rc.bottom * i / 27; r.bottom = rc.bottom * (i + 1) / 27;
         if (i == az_hot && az_present[i])
         {
-          HBRUSH hb = CreateSolidBrush(dark ? RGB(0x50, 0x50, 0x50) : RGB(0xC0, 0xD8, 0xF0));
+          HBRUSH hb = CreateSolidBrush(dark ? theme_dk(RGB(0x50, 0x50, 0x50)) : RGB(0xC0, 0xD8, 0xF0));
           FillRect(dc, &r, hb);
           DeleteObject(hb);
         }
-        SetTextColor(dc, az_present[i] ? (dark ? RGB(0xF0, 0xF0, 0xF0) : RGB(0, 0, 0)) : (dark ? RGB(0x70, 0x70, 0x70) : RGB(0xA8, 0xA8, 0xA8)));
+        SetTextColor(dc, az_present[i] ? (dark ? RGB(0xF0, 0xF0, 0xF0) : RGB(0, 0, 0)) : (dark ? theme_dk(RGB(0x70, 0x70, 0x70)) : theme_dk(RGB(0xA8, 0xA8, 0xA8))));
         if (i == az_hot)
         {
           /* The letter under the pointer is drawn bigger (and bold), over the letters next to it. */
@@ -3451,6 +3802,7 @@ static INT_PTR CALLBACK romfolders_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
       rf_n = 1 + gui.rom_extra_n;
       for (i = 0; i < gui.rom_extra_n; i++) { lstrcpynA(rf_dir[i + 1], gui.rom_extra[i], GUI_PATH_LEN); }
       rf_ex_n = gui.rom_exclude_n;
+      CheckDlgButton(dlg, IDC_RF_SCANSUB, gui.scan_subfolders ? BST_CHECKED : BST_UNCHECKED);
       for (i = 0; i < rf_ex_n; i++) lstrcpynA(rf_ex[i], gui.rom_exclude[i], GUI_PATH_LEN);
 
       SetDlgItemTextA(dlg, IDC_RF_HELP,
@@ -3473,7 +3825,7 @@ static INT_PTR CALLBACK romfolders_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
     {
-      HBRUSH br = theme_ctlcolor((HDC)wp);
+      HBRUSH br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
       if (br) return (LRESULT)br;
       break;
     }
@@ -3550,6 +3902,7 @@ static INT_PTR CALLBACK romfolders_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
           for (i = 1; i < rf_n; i++) lstrcpynA(gui.rom_extra[i - 1], rf_dir[i], GUI_PATH_LEN);
           gui.rom_exclude_n = rf_ex_n;
           for (i = 0; i < rf_ex_n; i++) lstrcpynA(gui.rom_exclude[i], rf_ex[i], GUI_PATH_LEN);
+          gui.scan_subfolders = IsDlgButtonChecked(dlg, IDC_RF_SCANSUB) == BST_CHECKED ? 1 : 0;
           EndDialog(dlg, IDOK);
           return TRUE;
         }
@@ -3605,6 +3958,10 @@ int browser_panel_handle_command(WORD id, WORD notify_code)
          away again once it is left empty. */
       if (notify_code == EN_KILLFOCUS && search_override == 1 && GetWindowTextLengthA(panel_search) == 0)
       {
+        /* The focus went to the toolbar's Search button: that click is the "hide" and decides it itself (the bar goes away then). */
+        POINT pt;
+        RECT br;
+        if (tb_search && GetCursorPos(&pt) && GetWindowRect(tb_search, &br) && PtInRect(&br, pt)) return 1;
         search_override = -1;     /* left empty: back to what View says */
         search_autohide_tick = GetTickCount();
         browser_bars_changed();
@@ -3634,7 +3991,7 @@ int browser_panel_handle_command(WORD id, WORD notify_code)
       return 1;
 
     case IDC_TB_REFRESH:
-      browser_rescan();
+      browser_rescan_ex(1);
       return 1;
 
     case IDC_TB_PLAY:
@@ -3770,7 +4127,8 @@ static COLORREF heading_theme_color(void)
 static COLORREF heading_color(void)
 {
   if (gui.accent) return theme_is_dark() ? theme_accent_edge() : theme_accent_bg();
-  if (gui.ui_style) return theme_is_dark() ? RGB(0x6C, 0xAE, 0xFF) : theme_modern_accent();
+  if (gui.ui_style) return theme_is_dark() ? (theme_get_mode() >= THEME_SAPPHIRE ? theme_modern_accent() : RGB(0x6C, 0xAE, 0xFF)) : theme_modern_accent();
+  if (theme_get_mode() >= THEME_SAPPHIRE) return theme_accent_edge();       /* a colored dark theme: the headings take its color */
   return heading_theme_color();
 }
 
@@ -3900,6 +4258,89 @@ done:
   DeleteObject(br); DeleteObject(pen);
 }
 
+/* A small tag for the corner of a cover that names the console (MD, MCD, 32X, SMS, GG, SG, PICO), each in its own colour. */
+static HFONT badge_font;
+static int badge_font_h;
+
+static void draw_console_badge(HDC dc, int right, int top, int h, const char *console)
+{
+  const char *tag;
+  COLORREF bg, fg = RGB(255, 255, 255);
+  HFONT font, of;
+  HBRUSH bb, ob;
+  HPEN np, op;
+  SIZE sz;
+  RECT r;
+  int w, len;
+
+  if (!console || !console[0]) return;
+  if (!lstrcmpiA(console, "Mega Drive / Genesis")) { tag = "MD";   bg = RGB(30, 90, 175); }
+  else if (!lstrcmpiA(console, "Mega CD / Sega CD")) { tag = "MCD"; bg = RGB(195, 45, 125); }
+  else if (!lstrcmpiA(console, "32X")) { tag = "32X"; bg = RGB(185, 40, 45); }
+  else if (!lstrcmpiA(console, "Master System")) { tag = "SMS"; bg = RGB(205, 95, 20); }
+  else if (!lstrcmpiA(console, "Game Gear")) { tag = "GG"; bg = RGB(30, 125, 85); }
+  else if (!lstrcmpiA(console, "SG-1000")) { tag = "SG"; bg = RGB(115, 65, 155); }
+  else if (!lstrcmpiA(console, PICO_LABEL)) { tag = "PICO"; bg = RGB(0, 135, 150); }
+  else return;
+  len = lstrlenA(tag);
+  if (!badge_font || badge_font_h != h)                                    /* (one font, made again only when the size changes) */
+  {
+    if (badge_font) DeleteObject(badge_font);
+    badge_font = CreateFontA(-(h - 6 > 8 ? h - 6 : 8), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Segoe UI");
+    badge_font_h = h;
+  }
+  font = badge_font;
+  of = (HFONT)SelectObject(dc, font);
+  GetTextExtentPoint32A(dc, tag, len, &sz);
+  w = sz.cx + 10;
+  r.left = right - w; r.right = right; r.top = top; r.bottom = top + h;
+  bb = CreateSolidBrush(bg);
+  np = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+  ob = (HBRUSH)SelectObject(dc, bb);
+  op = (HPEN)SelectObject(dc, np);
+  RoundRect(dc, r.left, r.top, r.right, r.bottom, h / 3, h / 3);
+  SetBkMode(dc, TRANSPARENT);
+  SetTextColor(dc, fg);
+  DrawTextA(dc, tag, len, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  SelectObject(dc, op); SelectObject(dc, ob); SelectObject(dc, of);
+  DeleteObject(np); DeleteObject(bb);
+}
+
+
+/* Where the cover of an item being drawn is. Asking the list for it (LVM_GETITEMRECT) for every item of every paint made a big grid
+   freeze while it was resized, and gave stray places while it was arranging itself. So it is asked for once, from one item, and
+   kept as where the cover sits in the item's own rectangle (centred on it, so far below its top); the rest are worked out from
+   the rectangle the list gives with each item. Asked again after anything that changes the tiles (grid_icon_cal = 0). */
+
+static int grid_icon_rect(const NMLVCUSTOMDRAW *cd, RECT *ri)
+{
+  const RECT *rc = &cd->nmcd.rc;
+  int cx = (rc->left + rc->right) / 2;
+  RECT cr;
+
+  /* An empty or very narrow rectangle is not that of a game (it gave a frame at the left edge of the list, half outside it), and neither is one
+     that lies outside the list. */
+  if (rc->right - rc->left < gui.browser_grid_size / 3 || !GetClientRect(panel_list, &cr) || rc->right <= 0 || rc->left >= cr.right) return 0;
+
+  if (!grid_icon_cal)
+  {
+    RECT r;
+    if (!ListView_GetItemRect(panel_list, (int)cd->nmcd.dwItemSpec, &r, LVIR_ICON)) return 0;
+    if (r.right - r.left < gui.browser_grid_size / 2 || r.left >= rc->right || r.right <= rc->left || r.top >= rc->bottom || r.bottom <= rc->top) return 0;
+    if (abs((r.left + r.right) / 2 - cx) > 4) return 0;                      /* (not centred on the item: not a good sample) */
+    grid_icon_dy = r.top - rc->top;
+    grid_icon_w = r.right - r.left;
+    grid_icon_h = r.bottom - r.top;
+    grid_icon_cal = 1;
+  }
+  ri->left = cx - grid_icon_w / 2;
+  ri->right = ri->left + grid_icon_w;
+  ri->top = rc->top + grid_icon_dy;
+  ri->bottom = ri->top + grid_icon_h;
+  return 1;
+}
+
 /* Draws the star of a row over its (empty) Favorite cell. */
 LRESULT browser_list_customdraw(NMHDR *hdr)
 {
@@ -3911,7 +4352,7 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
     /* Frame Around Cover and Name: each game's frame is drawn right after the game itself, when that item is painted, so only
        the items that need painting get one (nothing walks through the whole list on every paint), and it is there whether or not
        the cover has arrived yet (an empty card until it does). Headings and empty cells are drawn by the code below. */
-    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return (grid_headed || gui.cover_card || gui.accent || gui.ui_style) ? CDRF_NOTIFYITEMDRAW : CDRF_DODEFAULT;
+    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return (grid_headed || gui.cover_card || gui.console_badge || gui.accent || gui.ui_style) ? CDRF_NOTIFYITEMDRAW : CDRF_DODEFAULT;
     if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT)
     {
       /* A heading is drawn across its whole row, and an empty cell shows that same row's heading where it covers it. */
@@ -3920,9 +4361,9 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
           (ListView_GetItemState(panel_list, row, LVIS_SELECTED) & LVIS_SELECTED))
       {
         grid_selected_paint(cd->nmcd.hdc, row);
-        return gui.cover_card ? (CDRF_SKIPDEFAULT | CDRF_NOTIFYPOSTPAINT) : CDRF_SKIPDEFAULT;
+        return (gui.cover_card || gui.console_badge) ? (CDRF_SKIPDEFAULT | CDRF_NOTIFYPOSTPAINT) : CDRF_SKIPDEFAULT;
       }
-      if (row < 0 || row >= filtered_count || filtered_index[row] >= 0) return gui.cover_card ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
+      if (row < 0 || row >= filtered_count || filtered_index[row] >= 0) return (gui.cover_card || gui.console_badge) ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
       while (head > 0 && filtered_index[head] == ROW_PAD) head--;
       if (filtered_index[head] < 0 && filtered_index[head] != ROW_PAD && row - head < grid_built_cols)      /* only the cells of the heading's own row; the empty cells after the games stay blank */
       {
@@ -3939,6 +4380,25 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
       }
       return CDRF_SKIPDEFAULT;
     }
+    if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT && gui.console_badge)
+    {
+      RECT ri;
+      browser_entry_t *ce = row_entry((int)cd->nmcd.dwItemSpec);
+      /* The cover's place is asked for while the grid may still be arranging itself after a resize; a place that is not on the item being
+         drawn (an empty or far-off rectangle) is not used: the badge would be drawn in a stray spot and stay there. */
+      if (ce && grid_icon_rect(cd, &ri))
+      {
+        int h = gui.browser_grid_size / 6, cx = (ri.left + ri.right) / 2;
+        if (h < TBS(16)) h = TBS(16);
+        if (h > TBS(26)) h = TBS(26);
+        int fx, fy, fw, fh;
+        coverart_frame_rect(gui.browser_grid_size, &fx, &fy, &fw, &fh);                    /* (a box or wide frame is smaller than the tile: the badge sits on the cover) */
+        int saved = SaveDC(cd->nmcd.hdc);
+        IntersectClipRect(cd->nmcd.hdc, cd->nmcd.rc.left, cd->nmcd.rc.top, cd->nmcd.rc.right, cd->nmcd.rc.bottom);       /* (never outside its own item) */
+        draw_console_badge(cd->nmcd.hdc, cx - gui.browser_grid_size / 2 + fx + fw - TBS(3), ri.top + fy + TBS(3), h, ce->console);
+        RestoreDC(cd->nmcd.hdc, saved);
+      }
+    }
     if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT && gui.cover_card)
     {
       static HPEN frame_pen;
@@ -3947,16 +4407,21 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
       int row = (int)cd->nmcd.dwItemSpec, cx, cell_w = gui.browser_grid_size + 24 + 8, cell_h = gui.browser_grid_size + 34 + 16;
       HGDIOBJ op, ob;
 
-      if (row < 0 || row >= filtered_count || filtered_index[row] < 0 || !ListView_GetItemRect(panel_list, row, &ri, LVIR_ICON)) return CDRF_DODEFAULT;
+      if (row < 0 || row >= filtered_count || filtered_index[row] < 0 || !grid_icon_rect(cd, &ri)) return CDRF_DODEFAULT;
       if (!frame_pen || frame_dark != theme_is_dark())
       {
         if (frame_pen) DeleteObject(frame_pen);
         frame_dark = theme_is_dark();
-        frame_pen = CreatePen(PS_SOLID, 1, frame_dark ? RGB(0x5A, 0x5A, 0x5A) : RGB(0xB8, 0xB8, 0xB8));
+        frame_pen = CreatePen(PS_SOLID, 1, frame_dark ? theme_dk(RGB(0x5A, 0x5A, 0x5A)) : theme_dk(RGB(0xB8, 0xB8, 0xB8)));
+      }
+      cx = (ri.left + ri.right) / 2;
+      {
+        RECT cr;
+        GetClientRect(panel_list, &cr);
+        if (cx - (cell_w - 8) / 2 < -2 || cx + (cell_w - 8) / 2 > cr.right + 2) return CDRF_DODEFAULT;       /* a frame that sticks out of the list is not one of a game's */
       }
       op = SelectObject(cd->nmcd.hdc, frame_pen);
       ob = SelectObject(cd->nmcd.hdc, GetStockObject(NULL_BRUSH));
-      cx = (ri.left + ri.right) / 2;
       RoundRect(cd->nmcd.hdc, cx - (cell_w - 8) / 2, ri.top - 6, cx + (cell_w - 8) / 2, ri.top - 6 + cell_h - 8, TBS(10), TBS(10));
       SelectObject(cd->nmcd.hdc, ob);
       SelectObject(cd->nmcd.hdc, op);
@@ -4026,7 +4491,7 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
           for (c = 0; c < BROWSER_COLUMNS; c++) if (ListView_GetColumnWidth(panel_list, c) > 0) last = c;
         if (w > 0 && GetCellRect(panel_list, (int)cd->nmcd.dwItemSpec, col, &cr))
         {
-          HPEN pen = CreatePen(PS_SOLID, 1, theme_is_dark() ? RGB(0x3A, 0x3A, 0x3A) : RGB(0xDD, 0xDD, 0xDD));
+          HPEN pen = CreatePen(PS_SOLID, 1, theme_is_dark() ? theme_dk(RGB(0x3A, 0x3A, 0x3A)) : RGB(0xDD, 0xDD, 0xDD));
           HGDIOBJ op = SelectObject(cd->nmcd.hdc, pen);
           if (col != last)       /* after the column */
           {
@@ -4052,7 +4517,7 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
           int on = row_entry(row)->fav;
           COLORREF c = on ? (gui.color_icons ? tb_icon_color(TI_FAVON)                 /* Colorful Icons: a gold star */
                                               : (theme_is_dark() ? RGB(255, 255, 255) : RGB(0, 0, 0)))   /* a solid star in the text color */
-                          : (theme_is_dark() ? RGB(120, 120, 120) : RGB(150, 150, 150));
+                          : (theme_is_dark() ? theme_dk(RGB(120, 120, 120)) : theme_dk(RGB(150, 150, 150)));
           tb_paint_icon(cd->nmcd.hdc, rc.left + (rc.right - rc.left - sz) / 2, rc.top + (rc.bottom - rc.top - sz) / 2,
                         sz, on ? TI_FAVON : TI_FAV, c);
         }
@@ -4254,7 +4719,6 @@ static void show_item_context_menu(int screen_x, int screen_y, int item_index)
   char cover_path[GUI_PATH_LEN];
   char console[40];
   int has_cover;
-  int peeked;
   int game = row_entry(item_index) != NULL;       /* 0: the click was on empty space (or on the title of a group of games) */
   UINT off = game ? 0 : (UINT)MF_GRAYED;
 
@@ -4269,11 +4733,8 @@ static void show_item_context_menu(int screen_x, int screen_y, int item_index)
   menu = CreatePopupMenu();
   state_menu = CreatePopupMenu();
 
-  /* Save states are named after the game's data, so the game has to be
-     inspected (without starting it) to find them. Nothing is running while
-     the browser is shown. If it cannot be inspected, fall back to the plain
-     name older versions used. */
-  peeked = (game && !emu_running && emu_peek_rom(path));
+  /* The save states of the game are found from its path and its console in the list, without loading it (loading would unpack an archive of
+     a disc or of an MD+ game just to open this menu). */
 
   for (i = 0; game && i < GUI_SLOT_MAX; i++)
   {
@@ -4281,8 +4742,11 @@ static void show_item_context_menu(int screen_x, int screen_y, int item_index)
     char label[64], stamp[32];
     UINT flags = MF_STRING;
 
-    if (peeked) state_path(i, state_file, sizeof(state_file));
-    else        gui_snprintf(state_file, (int)sizeof(state_file), "%s\\%s.gp%d", osd_path("States"), base, i);
+    {
+      char ext[16];
+      wsprintfA(ext, ".gp%d", i);
+      emu_game_data_path(path, console, "States", ext, 1, state_file, (int)sizeof(state_file));
+    }
     if (state_file_time(state_file, stamp, sizeof(stamp)))
     {
       wsprintfA(label, "Slot %d - %s", i, stamp);
@@ -4299,11 +4763,58 @@ static void show_item_context_menu(int screen_x, int screen_y, int item_index)
 
   AppendMenuA(menu, MF_STRING | off, IDM_BROWSER_PLAY, "Play Game");
   AppendMenuA(menu, MF_STRING | MF_POPUP | off, (UINT_PTR)state_menu, "Play Game with State");
+  {
+    MENUITEMINFOA mii;
+    ZeroMemory(&mii, sizeof(mii));
+    mii.cbSize = sizeof(mii);
+    mii.fMask = MIIM_ID;
+    mii.wID = IDM_BROWSER_STATE_MENU;
+    SetMenuItemInfoA(menu, (UINT)(GetMenuItemCount(menu) - 1), TRUE, &mii);
+  }
   AppendMenuA(menu, MF_STRING | off, IDM_BROWSER_FAVORITE,
               game && config_fav_has(path) ? "Remove from Favorites" : "Add to Favorites");
-  AppendMenuA(menu, MF_STRING | (game && history_last(path) ? 0 : (UINT)MF_GRAYED), IDM_BROWSER_REMOVE_RECENT, "Remove from Recently Played");   /* this game is not in the list (or no game): grayed */
-  AppendMenuA(menu, MF_STRING | (history_count() > 0 ? 0 : (UINT)MF_GRAYED), IDM_BROWSER_CLEAR_RECENT, "Clear Recently Played");   /* nothing to clear: grayed */
   AppendMenuA(menu, MF_STRING | off, IDM_BROWSER_SHORTCUT_DESKTOP, "Create Desktop Shortcut");
+  {
+    /* The folders of the game's saves and of its save states, when it has them. */
+    HMENU saves = CreatePopupMenu();
+    char dir[GUI_PATH_LEN];
+    UINT f_saves = MF_STRING | (UINT)MF_GRAYED, f_states = MF_STRING | (UINT)MF_GRAYED, f_cheats = MF_STRING | (UINT)MF_GRAYED, f_rom = MF_STRING | (UINT)MF_GRAYED;
+
+    if (game)
+    {
+      emu_game_data_dir(path, console, "Saves", dir, (int)sizeof(dir));
+      if (GetFileAttributesA(dir) != INVALID_FILE_ATTRIBUTES) f_saves = MF_STRING;
+      emu_game_data_dir(path, console, "States", dir, (int)sizeof(dir));
+      if (GetFileAttributesA(dir) != INVALID_FILE_ATTRIBUTES) f_states = MF_STRING;
+      emu_game_console_file(path, console, "Cheats", ".cht", dir, (int)sizeof(dir));
+      if (GetFileAttributesA(dir) != INVALID_FILE_ATTRIBUTES) f_cheats = MF_STRING;
+      else
+      {
+        char *sl = strrchr(dir, '\\');                        /* no list for this game yet: the folder of its console, when there is one */
+        if (sl) { *sl = '\0'; if (GetFileAttributesA(dir) != INVALID_FILE_ATTRIBUTES) f_cheats = MF_STRING; }
+      }
+      if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) f_rom = MF_STRING;
+    }
+    AppendMenuA(saves, f_rom, IDM_BROWSER_OPEN_ROMLOC, "ROM Location");
+    AppendMenuA(saves, f_saves, IDM_BROWSER_OPEN_SAVES, "Saves Folder");
+    AppendMenuA(saves, f_states, IDM_BROWSER_OPEN_STATES, "States Folder");
+    AppendMenuA(saves, f_cheats, IDM_BROWSER_OPEN_CHEATS, "Cheats Folder");
+    AppendMenuA(menu, MF_STRING | MF_POPUP | off, (UINT_PTR)saves, "Open Game Folders");
+    {
+      MENUITEMINFOA mii;
+      ZeroMemory(&mii, sizeof(mii));
+      mii.cbSize = sizeof(mii);
+      mii.fMask = MIIM_ID;
+      mii.wID = IDM_BROWSER_SAVES_MENU;
+      SetMenuItemInfoA(menu, (UINT)(GetMenuItemCount(menu) - 1), TRUE, &mii);
+    }
+    if (theme_menus_owner()) theme_ownerdraw_menu(saves);
+  }
+  AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuA(menu, MF_STRING | off, IDM_BROWSER_CHEATS, "Edit Cheats");
+  AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuA(menu, MF_STRING | off, IDM_BROWSER_SET_COVER, "Change Cover Image");
+  AppendMenuA(menu, MF_STRING | (has_cover ? 0 : (UINT)MF_GRAYED), IDM_BROWSER_REMOVE_COVER, "Remove Cover Image");
   AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
   {
     /* With more than one ROM folder the item opens a list of them. */
@@ -4340,12 +4851,10 @@ static void show_item_context_menu(int screen_x, int screen_y, int item_index)
   AppendMenuA(menu, MF_STRING, IDM_BROWSER_REFRESH, "Refresh ROM Directory");
   AppendMenuA(menu, MF_STRING, IDM_BROWSER_CHANGE_DIR, "Change ROM Directory");
   AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuA(menu, MF_STRING | (game && history_last(path) ? 0 : (UINT)MF_GRAYED), IDM_BROWSER_REMOVE_RECENT, "Remove from Recently Played");   /* this game is not in the list (or no game): grayed */
+  AppendMenuA(menu, MF_STRING | (history_count() > 0 ? 0 : (UINT)MF_GRAYED), IDM_BROWSER_CLEAR_RECENT, "Clear Recently Played");   /* nothing to clear: grayed */
+  AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
   AppendMenuA(menu, MF_STRING | off, IDM_BROWSER_ROMINFO, "ROM Information");
-  AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuA(menu, MF_STRING | off, IDM_BROWSER_CHEATS, "Edit Cheats");
-  AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuA(menu, MF_STRING | off, IDM_BROWSER_SET_COVER, "Change Cover Image");
-  AppendMenuA(menu, MF_STRING | (has_cover ? 0 : (UINT)MF_GRAYED), IDM_BROWSER_REMOVE_COVER, "Remove Cover Image");
 
   /* Same owner-draw system the main menu bar uses for large_ui -- these
      are standard WM_MEASUREITEM/WM_DRAWITEM messages, delivered to
@@ -4365,7 +4874,7 @@ static void show_item_context_menu(int screen_x, int screen_y, int item_index)
   {
     static const struct { UINT id; unsigned short glyph; } pics[] =
     {
-      { IDM_BROWSER_PLAY, 0xE768 }, { IDM_BROWSER_FAVORITE, 0xE734 }, { IDM_BROWSER_REMOVE_RECENT, 0xE74D }, { IDM_BROWSER_CLEAR_RECENT, 0xE75C },
+      { IDM_BROWSER_PLAY, 0xE768 }, { IDM_BROWSER_STATE_MENU, 0xE81C }, { IDM_BROWSER_SAVES_MENU, 0xE8B7 }, { IDM_BROWSER_FAVORITE, 0xE734 }, { IDM_BROWSER_REMOVE_RECENT, 0xE74D }, { IDM_BROWSER_CLEAR_RECENT, 0xE75C },
       { IDM_BROWSER_SHORTCUT_DESKTOP, 0xE71B }, { IDM_BROWSER_OPENDIR, 0xE838 }, { IDM_BROWSER_REFRESH, 0xFFF1 }, { IDM_BROWSER_CHANGE_DIR, 0xE8B7 },
       { IDM_BROWSER_ROMINFO, 0xE946 }, { IDM_BROWSER_CHEATS, 0xE8EC }, { IDM_BROWSER_SET_COVER, 0xE8B9 }, { IDM_BROWSER_REMOVE_COVER, 0xE738 }
     };
@@ -4394,13 +4903,36 @@ static void show_item_context_menu(int screen_x, int screen_y, int item_index)
     emu_load_rom(path);
     emu_load_state(slot);
   }
+  else if (cmd == IDM_BROWSER_OPEN_SAVES || cmd == IDM_BROWSER_OPEN_STATES)
+  {
+    char dir[GUI_PATH_LEN];
+    emu_game_data_dir(path, console, cmd == IDM_BROWSER_OPEN_SAVES ? "Saves" : "States", dir, (int)sizeof(dir));
+    ShellExecuteA(g_hwnd, "open", dir, NULL, NULL, SW_SHOWNORMAL);
+  }
+  else if (cmd == IDM_BROWSER_OPEN_ROMLOC || cmd == IDM_BROWSER_OPEN_CHEATS)
+  {
+    /* Explorer opens the folder with the file picked: the game's ROM, or its cheat list (when it has none, the folder of its console). */
+    char file[GUI_PATH_LEN], arg[GUI_PATH_LEN + 16];
+    if (cmd == IDM_BROWSER_OPEN_ROMLOC) lstrcpynA(file, path, sizeof(file));
+    else emu_game_console_file(path, console, "Cheats", ".cht", file, (int)sizeof(file));
+    if (GetFileAttributesA(file) != INVALID_FILE_ATTRIBUTES)
+    {
+      wsprintfA(arg, "/select,\"%s\"", file);
+      ShellExecuteA(g_hwnd, "open", "explorer.exe", arg, NULL, SW_SHOWNORMAL);
+    }
+    else
+    {
+      char *sl = strrchr(file, '\\');
+      if (sl) { *sl = '\0'; ShellExecuteA(g_hwnd, "open", file, NULL, NULL, SW_SHOWNORMAL); }
+    }
+  }
   else if (cmd == IDM_BROWSER_FAVORITE)
   {
     toggle_favorite_row(item_index);
   }
   else if (cmd == IDM_BROWSER_REFRESH)
   {
-    browser_rescan();
+    browser_rescan_ex(1);
   }
   else if (cmd == IDM_BROWSER_SHORTCUT_DESKTOP)
   {
@@ -4454,8 +4986,8 @@ static void show_item_context_menu(int screen_x, int screen_y, int item_index)
 
     /* Always start in ./covers (next to the exe); created on demand in
        case it was deleted while the app was running. */
-    CreateDirectoryA(osd_path("Covers"), NULL);
-    lstrcpynA(covers_dir, osd_path("Covers"), sizeof(covers_dir));
+    CreateDirectoryA(osd_path("Images\\Covers"), NULL);
+    lstrcpynA(covers_dir, osd_path("Images\\Covers"), sizeof(covers_dir));
 
     if (gui_pick_file(g_hwnd, GUI_PICK_COVER, "Choose Cover Image",
                       "Image Files\0*.png;*.jpg;*.jpeg;*.bmp;*.gif\0All Files\0*.*\0\0",
@@ -4542,7 +5074,7 @@ int browser_panel_handle_contextmenu(HWND target, int x, int y)
 
 HBRUSH browser_panel_ctlcolor(HWND ctrl, HDC hdc)
 {
-  if (ctrl == panel_search_label)
+  if (ctrl == panel_search_label || ctrl == panel_filter_label)
   {
     if (theme_is_dark()) return theme_ctlcolor(hdc);
 
@@ -4603,6 +5135,7 @@ void browser_bars_changed(void)
   browser_toolbar_layout();
   browser_relayout();
   if (panel_visible) browser_apply_filter();
+  RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);     /* what a bar left where it was (a piece of its button) is painted over */
 }
 
 /* Ctrl+F: shows the search bar if it is hidden, and puts the cursor in it. */
@@ -4634,6 +5167,7 @@ static void tb_tip_keys(HWND b, const char *text, int cmd)
 
   if (!b) return;
   hotkey_menu_keys(cmd, keys, sizeof(keys));
+  text = tr(text);
   if (keys[0]) gui_snprintf(tip, sizeof(tip), "%s (%s)", text, keys);
   else lstrcpynA(tip, text, sizeof(tip));
   tb_set_tip(b, tip);
