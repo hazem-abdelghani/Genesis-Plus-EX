@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  coverart.h -- loading, caching and managing per-ROM cover images from
  *  a "covers" folder next to the ROM library, matched by base filename

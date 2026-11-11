@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  input.c -- feeds the core's input.pad[] / input.analog[] once per frame.
  *
@@ -1329,10 +1330,31 @@ static padmask_t gamepad_buttons(int device, int deadzone_raw)
     padmask_t lf = is_di_device(device) ? DI_DPAD_LEFT : XPAD_DPAD_LEFT;
     padmask_t rt = is_di_device(device) ? DI_DPAD_RIGHT : XPAD_DPAD_RIGHT;
 
-    if (y >  deadzone_raw) b |= up;
-    if (y < -deadzone_raw) b |= dn;
-    if (x < -deadzone_raw) b |= lf;
-    if (x >  deadzone_raw) b |= rt;
+    if (gui.stick_shape <= 0)
+    {
+      /* Classic: each axis is compared with the deadzone on its own, so the deadzone also sets how soon a second direction (a diagonal) joins. */
+      if (y >  deadzone_raw) b |= up;
+      if (y < -deadzone_raw) b |= dn;
+      if (x < -deadzone_raw) b |= lf;
+      if (x >  deadzone_raw) b |= rt;
+    }
+    else
+    {
+      /* By angle: the deadzone is only how far the stick has to be pushed (a circle round the middle); which direction it counts as depends on the
+         angle. A push is straight when its smaller axis is under a share of its larger one, else a diagonal: 0.70 (35 degrees off an axis) gives
+         wide straight zones, 0.41 (22.5 degrees) even eight directions, 0.21 (12 degrees) wide diagonals. */
+      static const int share[4] = { 0, 717, 424, 218 };        /* of 1024 */
+      long long ax = x < 0 ? -(long long)x : x, ay = y < 0 ? -(long long)y : y, dz = deadzone_raw;
+
+      if (ax * ax + ay * ay > dz * dz)
+      {
+        int horiz = ay * 1024 <= ax * share[gui.stick_shape < 4 ? gui.stick_shape : 2];
+        int vert  = ax * 1024 <= ay * share[gui.stick_shape < 4 ? gui.stick_shape : 2];
+
+        if (!vert) b |= x < 0 ? lf : rt;
+        if (!horiz) b |= y < 0 ? dn : up;
+      }
+    }
   }
 
   return b;
@@ -1357,6 +1379,7 @@ static int is_pad_dev(int d)
  * the second pad is slot 1.
  */
 int input_press_logged;     /* 0 after a game is loaded; set when the first press is written to the log */
+static int gun_log_n;       /* how many times the light gun state went to the log since the game was loaded */
 
 int gui_input_p2_slot(void)
 {
@@ -1764,10 +1787,9 @@ static int cursor_delta(int slot, int *dx, int *dy)
 
 /* The pointer is over the game picture itself (not the menu bar, title bar,
    borders or status bar, and not another window in front of it). */
-static int cursor_over_picture(void)
+static int pointer_in_game_window(POINT *out)
 {
   POINT pt;
-  RECT dest;
 
   if (!GetCursorPos(&pt)) return 0;
   {
@@ -1782,9 +1804,41 @@ static int cursor_over_picture(void)
     }
   }
   if (!ScreenToClient(g_hwnd, &pt)) return 0;
+  *out = pt;
+  return 1;
+}
 
+static int cursor_over_picture(void)
+{
+  POINT pt;
+  RECT dest;
+
+  if (!pointer_in_game_window(&pt)) return 0;
   video_get_output_rect(&dest, NULL, NULL);
   return PtInRect(&dest, pt) ? 1 : 0;
+}
+
+/* The pointer is over the room the picture has, even if outside the picture itself (the bars, the frame of the Light Gun Border): for a light gun
+   that is a shot off the screen. */
+static int cursor_over_game_area(void)
+{
+  POINT pt;
+  RECT area;
+
+  if (!pointer_in_game_window(&pt)) return 0;
+  video_get_area_rect(&area);
+  return PtInRect(&area, pt) ? 1 : 0;
+}
+
+/* 1 while a game runs with a light gun plugged in. */
+int gui_input_gun_active(void)
+{
+  int slot;
+
+  if (!emu_running) return 0;
+  for (slot = 0; slot < MAX_DEVICES; slot++)
+    if (input.dev[slot] == DEVICE_LIGHTGUN) return 1;
+  return 0;
 }
 
 /* 1 = show a crosshair over the picture while a light gun is plugged in, 0 = the normal pointer. */
@@ -1890,18 +1944,35 @@ int win32_input_update(void)
 
       case DEVICE_LIGHTGUN:
       {
+        int on_picture, on_area;
+
+        if (!input_press_logged && gun_log_n < 7200 && (gun_log_n++ % 120) == 0)       /* for the log, until the first press: why a gun may not answer */
+          gui_log("Light gun (slot %d): window has the focus %d, pointer over the picture %d, over the game area %d", slot, has_focus, cursor_over_picture(), cursor_over_game_area());
         if (!cursor_in_frame(&x, &y)) break;
-        x += (gui.gun_ox - 3) * 4;     /* aim offset (Settings > Input) */
-        y += (gui.gun_oy - 3) * 4;
-        if (x < 0) x = 0;
-        if (y < 0) y = 0;
-        if (sw > 0 && x >= sw) x = sw - 1;
-        if (sh > 0 && y >= sh) y = sh - 1;
+        on_picture = cursor_over_picture();
+        on_area = on_picture || cursor_over_game_area();       /* (the bars and the frame round the picture count: a shot there is a shot off the screen) */
+        if (on_picture)
+        {
+          x += (gui.gun_ox - 3) * 4;     /* aim offset (Settings > Input) */
+          y += (gui.gun_oy - 3) * 4;
+          if (x < 0) x = 0;
+          if (y < 0) y = 0;
+          if (sw > 0 && x >= sw) x = sw - 1;
+          if (sh > 0 && y >= sh) y = sh - 1;
+        }
+        else if (on_area)
+        {
+          x = 1024;                      /* pointed off the screen: a place the game's light sensor cannot see, on any line or column (a shot there is a reload) */
+          y = 1024;
+        }
         input.analog[slot][0] = x;
         input.analog[slot][1] = y;
-        if (mouse_button(VK_LBUTTON)) input.pad[slot] |= INPUT_A;
-        if (mouse_button(VK_RBUTTON)) input.pad[slot] |= INPUT_B;
-        if (mouse_button(VK_MBUTTON)) input.pad[slot] |= INPUT_C;
+        if (on_area)
+        {
+          if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) input.pad[slot] |= INPUT_A;
+          if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) input.pad[slot] |= INPUT_B;
+          if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) input.pad[slot] |= INPUT_C;
+        }
         {
           /* Same reasoning as the mouse case above. */
           t_pad_map map;
@@ -2100,6 +2171,8 @@ int win32_input_update(void)
     int p2 = netplay_active() ? gui_input_p2_slot() : -1;
     if (p2 >= 0) netplay_apply_input(&input.pad[0], &input.pad[p2]);
   }
+
+  { static int prev_logged; if (prev_logged && !input_press_logged) gun_log_n = 0; prev_logged = input_press_logged; }       /* (a new game: the gun log starts again) */
 
   if (!input_press_logged && (input.pad[0] || input.pad[4]))      /* for the log: the first button press of the game was seen */
   {

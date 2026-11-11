@@ -1145,7 +1145,7 @@ static void dc_add_bp(void)
     wc.hInstance = g_inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-    wc.lpszClassName = "GPEXBreakpointEdit";
+    wc.lpszClassName = "GPEXBreakpointEdit"; i18n_keep_ltr("GPEXBreakpointEdit");
     if (!RegisterClassA(&wc)) return;
     registered = 1;
   }
@@ -1499,7 +1499,7 @@ void dlg_cpu_debugger(HWND parent)
     wc.style = CS_DBLCLKS;
     wc.hInstance = g_inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = DC_CLASS;
+    wc.lpszClassName = DC_CLASS; i18n_keep_ltr(DC_CLASS);
     if (!RegisterClassA(&wc)) return;
     registered = 1;
   }

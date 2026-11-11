@@ -1252,7 +1252,7 @@ void dlg_memory_viewer(HWND parent)
     wc.lpfnWndProc = mv_proc;
     wc.hInstance = g_inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = MV_CLASS;
+    wc.lpszClassName = MV_CLASS; i18n_keep_ltr(MV_CLASS);
     if (!RegisterClassA(&wc)) return;
     registered = 1;
   }
@@ -1424,11 +1424,13 @@ int dbgmem_size(int kind)
 /* The filter of the file dialogs is written "Name|*.ext|Name|*.ext", and the dialogs want its parts apart by zero characters. */
 static void dbg_filter(const char *in, char *out, int len)
 {
+  char raw[256];
   int i;
 
-  for (i = 0; in[i] && i < len - 2; i++) out[i] = in[i] == '|' ? '\0' : in[i];
-  out[i++] = '\0';
-  out[i] = '\0';
+  for (i = 0; in[i] && i < (int)sizeof(raw) - 2; i++) raw[i] = in[i] == '|' ? '\0' : in[i];     /* "text|pattern|text|pattern" -> the Windows form */
+  raw[i++] = '\0';
+  raw[i] = '\0';
+  i18n_filter(raw, out, (size_t)len);
 }
 
 int dbg_save_file(HWND owner, const char *title, const char *defname, const char *filter, const void *data, size_t len)
@@ -1446,7 +1448,7 @@ int dbg_save_file(HWND owner, const char *title, const char *defname, const char
   ofn.lpstrFilter = flt;
   ofn.lpstrFile = path;
   ofn.nMaxFile = sizeof(path);
-  ofn.lpstrTitle = title;
+  ofn.lpstrTitle = tr(title);
   ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER;
   if (!GetSaveFileNameA(&ofn)) return 0;
   f = fopen(path, "wb");
@@ -1472,7 +1474,7 @@ unsigned char *dbg_open_file(HWND owner, const char *title, const char *filter, 
   ofn.lpstrFilter = flt;
   ofn.lpstrFile = path;
   ofn.nMaxFile = sizeof(path);
-  ofn.lpstrTitle = title;
+  ofn.lpstrTitle = tr(title);
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER;
   if (!GetOpenFileNameA(&ofn)) return NULL;
   f = fopen(path, "rb");

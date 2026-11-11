@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  d3d9_video.h -- optional Direct3D9 output path.
  *
@@ -68,5 +69,9 @@ int  d3d9_draw_overlay(const uint32 *argb_pixels, int argb_pitch,
                         int w, int h, const RECT *screen_area);
 
 void d3d9_present(void);
+
+/* 1 when the pixel shader of Scaling Filter mode (3 Sharp Bilinear, 4 Bicubic) is made, 0 when it did not compile or the driver would not take it
+   (the hardware's bilinear filter is used then). The first call after the device is made compiles it. */
+int  d3d9_resample_available(int mode);
 
 #endif

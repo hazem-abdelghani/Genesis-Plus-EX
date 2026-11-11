@@ -605,7 +605,7 @@ void ramsearch_open(HWND parent)
     wc.lpfnWndProc = rs_proc;
     wc.hInstance = g_inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = RS_CLASS;
+    wc.lpszClassName = RS_CLASS; i18n_keep_ltr(RS_CLASS);
     if (!RegisterClassA(&wc)) return;
     registered = 1;
   }

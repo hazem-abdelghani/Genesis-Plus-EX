@@ -22,6 +22,19 @@ IDR_GENRES RCDATA "genres.bin"
 IDR_CONTROLLERDB RCDATA "controllerdb.bin"
 IDR_SEGA_SFX RCDATA "sega.wav"
 IDR_RING_SFX RCDATA "ring_sfx.wav"
+IDR_FLAG_USA RCDATA "images/flags/Flag_USA.png"
+IDR_FLAG_EUROPE RCDATA "images/flags/Flag_Europe.png"
+IDR_FLAG_JAPAN RCDATA "images/flags/Flag_Japan.png"
+IDR_FLAG_WORLD RCDATA "images/flags/Flag_World.png"
+IDR_FLAG_KOREA RCDATA "images/flags/Flag_Korea.png"
+IDR_FLAG_BRAZIL RCDATA "images/flags/Flag_Brazil.png"
+IDR_FLAG_UNKNOWN RCDATA "images/flags/Flag_Unknown.png"
+IDR_FLAG_AUSTRALIA RCDATA "images/flags/Flag_Australia.png"
+IDR_FLAG_CANADA RCDATA "images/flags/Flag_Canada.png"
+IDR_FLAG_CHINA RCDATA "images/flags/Flag_China.png"
+IDR_FLAG_HONGKONG RCDATA "images/flags/Flag_HongKong.png"
+IDR_FLAG_RUSSIA RCDATA "images/flags/Flag_Russia.png"
+IDR_FLAG_TAIWAN RCDATA "images/flags/Flag_Taiwan.png"
 
 /****************************************************************************
  * Menu
@@ -157,6 +170,7 @@ BEGIN
     POPUP "&Theme"
     BEGIN
       MENUITEM "&System",                       IDM_VIDEO_THEME_BASE + 0
+      MENUITEM SEPARATOR
       MENUITEM "&Light",                        IDM_VIDEO_THEME_BASE + 1
       MENUITEM "&Dark",                         IDM_VIDEO_THEME_BASE + 2
       MENUITEM "Sapp&hire",                     IDM_VIDEO_THEME_BASE + 3
@@ -170,6 +184,8 @@ BEGIN
     MENUITEM SEPARATOR
     POPUP "Tool&bars"
     BEGIN
+      MENUITEM "&Hide All Bars",      IDM_VIEW_CLEANWINDOW
+      MENUITEM SEPARATOR
       MENUITEM "Show To&olbar",                   IDM_VIEW_TOOLBAR
       MENUITEM "Show Toolbar &Labels",            IDM_OPT_TBLABELS
       POPUP "Toolbar Si&ze"
@@ -179,6 +195,7 @@ BEGIN
         MENUITEM "&Large",                        IDM_SET_TBSIZE_BASE + 2
       END
       MENUITEM "Toolbar in Full&screen",          IDM_VIEW_FSTOOLBAR
+      MENUITEM SEPARATOR
       MENUITEM "Show S&earch Bar",                IDM_VIEW_SEARCHBAR
       MENUITEM "Show F&ilter Bar",                IDM_VIEW_FILTERBAR
       MENUITEM "Show Stat&us Bar",                IDM_VIEW_STATUSBAR
@@ -235,6 +252,14 @@ BEGIN
     BEGIN
       MENUITEM "None",                          IDM_VIDEO_FILTER_NONE
     END
+    POPUP "S&caling Filter"
+    BEGIN
+      MENUITEM "&Nearest",                    IDM_VIDEO_FILTER_MODE_BASE + 0
+      MENUITEM "Sharp Nea&rest",              IDM_VIDEO_FILTER_MODE_BASE + 1
+      MENUITEM "&Bilinear",                   IDM_VIDEO_FILTER_MODE_BASE + 2
+      MENUITEM "&Sharp Bilinear",             IDM_VIDEO_FILTER_MODE_BASE + 3
+      MENUITEM "Bi&cubic",                    IDM_VIDEO_FILTER_MODE_BASE + 4
+    END
 #ifdef _WIN64   /* librashader has no 32-bit build */
     POPUP "Sha&ders"
     BEGIN
@@ -247,12 +272,17 @@ BEGIN
 #endif
     POPUP "Visual &Effects"
     BEGIN
-      MENUITEM "&Smooth Scaling",               IDM_VIDEO_SMOOTH
       MENUITEM "&Deinterlacing",                IDM_VIDEO_DEINTERLACE
       MENUITEM "&Dither Smoothing",             IDM_VIDEO_DITHER
       MENUITEM "&Integer Scaling",              IDM_VIDEO_INTSCALE
       MENUITEM "&Flicker Blending",             IDM_VIDEO_FLICKER
       MENUITEM "&Brighten",                     IDM_VIDEO_BRIGHTEN
+      POPUP "&Color Correction"
+      BEGIN
+        MENUITEM "Off",                         IDM_VIDEO_LCDCOLOR_BASE + 0
+        MENUITEM "Light",                       IDM_VIDEO_LCDCOLOR_BASE + 1
+        MENUITEM "Full",                        IDM_VIDEO_LCDCOLOR_BASE + 2
+      END
       POPUP "LCD &Ghosting"
       BEGIN
         MENUITEM "Off",                         IDM_VIDEO_LCD_BASE + 0
@@ -315,6 +345,7 @@ BEGIN
       MENUITEM "Direct3D 11",                     IDM_VIDEO_RENDERER_BASE + 2
     END
     MENUITEM "&VSync",                            IDM_VIDEO_VSYNC
+    MENUITEM "Variable Refresh &Rate",          IDM_VIDEO_VRR
     MENUITEM "Start ROM in F&ullscreen",        IDM_VIDEO_FULLSCREEN_START
   END
 
@@ -325,6 +356,7 @@ BEGIN
       MENUITEM "&All Sound",                    IDM_AUDIO_ENABLE
       MENUITEM "&FM Sound",                     IDM_AUDIO_MUTE_FM
       MENUITEM "&PSG Sound",                    IDM_AUDIO_MUTE_PSG
+      MENUITEM "&DAC Sound",                    IDM_AUDIO_MUTE_DAC
       MENUITEM "P&WM Sound",                    IDM_AUDIO_MUTE_PWM
     END
     POPUP "Console &Model"
@@ -528,70 +560,64 @@ FONT 8, "MS Shell Dlg"
 BEGIN
 END
 
-IDD_AUDIO DIALOGEX 0, 0, 500, 264
+IDD_AUDIO DIALOGEX 0, 0, 500, 232
 STYLE DS_MODALFRAME | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Audio Levels and Latency"
 FONT 8, "MS Shell Dlg"
 BEGIN
-  LTEXT           "Master Volume", IDC_STATIC, 12, 12, 60, 9
-  CONTROL         "", IDC_AUDIO_VOLUME, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 12, 24, 190, 20
-  RTEXT           "", IDC_AUDIO_VOLUME_TEXT, 200, 28, 34, 9
+  GROUPBOX        "Volumes", IDC_STATIC, 8, 4, 236, 152
+  LTEXT           "Master Volume", IDC_STATIC, 16, 21, 86, 9
+  CONTROL         "", IDC_AUDIO_VOLUME, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 17, 96, 16
+  RTEXT           "", IDC_AUDIO_VOLUME_TEXT, 202, 21, 36, 9
+  LTEXT           "FM Preamp", IDC_STATIC, 16, 40, 86, 9
+  CONTROL         "", IDC_AUDIO_FM, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 36, 96, 16
+  RTEXT           "", IDC_AUDIO_FM_TEXT, 202, 40, 36, 9
+  LTEXT           "PSG Preamp", IDC_STATIC, 16, 59, 86, 9
+  CONTROL         "", IDC_AUDIO_PSG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 55, 96, 16
+  RTEXT           "", IDC_AUDIO_PSG_TEXT, 202, 59, 36, 9
+  LTEXT           "DAC Volume", IDC_ADV_DAC_LABEL, 16, 78, 86, 9
+  CONTROL         "", IDC_ADV_DAC, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 74, 96, 16
+  RTEXT           "", IDC_ADV_DAC_TEXT, 202, 78, 36, 9
+  LTEXT           "PWM Preamp", IDC_AUDIO_PWM_LABEL, 16, 97, 86, 9
+  CONTROL         "", IDC_AUDIO_PWM, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 93, 96, 16
+  RTEXT           "", IDC_AUDIO_PWM_TEXT, 202, 97, 36, 9
+  LTEXT           "CD Audio", IDC_AUDIO_CDDA_LABEL, 16, 116, 86, 9
+  CONTROL         "", IDC_AUDIO_CDDA, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 112, 96, 16
+  RTEXT           "", IDC_AUDIO_CDDA_TEXT, 202, 116, 36, 9
+  LTEXT           "Mega CD PCM Volume", IDC_ADV_PCM_LABEL, 16, 135, 86, 9
+  CONTROL         "", IDC_ADV_PCM, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 131, 96, 16
+  RTEXT           "", IDC_ADV_PCM_TEXT, 202, 135, 36, 9
 
-  LTEXT           "FM Preamp", IDC_STATIC, 12, 50, 60, 9
-  CONTROL         "", IDC_AUDIO_FM, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 12, 62, 190, 20
-  RTEXT           "", IDC_AUDIO_FM_TEXT, 200, 66, 34, 9
+  GROUPBOX        "Audio Filter", IDC_STATIC, 250, 4, 242, 152
+  LTEXT           "Audio Filter:", IDC_STATIC, 258, 20, 70, 9
+  COMBOBOX        IDC_ADV_FILTER, 336, 17, 100, 60, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+  LTEXT           "Low-Pass Strength", IDC_ADV_LABEL_LP, 258, 40, 76, 9
+  CONTROL         "", IDC_ADV_LP, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 334, 37, 110, 16
+  RTEXT           "", IDC_ADV_LP_TEXT, 446, 40, 40, 9
+  LTEXT           "EQ Low Gain", IDC_ADV_LABEL_LG, 258, 60, 76, 9
+  CONTROL         "", IDC_ADV_LG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 334, 57, 110, 16
+  RTEXT           "", IDC_ADV_LG_TEXT, 446, 60, 40, 9
+  LTEXT           "EQ Mid Gain", IDC_ADV_LABEL_MG, 258, 78, 76, 9
+  CONTROL         "", IDC_ADV_MG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 334, 75, 110, 16
+  RTEXT           "", IDC_ADV_MG_TEXT, 446, 78, 40, 9
+  LTEXT           "EQ High Gain", IDC_ADV_LABEL_HG, 258, 96, 76, 9
+  CONTROL         "", IDC_ADV_HG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 334, 93, 110, 16
+  RTEXT           "", IDC_ADV_HG_TEXT, 446, 96, 40, 9
+  LTEXT           "EQ Low Frequency (Hz):", IDC_ADV_LABEL_LOWF, 258, 118, 96, 9
+  EDITTEXT        IDC_ADV_LOWF, 358, 116, 44, 12, ES_NUMBER | ES_AUTOHSCROLL
+  LTEXT           "EQ High Frequency (Hz):", IDC_ADV_LABEL_HIGHF, 258, 134, 96, 9
+  EDITTEXT        IDC_ADV_HIGHF, 358, 132, 44, 12, ES_NUMBER | ES_AUTOHSCROLL
 
-  LTEXT           "PSG Preamp", IDC_STATIC, 12, 88, 60, 9
-  CONTROL         "", IDC_AUDIO_PSG, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 12, 100, 190, 20
-  RTEXT           "", IDC_AUDIO_PSG_TEXT, 200, 104, 34, 9
+  LTEXT           "Buffered Frames", IDC_STATIC, 12, 168, 60, 9
+  CONTROL         "", IDC_AUDIO_LATENCY, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 76, 164, 126, 20
+  RTEXT           "", IDC_AUDIO_LATENCY_TEXT, 204, 168, 34, 9
+  LTEXT           "Live Level", IDC_STATIC, 12, 192, 60, 9
+  CONTROL         "", IDC_AUDIO_METER_L, "msctls_progress32", PBS_SMOOTH, 76, 190, 126, 6
+  CONTROL         "", IDC_AUDIO_METER_R, "msctls_progress32", PBS_SMOOTH, 76, 198, 126, 6
 
-  LTEXT           "CD Audio", IDC_AUDIO_CDDA_LABEL, 12, 126, 60, 9
-  CONTROL         "", IDC_AUDIO_CDDA, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 12, 138, 190, 20
-  RTEXT           "", IDC_AUDIO_CDDA_TEXT, 200, 142, 34, 9
-
-  LTEXT           "PWM Preamp", IDC_AUDIO_PWM_LABEL, 12, 164, 90, 9
-  CONTROL         "", IDC_AUDIO_PWM, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 12, 176, 190, 20
-  RTEXT           "", IDC_AUDIO_PWM_TEXT, 200, 180, 34, 9
-
-  LTEXT           "Buffered Frames", IDC_STATIC, 12, 202, 60, 9
-  CONTROL         "", IDC_AUDIO_LATENCY, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 76, 198, 126, 20
-  RTEXT           "", IDC_AUDIO_LATENCY_TEXT, 200, 202, 34, 9
-
-  LTEXT           "Live Level", IDC_STATIC, 12, 224, 60, 9
-  CONTROL         "", IDC_AUDIO_METER_L, "msctls_progress32", PBS_SMOOTH, 76, 222, 126, 6
-  CONTROL         "", IDC_AUDIO_METER_R, "msctls_progress32", PBS_SMOOTH, 76, 230, 126, 6
-
-  PUSHBUTTON      "Restore Defaults", IDC_AUDIO_DEFAULTS, 12, 244, 74, 16
-
-  LTEXT           "Audio Filter:", IDC_STATIC, 252, 12, 70, 9
-  COMBOBOX        IDC_ADV_FILTER, 330, 10, 100, 60, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-  LTEXT           "Low-Pass Strength", IDC_ADV_LABEL_LP, 252, 30, 76, 9
-  CONTROL         "", IDC_ADV_LP, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 328, 27, 116, 16
-  RTEXT           "", IDC_ADV_LP_TEXT, 448, 30, 40, 9
-  LTEXT           "EQ Low Gain", IDC_ADV_LABEL_LG, 252, 50, 76, 9
-  CONTROL         "", IDC_ADV_LG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 328, 47, 116, 16
-  RTEXT           "", IDC_ADV_LG_TEXT, 448, 50, 40, 9
-  LTEXT           "EQ Mid Gain", IDC_ADV_LABEL_MG, 252, 68, 76, 9
-  CONTROL         "", IDC_ADV_MG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 328, 65, 116, 16
-  RTEXT           "", IDC_ADV_MG_TEXT, 448, 68, 40, 9
-  LTEXT           "EQ High Gain", IDC_ADV_LABEL_HG, 252, 86, 76, 9
-  CONTROL         "", IDC_ADV_HG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 328, 83, 116, 16
-  RTEXT           "", IDC_ADV_HG_TEXT, 448, 86, 40, 9
-  LTEXT           "EQ Low Frequency (Hz):", IDC_ADV_LABEL_LOWF, 252, 106, 96, 9
-  EDITTEXT        IDC_ADV_LOWF, 352, 104, 44, 12, ES_NUMBER | ES_AUTOHSCROLL
-  LTEXT           "EQ High Frequency (Hz):", IDC_ADV_LABEL_HIGHF, 252, 122, 96, 9
-  EDITTEXT        IDC_ADV_HIGHF, 352, 120, 44, 12, ES_NUMBER | ES_AUTOHSCROLL
-  LTEXT           "Sega CD PCM Volume", IDC_ADV_PCM_LABEL, 252, 152, 82, 9
-  CONTROL         "", IDC_ADV_PCM, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 334, 149, 110, 16
-  RTEXT           "", IDC_ADV_PCM_TEXT, 448, 152, 40, 9
-  DEFPUSHBUTTON   "OK", IDOK, 386, 244, 50, 16
-  PUSHBUTTON      "Cancel", IDCANCEL, 440, 244, 48, 16
+  PUSHBUTTON      "Restore Defaults", IDC_AUDIO_DEFAULTS, 12, 210, 74, 16
+  DEFPUSHBUTTON   "OK", IDOK, 386, 210, 50, 16
+  PUSHBUTTON      "Cancel", IDCANCEL, 440, 210, 48, 16
 END
 
 IDD_SHORTCUTS DIALOGEX 0, 0, 320, 190
@@ -761,70 +787,64 @@ FONT 12, "MS Shell Dlg"
 BEGIN
 END
 
-IDD_AUDIO_LARGE DIALOGEX 0, 0, 500, 264
+IDD_AUDIO_LARGE DIALOGEX 0, 0, 500, 232
 STYLE DS_MODALFRAME | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Audio Levels and Latency"
 FONT 12, "MS Shell Dlg"
 BEGIN
-  LTEXT           "Master Volume", IDC_STATIC, 12, 12, 60, 9
-  CONTROL         "", IDC_AUDIO_VOLUME, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 12, 24, 190, 20
-  RTEXT           "", IDC_AUDIO_VOLUME_TEXT, 200, 28, 34, 9
+  GROUPBOX        "Volumes", IDC_STATIC, 8, 4, 236, 152
+  LTEXT           "Master Volume", IDC_STATIC, 16, 21, 86, 9
+  CONTROL         "", IDC_AUDIO_VOLUME, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 17, 96, 16
+  RTEXT           "", IDC_AUDIO_VOLUME_TEXT, 202, 21, 36, 9
+  LTEXT           "FM Preamp", IDC_STATIC, 16, 40, 86, 9
+  CONTROL         "", IDC_AUDIO_FM, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 36, 96, 16
+  RTEXT           "", IDC_AUDIO_FM_TEXT, 202, 40, 36, 9
+  LTEXT           "PSG Preamp", IDC_STATIC, 16, 59, 86, 9
+  CONTROL         "", IDC_AUDIO_PSG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 55, 96, 16
+  RTEXT           "", IDC_AUDIO_PSG_TEXT, 202, 59, 36, 9
+  LTEXT           "DAC Volume", IDC_ADV_DAC_LABEL, 16, 78, 86, 9
+  CONTROL         "", IDC_ADV_DAC, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 74, 96, 16
+  RTEXT           "", IDC_ADV_DAC_TEXT, 202, 78, 36, 9
+  LTEXT           "PWM Preamp", IDC_AUDIO_PWM_LABEL, 16, 97, 86, 9
+  CONTROL         "", IDC_AUDIO_PWM, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 93, 96, 16
+  RTEXT           "", IDC_AUDIO_PWM_TEXT, 202, 97, 36, 9
+  LTEXT           "CD Audio", IDC_AUDIO_CDDA_LABEL, 16, 116, 86, 9
+  CONTROL         "", IDC_AUDIO_CDDA, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 112, 96, 16
+  RTEXT           "", IDC_AUDIO_CDDA_TEXT, 202, 116, 36, 9
+  LTEXT           "Mega CD PCM Volume", IDC_ADV_PCM_LABEL, 16, 135, 86, 9
+  CONTROL         "", IDC_ADV_PCM, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 104, 131, 96, 16
+  RTEXT           "", IDC_ADV_PCM_TEXT, 202, 135, 36, 9
 
-  LTEXT           "FM Preamp", IDC_STATIC, 12, 50, 60, 9
-  CONTROL         "", IDC_AUDIO_FM, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 12, 62, 190, 20
-  RTEXT           "", IDC_AUDIO_FM_TEXT, 200, 66, 34, 9
+  GROUPBOX        "Audio Filter", IDC_STATIC, 250, 4, 242, 152
+  LTEXT           "Audio Filter:", IDC_STATIC, 258, 20, 70, 9
+  COMBOBOX        IDC_ADV_FILTER, 336, 17, 100, 60, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+  LTEXT           "Low-Pass Strength", IDC_ADV_LABEL_LP, 258, 40, 76, 9
+  CONTROL         "", IDC_ADV_LP, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 334, 37, 110, 16
+  RTEXT           "", IDC_ADV_LP_TEXT, 446, 40, 40, 9
+  LTEXT           "EQ Low Gain", IDC_ADV_LABEL_LG, 258, 60, 76, 9
+  CONTROL         "", IDC_ADV_LG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 334, 57, 110, 16
+  RTEXT           "", IDC_ADV_LG_TEXT, 446, 60, 40, 9
+  LTEXT           "EQ Mid Gain", IDC_ADV_LABEL_MG, 258, 78, 76, 9
+  CONTROL         "", IDC_ADV_MG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 334, 75, 110, 16
+  RTEXT           "", IDC_ADV_MG_TEXT, 446, 78, 40, 9
+  LTEXT           "EQ High Gain", IDC_ADV_LABEL_HG, 258, 96, 76, 9
+  CONTROL         "", IDC_ADV_HG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 334, 93, 110, 16
+  RTEXT           "", IDC_ADV_HG_TEXT, 446, 96, 40, 9
+  LTEXT           "EQ Low Frequency (Hz):", IDC_ADV_LABEL_LOWF, 258, 118, 96, 9
+  EDITTEXT        IDC_ADV_LOWF, 358, 116, 44, 12, ES_NUMBER | ES_AUTOHSCROLL
+  LTEXT           "EQ High Frequency (Hz):", IDC_ADV_LABEL_HIGHF, 258, 134, 96, 9
+  EDITTEXT        IDC_ADV_HIGHF, 358, 132, 44, 12, ES_NUMBER | ES_AUTOHSCROLL
 
-  LTEXT           "PSG Preamp", IDC_STATIC, 12, 88, 60, 9
-  CONTROL         "", IDC_AUDIO_PSG, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 12, 100, 190, 20
-  RTEXT           "", IDC_AUDIO_PSG_TEXT, 200, 104, 34, 9
+  LTEXT           "Buffered Frames", IDC_STATIC, 12, 168, 60, 9
+  CONTROL         "", IDC_AUDIO_LATENCY, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 76, 164, 126, 20
+  RTEXT           "", IDC_AUDIO_LATENCY_TEXT, 204, 168, 34, 9
+  LTEXT           "Live Level", IDC_STATIC, 12, 192, 60, 9
+  CONTROL         "", IDC_AUDIO_METER_L, "msctls_progress32", PBS_SMOOTH, 76, 190, 126, 6
+  CONTROL         "", IDC_AUDIO_METER_R, "msctls_progress32", PBS_SMOOTH, 76, 198, 126, 6
 
-  LTEXT           "CD Audio", IDC_AUDIO_CDDA_LABEL, 12, 126, 60, 9
-  CONTROL         "", IDC_AUDIO_CDDA, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 12, 138, 190, 20
-  RTEXT           "", IDC_AUDIO_CDDA_TEXT, 200, 142, 34, 9
-
-  LTEXT           "PWM Preamp", IDC_AUDIO_PWM_LABEL, 12, 164, 90, 9
-  CONTROL         "", IDC_AUDIO_PWM, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 12, 176, 190, 20
-  RTEXT           "", IDC_AUDIO_PWM_TEXT, 200, 180, 34, 9
-
-  LTEXT           "Buffered Frames", IDC_STATIC, 12, 202, 60, 9
-  CONTROL         "", IDC_AUDIO_LATENCY, "msctls_trackbar32",
-                  TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 76, 198, 126, 20
-  RTEXT           "", IDC_AUDIO_LATENCY_TEXT, 200, 202, 34, 9
-
-  LTEXT           "Live Level", IDC_STATIC, 12, 224, 60, 9
-  CONTROL         "", IDC_AUDIO_METER_L, "msctls_progress32", PBS_SMOOTH, 76, 222, 126, 6
-  CONTROL         "", IDC_AUDIO_METER_R, "msctls_progress32", PBS_SMOOTH, 76, 230, 126, 6
-
-  PUSHBUTTON      "Restore Defaults", IDC_AUDIO_DEFAULTS, 12, 244, 68, 16
-
-  LTEXT           "Audio Filter:", IDC_STATIC, 252, 12, 70, 9
-  COMBOBOX        IDC_ADV_FILTER, 330, 10, 100, 60, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-  LTEXT           "Low-Pass Strength", IDC_ADV_LABEL_LP, 252, 30, 76, 9
-  CONTROL         "", IDC_ADV_LP, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 328, 27, 116, 16
-  RTEXT           "", IDC_ADV_LP_TEXT, 448, 30, 40, 9
-  LTEXT           "EQ Low Gain", IDC_ADV_LABEL_LG, 252, 50, 76, 9
-  CONTROL         "", IDC_ADV_LG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 328, 47, 116, 16
-  RTEXT           "", IDC_ADV_LG_TEXT, 448, 50, 40, 9
-  LTEXT           "EQ Mid Gain", IDC_ADV_LABEL_MG, 252, 68, 76, 9
-  CONTROL         "", IDC_ADV_MG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 328, 65, 116, 16
-  RTEXT           "", IDC_ADV_MG_TEXT, 448, 68, 40, 9
-  LTEXT           "EQ High Gain", IDC_ADV_LABEL_HG, 252, 86, 76, 9
-  CONTROL         "", IDC_ADV_HG, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 328, 83, 116, 16
-  RTEXT           "", IDC_ADV_HG_TEXT, 448, 86, 40, 9
-  LTEXT           "EQ Low Frequency (Hz):", IDC_ADV_LABEL_LOWF, 252, 106, 96, 9
-  EDITTEXT        IDC_ADV_LOWF, 352, 104, 44, 12, ES_NUMBER | ES_AUTOHSCROLL
-  LTEXT           "EQ High Frequency (Hz):", IDC_ADV_LABEL_HIGHF, 252, 122, 96, 9
-  EDITTEXT        IDC_ADV_HIGHF, 352, 120, 44, 12, ES_NUMBER | ES_AUTOHSCROLL
-  LTEXT           "Sega CD PCM Volume", IDC_ADV_PCM_LABEL, 252, 152, 76, 9
-  CONTROL         "", IDC_ADV_PCM, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 328, 149, 116, 16
-  RTEXT           "", IDC_ADV_PCM_TEXT, 448, 152, 40, 9
-  DEFPUSHBUTTON   "OK", IDOK, 386, 244, 50, 16
-  PUSHBUTTON      "Cancel", IDCANCEL, 440, 244, 48, 16
+  PUSHBUTTON      "Restore Defaults", IDC_AUDIO_DEFAULTS, 12, 210, 74, 16
+  DEFPUSHBUTTON   "OK", IDOK, 386, 210, 50, 16
+  PUSHBUTTON      "Cancel", IDCANCEL, 440, 210, 48, 16
 END
 
 IDD_SHORTCUTS_LARGE DIALOGEX 0, 0, 320, 190
@@ -1074,8 +1094,8 @@ END
  ****************************************************************************/
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     3,1,0,0
-PRODUCTVERSION  3,1,0,0
+FILEVERSION     3,2,0,0
+PRODUCTVERSION  3,2,0,0
 FILEOS          VOS_NT_WINDOWS32
 FILETYPE        VFT_APP
 BEGIN
@@ -1084,12 +1104,12 @@ BEGIN
     BLOCK "040904E4"
     BEGIN
       VALUE "FileDescription", "Genesis Plus EX"
-      VALUE "FileVersion",     "3.1.0"
+      VALUE "FileVersion",     "3.2.0"
       VALUE "InternalName",    "Genesis Plus EX"
       VALUE "OriginalFilename","Genesis Plus EX.exe"
       VALUE "ProductName",     "Genesis Plus EX"
-      VALUE "ProductVersion",  "3.1.0"
-      VALUE "LegalCopyright",  "Copyright (C) 1998-2003 Charles MacDonald, 2007-2026 Eke-Eke"
+      VALUE "ProductVersion",  "3.2.0"
+      VALUE "LegalCopyright",  "Copyright (C) 2026 Hazem Abdelghani"
     END
   END
   BLOCK "VarFileInfo"

@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  browser.c -- a library view over a folder of ROMs, built into the main
  *  window itself rather than a separate dialog: when nothing is running,
@@ -487,17 +488,40 @@ static int contains_ci(const char *haystack, const char *needle)
 /* Region from the file name's parenthesized tags -- "(USA)", "(Europe)",
    "(Japan, USA)", or the short forms "(U)", "(E)", "(J)", "(UE)" -- or
    "Unknown" when the name carries none. */
-static const char *const region_words[] =
-  { "USA", "Europe", "Japan", "World", "Asia", "Korea", "Brazil", "Australia", "Germany",
-    "France", "Spain", "Italy", "Sweden", "Netherlands", "China", "Taiwan", "Canada",
-    "UK", "Russia", "Hong Kong", NULL };
+/* Each region word with its flag picture (a number of images\flags, see FLG_* below: the picture is named by the same entry, so adding a word cannot
+   misplace the others) and whether that picture is the word's own flag (Germany shows the flag of Europe, Asia the one of the World: not its own). */
+enum { FLG_USA, FLG_EUROPE, FLG_JAPAN, FLG_WORLD, FLG_KOREA, FLG_BRAZIL, FLG_UNKNOWN, FLG_AUSTRALIA, FLG_CANADA, FLG_CHINA, FLG_HONGKONG, FLG_RUSSIA, FLG_TAIWAN, FLG_IMAGES };
+static const struct { const char *word; signed char flag, own; } region_tab[] =
+{
+  { "USA", FLG_USA, 1 },       { "Europe", FLG_EUROPE, 1 },     { "Japan", FLG_JAPAN, 1 },         { "World", FLG_WORLD, 1 },
+  { "Asia", FLG_WORLD, 0 },    { "Korea", FLG_KOREA, 1 },       { "Brazil", FLG_BRAZIL, 1 },       { "Australia", FLG_AUSTRALIA, 1 },
+  { "Germany", FLG_EUROPE, 0 }, { "France", FLG_EUROPE, 0 },    { "Spain", FLG_EUROPE, 0 },        { "Italy", FLG_EUROPE, 0 },
+  { "Sweden", FLG_EUROPE, 0 }, { "Netherlands", FLG_EUROPE, 0 }, { "China", FLG_CHINA, 1 },         { "Taiwan", FLG_TAIWAN, 1 },
+  { "Canada", FLG_CANADA, 1 }, { "UK", FLG_EUROPE, 0 },         { "Russia", FLG_RUSSIA, 1 },       { "Hong Kong", FLG_HONGKONG, 1 },
+  { NULL, 0, 0 }
+};
+
+/* The picture ids of resource.h and the FLG_ numbers above must agree: */
+typedef char flag_id_usa[(IDR_FLAG_USA == IDR_FLAG_BASE + FLG_USA) ? 1 : -1];
+typedef char flag_id_europe[(IDR_FLAG_EUROPE == IDR_FLAG_BASE + FLG_EUROPE) ? 1 : -1];
+typedef char flag_id_japan[(IDR_FLAG_JAPAN == IDR_FLAG_BASE + FLG_JAPAN) ? 1 : -1];
+typedef char flag_id_world[(IDR_FLAG_WORLD == IDR_FLAG_BASE + FLG_WORLD) ? 1 : -1];
+typedef char flag_id_korea[(IDR_FLAG_KOREA == IDR_FLAG_BASE + FLG_KOREA) ? 1 : -1];
+typedef char flag_id_brazil[(IDR_FLAG_BRAZIL == IDR_FLAG_BASE + FLG_BRAZIL) ? 1 : -1];
+typedef char flag_id_unknown[(IDR_FLAG_UNKNOWN == IDR_FLAG_BASE + FLG_UNKNOWN) ? 1 : -1];
+typedef char flag_id_australia[(IDR_FLAG_AUSTRALIA == IDR_FLAG_BASE + FLG_AUSTRALIA) ? 1 : -1];
+typedef char flag_id_canada[(IDR_FLAG_CANADA == IDR_FLAG_BASE + FLG_CANADA) ? 1 : -1];
+typedef char flag_id_china[(IDR_FLAG_CHINA == IDR_FLAG_BASE + FLG_CHINA) ? 1 : -1];
+typedef char flag_id_hongkong[(IDR_FLAG_HONGKONG == IDR_FLAG_BASE + FLG_HONGKONG) ? 1 : -1];
+typedef char flag_id_russia[(IDR_FLAG_RUSSIA == IDR_FLAG_BASE + FLG_RUSSIA) ? 1 : -1];
+typedef char flag_id_taiwan[(IDR_FLAG_TAIWAN == IDR_FLAG_BASE + FLG_TAIWAN) ? 1 : -1];
 
 static int is_region_word(const char *s, int n)
 {
   int i;
-  for (i = 0; region_words[i]; i++)
-    if ((int)lstrlenA(region_words[i]) == n &&
-        CompareStringA(LOCALE_USER_DEFAULT, NORM_IGNORECASE, s, n, region_words[i], n) == CSTR_EQUAL)
+  for (i = 0; region_tab[i].word; i++)
+    if ((int)lstrlenA(region_tab[i].word) == n &&
+        CompareStringA(LOCALE_USER_DEFAULT, NORM_IGNORECASE, s, n, region_tab[i].word, n) == CSTR_EQUAL)
       return 1;
   return 0;
 }
@@ -1960,7 +1984,7 @@ static void CALLBACK grid_settle_timer(HWND hwnd, UINT msg, UINT_PTR id, DWORD n
 
 static void grid_schedule_settle(void)
 {
-  if (panel_list && gui.browser_grid_view && (gui.cover_card || gui.console_badge)) SetTimer(panel_list, 0x6A1E, 150, grid_settle_timer);
+  if (panel_list && gui.browser_grid_view && (gui.cover_card || gui.console_badge || gui.region_flags)) SetTimer(panel_list, 0x6A1E, 150, grid_settle_timer);
 }
 
 static void CALLBACK grid_settle_timer(HWND hwnd, UINT msg, UINT_PTR id, DWORD now)
@@ -2663,6 +2687,44 @@ void browser_toggle_column(int col)
   config_save();
 }
 
+static int flg_parse(const char *text, int *out, int max, int unknown, int *shared);
+static int flg_w(int kind, int h);
+
+/* The width one column needs to show everything in it and its title: what the contents need (LVSCW_AUTOSIZE), at least what the title needs. The Region
+   column with flags needs the room of the widest row of flags (and the name after them, for the regions that share a flag). LVSCW_AUTOSIZE_USEHEADER
+   is not used: on the last column it fills the rest of the list instead of fitting the column, so the first Size All Columns to Fit gave a different
+   result than the next one. */
+static int fit_column_width(int col)
+{
+  int w, hw = gui_list_header_width(panel_list, col);
+
+  SendMessage(panel_list, LVM_SETCOLUMNWIDTH, (WPARAM)col, (LPARAM)LVSCW_AUTOSIZE);
+  w = (int)SendMessage(panel_list, LVM_GETCOLUMNWIDTH, (WPARAM)col, 0);
+  if (col == COL_REGION && gui.region_flags)
+  {
+    HDC dc = GetDC(panel_list);
+    HGDIOBJ old = SelectObject(dc, (HFONT)SendMessage(panel_list, WM_GETFONT, 0, 0));
+    int row, widest = 0, gap = TBS(17) / 5 > 2 ? TBS(17) / 5 : 2;
+
+    for (row = 0; row < filtered_count; row++)
+    {
+      browser_entry_t *e = filtered_index[row] >= 0 ? row_entry(row) : NULL;
+      int ks[4], shared = 0, nk, i, rw = 0;
+      SIZE sz;
+
+      if (!e) continue;
+      nk = flg_parse(e->region, ks, 4, 1, &shared);
+      for (i = 0; i < nk; i++) rw += flg_w(ks[i], TBS(17)) + (i ? gap : 0);
+      if (shared) { GetTextExtentPoint32A(dc, e->region, lstrlenA(e->region), &sz); rw += TBS(6) + sz.cx; }
+      if (rw > widest) widest = rw;
+    }
+    SelectObject(dc, old);
+    ReleaseDC(panel_list, dc);
+    w = widest + TBS(6) + TBS(10);                       /* (the room before the flags and after them) */
+  }
+  return w > hw ? w : hw;
+}
+
 static void show_column_menu(int screen_x, int screen_y)
 {
   HMENU menu = CreatePopupMenu();
@@ -2703,15 +2765,13 @@ static void show_column_menu(int screen_x, int screen_y)
     for (col = COL_FAV; col < BROWSER_COLUMNS; col++)
     {
       if (col_hidden[col]) continue;
-      SendMessage(panel_list, LVM_SETCOLUMNWIDTH, (WPARAM)col, (LPARAM)LVSCW_AUTOSIZE_USEHEADER);
-      { int w = (int)SendMessage(panel_list, LVM_GETCOLUMNWIDTH, (WPARAM)col, 0); gui.browser_col_w[col] = w > 20 ? w : 20; }
+      { int w = fit_column_width(col); gui.browser_col_w[col] = w > 20 ? w : 20; }
     }
     for (col = 0; col < COL_FAV; col++)
     {
       int w, pct;
       if (col_hidden[col]) continue;
-      SendMessage(panel_list, LVM_SETCOLUMNWIDTH, (WPARAM)col, (LPARAM)LVSCW_AUTOSIZE_USEHEADER);
-      w = (int)SendMessage(panel_list, LVM_GETCOLUMNWIDTH, (WPARAM)col, 0);
+      w = fit_column_width(col);
       pct = (w * 100 + list_pct_base() - 1) / list_pct_base() + 1;      /* rounded up, so the text is never cut short */
       gui.browser_col_pct[col] = pct < 5 ? 5 : (pct > 90 ? 90 : pct);
     }
@@ -4259,6 +4319,114 @@ done:
 }
 
 /* A small tag for the corner of a cover that names the console (MD, MCD, 32X, SMS, GG, SG, PICO), each in its own colour. */
+
+/* The flags to show for a region text ("Japan, USA"): pictures built into the program (images\flags\*.png: USA, Europe, Japan, World, Korea, Brazil, Australia,
+   Canada, China, Hong Kong, Russia, Taiwan and one for a game without a region). The countries of Europe show the flag of Europe, Asia the World
+   one. With unknown, a text without a region gives the picture for it. At most max flags, each once. *shared is set when a flag stands for a
+   region that has no flag of its own (the column then shows the text too, or the flags alone would hide which country it is). */
+static int flg_parse(const char *text, int *out, int max, int unknown, int *shared)
+{
+  int n = 0, i;
+
+  if (shared) *shared = 0;
+  const char *p = text;
+
+  while (p && *p && n < max)
+  {
+    const char *e = strchr(p, ',');
+    int len = e ? (int)(e - p) : (int)strlen(p), s = 0, k, kind = -1;
+
+    while (s < len && p[s] == ' ') s++;
+    while (len > s && p[len - 1] == ' ') len--;
+    for (k = 0; region_tab[k].word; k++)
+      if ((int)lstrlenA(region_tab[k].word) == len - s &&
+          CompareStringA(LOCALE_USER_DEFAULT, NORM_IGNORECASE, p + s, len - s, region_tab[k].word, len - s) == CSTR_EQUAL)
+      {
+        kind = region_tab[k].flag;
+        if (!region_tab[k].own && shared) *shared = 1;
+        break;
+      }
+    if (kind >= 0)
+    {
+      for (i = 0; i < n; i++) if (out[i] == kind) break;
+      if (i == n) out[n++] = kind;
+    }
+    p = e ? e + 1 : NULL;
+  }
+  if (!n && unknown) out[n++] = FLG_UNKNOWN;
+  return n;
+}
+
+#define FLG_MAX 4
+
+/* The picture of flag number k, h pixels high (kept for the next time; one size at a time for each). *pw is its width. */
+static HBITMAP flg_image(int k, int h, int *pw)
+{
+  static HBITMAP bmp[FLG_IMAGES];
+  static int bh[FLG_IMAGES], bw[FLG_IMAGES];
+  static char failed[FLG_IMAGES];                       /* a picture that could not be made is not tried again at every paint */
+
+  if (k < 0 || k >= FLG_IMAGES || failed[k]) return NULL;
+  if (!bmp[k] || bh[k] != h)
+  {
+    HRSRC res = FindResourceA(NULL, MAKEINTRESOURCEA(IDR_FLAG_BASE + k), (LPCSTR)RT_RCDATA);
+    const unsigned char *src = res ? (const unsigned char *)LockResource(LoadResource(NULL, res)) : NULL;
+    unsigned char *img;
+    int sw, sh, ch;
+
+    if (bmp[k]) { DeleteObject(bmp[k]); bmp[k] = NULL; }
+    if (!src) { failed[k] = 1; return NULL; }
+    img = stbi_load_from_memory(src, (int)SizeofResource(NULL, res), &sw, &sh, &ch, 4);
+    if (!img) { failed[k] = 1; return NULL; }
+    bmp[k] = gui_scale_rgba(img, sw, sh, h, &bw[k]);
+    bh[k] = h;
+    stbi_image_free(img);
+    if (!bmp[k]) { failed[k] = 1; return NULL; }
+  }
+  *pw = bw[k];
+  return bmp[k];
+}
+
+/* The width of one flag h high. */
+static int flg_w(int kind, int h)
+{
+  int w;
+
+  return flg_image(kind, h, &w) ? w : h * 3 / 2;
+}
+
+/* The flags side by side from x, y, each h high; returns the width they take. */
+static int flg_draw_all(HDC dc, int x, int y, int h, const int *ks, int n)
+{
+  int i, gap = h / 5 > 2 ? h / 5 : 2, x0 = x;
+
+  for (i = 0; i < n; i++)
+  {
+    int w = flg_w(ks[i], h);
+
+    {
+      int pw = 0;
+      HBITMAP bmp = flg_image(ks[i], h, &pw);
+
+      if (bmp)
+      {
+        HDC mem = CreateCompatibleDC(dc);
+        HGDIOBJ old = mem ? SelectObject(mem, bmp) : NULL;
+        BLENDFUNCTION bf;
+        RECT fr;
+
+        bf.BlendOp = AC_SRC_OVER; bf.BlendFlags = 0; bf.SourceConstantAlpha = 255; bf.AlphaFormat = AC_SRC_ALPHA;
+        if (mem) { AlphaBlend(dc, x, y, pw, h, mem, 0, 0, pw, h, bf); SelectObject(mem, old); DeleteDC(mem); }
+        SetDCBrushColor(dc, RGB(110, 110, 110));
+        fr.left = x; fr.top = y; fr.right = x + pw; fr.bottom = y + h;
+        FrameRect(dc, &fr, (HBRUSH)GetStockObject(DC_BRUSH));                 /* (a thin edge, so a white flag shows on a white row) */
+      }
+    }
+    x += w + gap;
+  }
+  return n ? x - gap - x0 : 0;
+}
+
 static HFONT badge_font;
 static int badge_font_h;
 
@@ -4313,6 +4481,42 @@ static void draw_console_badge(HDC dc, int right, int top, int h, const char *co
    kept as where the cover sits in the item's own rectangle (centred on it, so far below its top); the rest are worked out from
    the rectangle the list gives with each item. Asked again after anything that changes the tiles (grid_icon_cal = 0). */
 
+/* The thin lines of the list at one cell: after the column (not the last one), and under the row with View > Game List > Show Grid Lines. */
+static void cell_lines(HDC hdc, int row, int col)
+{
+  {
+    RECT cr;
+        int w = ListView_GetColumnWidth(panel_list, col), c, last = -1;
+        int order[BROWSER_COLUMNS], ncol = Header_GetItemCount(ListView_GetHeader(panel_list));
+
+        /* "Last" is the last one on screen, which is not the highest number once columns have been moved. */
+        if (ncol > BROWSER_COLUMNS) ncol = BROWSER_COLUMNS;
+        if (ncol > 0 && ListView_GetColumnOrderArray(panel_list, ncol, order))
+        {
+          for (c = 0; c < ncol; c++) if (ListView_GetColumnWidth(panel_list, order[c]) > 0) last = order[c];
+        }
+        else
+          for (c = 0; c < BROWSER_COLUMNS; c++) if (ListView_GetColumnWidth(panel_list, c) > 0) last = c;
+        if (w > 0 && GetCellRect(panel_list, row, col, &cr))
+        {
+          HPEN pen = CreatePen(PS_SOLID, 1, theme_is_dark() ? theme_dk(RGB(0x3A, 0x3A, 0x3A)) : RGB(0xDD, 0xDD, 0xDD));
+          HGDIOBJ op = SelectObject(hdc, pen);
+          if (col != last)       /* after the column */
+          {
+            MoveToEx(hdc, cr.right - 1, cr.top, NULL);
+            LineTo(hdc, cr.right - 1, cr.bottom);
+          }
+          if (gui.browser_gridlines)   /* View > Game List > Show Grid Lines: and under the row */
+          {
+            MoveToEx(hdc, cr.left, cr.bottom - 1, NULL);
+            LineTo(hdc, cr.right, cr.bottom - 1);
+          }
+          SelectObject(hdc, op);
+          DeleteObject(pen);
+        }
+      }
+}
+
 static int grid_icon_rect(const NMLVCUSTOMDRAW *cd, RECT *ri)
 {
   const RECT *rc = &cd->nmcd.rc;
@@ -4352,7 +4556,7 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
     /* Frame Around Cover and Name: each game's frame is drawn right after the game itself, when that item is painted, so only
        the items that need painting get one (nothing walks through the whole list on every paint), and it is there whether or not
        the cover has arrived yet (an empty card until it does). Headings and empty cells are drawn by the code below. */
-    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return (grid_headed || gui.cover_card || gui.console_badge || gui.accent || gui.ui_style) ? CDRF_NOTIFYITEMDRAW : CDRF_DODEFAULT;
+    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return (grid_headed || gui.cover_card || gui.console_badge || gui.region_flags || gui.accent || gui.ui_style) ? CDRF_NOTIFYITEMDRAW : CDRF_DODEFAULT;
     if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT)
     {
       /* A heading is drawn across its whole row, and an empty cell shows that same row's heading where it covers it. */
@@ -4361,9 +4565,9 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
           (ListView_GetItemState(panel_list, row, LVIS_SELECTED) & LVIS_SELECTED))
       {
         grid_selected_paint(cd->nmcd.hdc, row);
-        return (gui.cover_card || gui.console_badge) ? (CDRF_SKIPDEFAULT | CDRF_NOTIFYPOSTPAINT) : CDRF_SKIPDEFAULT;
+        return (gui.cover_card || gui.console_badge || gui.region_flags) ? (CDRF_SKIPDEFAULT | CDRF_NOTIFYPOSTPAINT) : CDRF_SKIPDEFAULT;
       }
-      if (row < 0 || row >= filtered_count || filtered_index[row] >= 0) return (gui.cover_card || gui.console_badge) ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
+      if (row < 0 || row >= filtered_count || filtered_index[row] >= 0) return (gui.cover_card || gui.console_badge || gui.region_flags) ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
       while (head > 0 && filtered_index[head] == ROW_PAD) head--;
       if (filtered_index[head] < 0 && filtered_index[head] != ROW_PAD && row - head < grid_built_cols)      /* only the cells of the heading's own row; the empty cells after the games stay blank */
       {
@@ -4380,7 +4584,7 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
       }
       return CDRF_SKIPDEFAULT;
     }
-    if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT && gui.console_badge)
+    if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT && (gui.console_badge || gui.region_flags))
     {
       RECT ri;
       browser_entry_t *ce = row_entry((int)cd->nmcd.dwItemSpec);
@@ -4395,8 +4599,15 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
         coverart_frame_rect(gui.browser_grid_size, &fx, &fy, &fw, &fh);                    /* (a box or wide frame is smaller than the tile: the badge sits on the cover) */
         int saved = SaveDC(cd->nmcd.hdc);
         IntersectClipRect(cd->nmcd.hdc, cd->nmcd.rc.left, cd->nmcd.rc.top, cd->nmcd.rc.right, cd->nmcd.rc.bottom);       /* (never outside its own item) */
-        draw_console_badge(cd->nmcd.hdc, cx - gui.browser_grid_size / 2 + fx + fw - TBS(3), ri.top + fy + TBS(3), h, ce->console);
-        RestoreDC(cd->nmcd.hdc, saved);
+        if (gui.console_badge) draw_console_badge(cd->nmcd.hdc, cx - gui.browser_grid_size / 2 + fx + fw - TBS(3), ri.top + fy + TBS(3), h, ce->console);
+        if (gui.region_flags)                                                   /* the flags of the game's regions, in the bottom left corner of the cover */
+        {
+          int ks[FLG_MAX], nk = flg_parse(ce->region, ks, FLG_MAX, 0, NULL), flh = gui.browser_grid_size / 9;
+
+          if (flh < TBS(10)) flh = TBS(10);
+          if (flh > TBS(16)) flh = TBS(16);
+          if (nk) flg_draw_all(cd->nmcd.hdc, cx - gui.browser_grid_size / 2 + fx + TBS(3), ri.top + fy + fh - flh - TBS(3), flh, ks, nk);
+        }        RestoreDC(cd->nmcd.hdc, saved);
       }
     }
     if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT && gui.cover_card)
@@ -4442,6 +4653,49 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
       return CDRF_NOTIFYSUBITEMDRAW;
 
     case CDDS_SUBITEM | CDDS_ITEMPREPAINT:
+      if (gui.region_flags && cd->iSubItem == COL_REGION)             /* the Region column: the flags, then the text */
+      {
+        int row = (int)cd->nmcd.dwItemSpec;
+        browser_entry_t *re = row >= 0 && row < filtered_count && filtered_index[row] >= 0 ? row_entry(row) : NULL;
+        int ks[FLG_MAX], shared = 0, nk = re ? flg_parse(re->region, ks, FLG_MAX, 1, &shared) : 0;
+        RECT cell;
+
+        if (nk && GetCellRect(panel_list, row, COL_REGION, &cell) && cell.right > cell.left)
+        {
+          int sel = (ListView_GetItemState(panel_list, row, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+          int own = sel && (gui.accent || gui.ui_style || theme_is_dark());
+          COLORREF bg = ListView_GetTextBkColor(panel_list), fg;
+          HBRUSH hb;
+          int fh = TBS(17), sv = SaveDC(cd->nmcd.hdc), fw;
+
+          if (bg == CLR_NONE) bg = ListView_GetBkColor(panel_list);                     /* (no color set for the text: the list's own) */
+          if (bg == CLR_NONE) bg = GetSysColor(COLOR_WINDOW);
+          if (sel) bg = own ? theme_accent_bg() : GetSysColor(GetFocus() == panel_list ? COLOR_HIGHLIGHT : COLOR_BTNFACE);
+          fg = sel ? (own ? RGB(255, 255, 255) : GetSysColor(GetFocus() == panel_list ? COLOR_HIGHLIGHTTEXT : COLOR_BTNTEXT)) : ListView_GetTextColor(panel_list);
+          if (fg == CLR_NONE) fg = GetSysColor(COLOR_WINDOWTEXT);
+          hb = CreateSolidBrush(bg);
+
+          if (fh > cell.bottom - cell.top - 2) fh = cell.bottom - cell.top - 2;          /* (never taller than the row) */
+
+          IntersectClipRect(cd->nmcd.hdc, cell.left, cell.top, cell.right, cell.bottom);
+          FillRect(cd->nmcd.hdc, &cell, hb);
+          DeleteObject(hb);
+          fw = flg_draw_all(cd->nmcd.hdc, cell.left + TBS(6), cell.top + (cell.bottom - cell.top - fh) / 2, fh, ks, nk);
+          if (shared)                                                          /* (Germany, France, the UK ... have the flag of Europe, Asia the World one: the name tells which) */
+          {
+            RECT tr = cell;
+
+            tr.left += TBS(6) + fw + TBS(6);
+            tr.right -= TBS(4);
+            SetBkMode(cd->nmcd.hdc, TRANSPARENT);
+            SetTextColor(cd->nmcd.hdc, fg);
+            DrawTextA(cd->nmcd.hdc, re->region, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+          }
+          cell_lines(cd->nmcd.hdc, row, COL_REGION);                           /* (drawn here: the system does not tell when the program drew the cell) */
+          RestoreDC(cd->nmcd.hdc, sv);
+          return CDRF_SKIPDEFAULT | CDRF_NOTIFYPOSTPAINT;
+        }
+      }
       /* An accent color chosen: the selected row is drawn in it (Windows would use its own color). */
       if ((gui.accent || gui.ui_style) && (ListView_GetItemState(panel_list, (int)cd->nmcd.dwItemSpec, LVIS_SELECTED) & LVIS_SELECTED))
       {
@@ -4476,37 +4730,7 @@ LRESULT browser_list_customdraw(NMHDR *hdr)
 
     case CDDS_SUBITEM | CDDS_ITEMPOSTPAINT:
       /* Thin lines after each column (not after the last one), always; View > Game List > Show Grid Lines adds them under each row. */
-      {
-        RECT cr;
-        int col = cd->iSubItem, w = ListView_GetColumnWidth(panel_list, col), c, last = -1;
-        int order[BROWSER_COLUMNS], ncol = Header_GetItemCount(ListView_GetHeader(panel_list));
-
-        /* "Last" is the last one on screen, which is not the highest number once columns have been moved. */
-        if (ncol > BROWSER_COLUMNS) ncol = BROWSER_COLUMNS;
-        if (ncol > 0 && ListView_GetColumnOrderArray(panel_list, ncol, order))
-        {
-          for (c = 0; c < ncol; c++) if (ListView_GetColumnWidth(panel_list, order[c]) > 0) last = order[c];
-        }
-        else
-          for (c = 0; c < BROWSER_COLUMNS; c++) if (ListView_GetColumnWidth(panel_list, c) > 0) last = c;
-        if (w > 0 && GetCellRect(panel_list, (int)cd->nmcd.dwItemSpec, col, &cr))
-        {
-          HPEN pen = CreatePen(PS_SOLID, 1, theme_is_dark() ? theme_dk(RGB(0x3A, 0x3A, 0x3A)) : RGB(0xDD, 0xDD, 0xDD));
-          HGDIOBJ op = SelectObject(cd->nmcd.hdc, pen);
-          if (col != last)       /* after the column */
-          {
-            MoveToEx(cd->nmcd.hdc, cr.right - 1, cr.top, NULL);
-            LineTo(cd->nmcd.hdc, cr.right - 1, cr.bottom);
-          }
-          if (gui.browser_gridlines)   /* View > Game List > Show Grid Lines: and under the row */
-          {
-            MoveToEx(cd->nmcd.hdc, cr.left, cr.bottom - 1, NULL);
-            LineTo(cd->nmcd.hdc, cr.right, cr.bottom - 1);
-          }
-          SelectObject(cd->nmcd.hdc, op);
-          DeleteObject(pen);
-        }
-      }
+      cell_lines(cd->nmcd.hdc, (int)cd->nmcd.dwItemSpec, cd->iSubItem);
       if (cd->iSubItem == COL_FAV && !col_hidden[COL_FAV])
       {
         int row = (int)cd->nmcd.dwItemSpec, sz = TBS(16);
@@ -4883,7 +5107,8 @@ static void show_item_context_menu(int screen_x, int screen_y, int item_index)
   }
 
   SetForegroundWindow(g_hwnd);
-  cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+  i18n_mirror_menu(menu);
+  cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | (i18n_rtl ? TPM_LAYOUTRTL : 0),
                        screen_x, screen_y, 0, g_hwnd, NULL);
   DestroyMenu(menu);   /* also destroys state_menu, since it's attached as a submenu */
   PostMessage(g_hwnd, WM_NULL, 0, 0);
@@ -5279,7 +5504,7 @@ static int toolbar_rows_for(int width)
 /* Its height when the window is `width` wide (a window about to be sized), 0 when it is not shown. */
 int browser_toolbar_height_at(int width)
 {
-  if (!panel_toolbar || gui.hide_toolbar || gui.fullscreen) return 0;
+  if (!panel_toolbar || gui.hide_toolbar || gui.fullscreen || gui_clean_window_on()) return 0;
   return tb_bar_h_rows(toolbar_rows_for(width));
 }
 
@@ -5291,7 +5516,7 @@ static int toolbar_current_h(void)
 
 int browser_toolbar_height(void)
 {
-  if (!panel_toolbar || gui.hide_toolbar) return 0;
+  if (!panel_toolbar || gui.hide_toolbar || gui_clean_window_on()) return 0;
   if (gui.fullscreen) return fs_overlay ? TOOLBAR_H : 0;
   return TOOLBAR_H;
 }

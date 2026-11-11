@@ -111,6 +111,7 @@ INCLUDES  = -I$(GUIDIR) \
 
 DEFINES   = -DLSB_FIRST \
             -DHOOK_CPU \
+            -DM68K_OVERCLOCK_SHIFT=20 \
             -DUSE_16BPP_RENDERING \
             -DMAXROMSIZE=100663296 \
             -DHAVE_YM3438_CORE \

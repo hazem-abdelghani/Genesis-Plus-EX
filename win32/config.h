@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  config.h -- emulation settings (t_config, read directly by the core) and
  *              frontend settings (t_gui_config, used only by the GUI).
@@ -128,7 +129,7 @@ typedef struct
   int scale;              /* 1-4, integer window scale at 320x224 */
   int aspect;             /* one of the ASPECT_* values */
   int rotation;           /* Video > Rotation: the picture turned clockwise by 0, 90, 180 or 270 degrees (0-3) */
-  int smooth;             /* 1 = smooth scaling (HALFTONE), 0 = nearest */
+  int smooth;             /* scaling filter: 0 nearest, 1 sharp nearest (a whole multiple by nearest first, the rest bilinear), 2 bilinear (HALFTONE in GDI), 3 sharp bilinear, 4 bicubic (3 and 4: Direct3D 11) */
   int scanline_pct;       /* 0/25/50/75/100 -- darkens alternating output rows */
   int nuked_ym2612;       /* Nuked FM core: 1 = behave as a YM2612, 0 = as a YM3438 */
   int shot_size;          /* screenshot size: 0..3 = 1x..4x of the output's own size */
@@ -161,6 +162,14 @@ typedef struct
                                or GDI). Off by default: the app is paced by audio, so this
                                only helps if the display refresh is close to the game's rate;
                                skipped automatically when the sound buffer is running low */
+  int gun_border;           /* Light Gun Border: 0 off, 1..4 = a white frame of 2, 4, 6 or 8% round the picture while a light gun is plugged in
+                               (for the camera of a Sinden or similar gun) */
+  int stick_shape;          /* how the left stick makes diagonals: 0 classic (each axis against the deadzone), 1 wide straight zones, 2 even 8 directions, 3 wide diagonal zones */
+  int crossfeed;            /* headphone crossfeed: 0 off, 1 light, 2 medium, 3 strong */
+  int xh_style, xh_color, xh_size;   /* the light gun crosshair: shape (0 = the Windows cross), color and size */
+  int follow_hc;            /* follow Windows high-contrast mode (off by default) */
+  int vrr;                  /* Variable Refresh Rate (G-Sync / FreeSync): Direct3D 11 shows each frame
+                               the moment it is ready, with the display following (off by default) */
   int fullscreen;
   int theme_mode;          /* THEME_AUTO/LIGHT/DARK, see theme.h */
   int ui_style;            /* 0 = Classic, 1 = Modern (rounded window frame, Segoe UI Variable text; more of it in later versions) */
@@ -198,6 +207,7 @@ typedef struct
   int toolbar_size;        /* toolbar icon size: 0 small, 1 normal (the default), 2 large */
   int toolbar_labels;      /* 1 = the name of each toolbar button is written under its icon */
   int cover_cache;         /* keep finished cover thumbnails on disk (covers\thumbs.dat) so they load fast the next time */
+  int region_flags;         /* a small flag for each region of a game, in the Region column and on grid covers (on by default) */
   int console_badge;        /* grid covers: a small tag naming the game's console in a corner of the cover (on by default) */
   int cover_card;          /* grid covers: a frame around the cover and its name */
   int color_icons;         /* 1: the menu icons, the toolbar and the star are in color, 0: in the color of the text */
@@ -212,7 +222,10 @@ typedef struct
   int rom_exclude_n;
   int stereo_idx;          /* stereo width: 0 narrow, 1 normal, 2 wide, 3 extra wide */
   int mouse_sens;          /* mouse / light gun speed: 0..4 = 50, 75, 100, 150, 200 % */
+  int vs_limit;            /* enhanced vertical scroll limit: 0..7 = 2, 4, ... 16 */
+  int cpu_speed;           /* CPU speed: 0..7 = 50, 75, 100, 125, 150, 200, 300, 400 percent */
   int gun_ox, gun_oy;      /* light gun aim offset, 0..6 = -12, -8, -4, 0, 4, 8, 12 pixels */
+  int lcd_color;            /* LCD color correction (every console): 0 off, 1 light, 2 full */
   int adj_bright, adj_contrast, adj_sat, adj_gamma, adj_hue;   /* picture adjustments: brightness -50 to 50 %, contrast 50-150 %, saturation 0-200 %, gamma 50-150 (/100), hue -30 to 30 degrees; 100, 100, 100, 0 = unchanged */
   int bar_color;           /* color of the bars around the picture (index into video.c's list) */
   int fs_res_w, fs_res_h;  /* exclusive fullscreen resolution; 0 = the desktop's own */
@@ -236,6 +249,8 @@ typedef struct
   int integer_scale;       /* the picture is enlarged by whole multiples only (sharp pixels) */
   int mute_fm;             /* silence the FM chip alone */
   int mute_psg;            /* silence the PSG chip alone */
+  int mute_dac;            /* silence the DAC (the sample channel of the Genesis FM chip) alone */
+  int dac_level;           /* the level of the DAC in percent, 0 to 150 (100: as the game plays it) */
   int mute_pwm;            /* silence the 32X PWM sound alone */
   int pwm_level;           /* the level of the 32X PWM sound in percent (100: as the library makes it) */
   int resume_choice;       /* the Auto Resume question: 0 = ask, 1 = always resume, 2 = never (set by "Do not ask again") */
@@ -293,6 +308,7 @@ const char *config_ini_path(void);          /* the settings file in use (genesis
 extern void config_load(void);
 extern void config_save(void);
 extern void config_save_wait(void);       /* waits until the settings file is written (the write runs on its own thread) */
+extern int  config_no_save;               /* 1: nothing is written to the settings file any more (it was deleted for a factory reset, and the program is closing) */
 extern void config_add_recent(const char *path);
 
 /* Favorite games, kept by full path in genesis-plus-ex.ini ([favorites]). */

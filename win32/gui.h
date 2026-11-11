@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  gui.h -- declarations shared between the frontend modules. The emulator
  *           core never sees this file.
@@ -13,7 +14,7 @@
 #define APP_NAME    "Genesis Plus EX"
 #define APP_NAME_W  L"Genesis Plus EX"
 #define APP_CLASS   "GenesisPlusEXWindow"
-#define APP_VERSION "3.1.0"
+#define APP_VERSION "3.2.0"
 #ifdef _WIN64
 #define APP_BITS    "64-bit"
 #else
@@ -81,6 +82,7 @@ extern void gui_status_slot(const char *text);
 
 /* Shows a short overlay message on the video output for a couple of seconds. */
 extern void gui_notify(const char *fmt, ...);
+extern int  gui_delete_settings_files(void);        /* Factory Reset: deletes the settings file in use and the other usual copy (beside the program / in %LOCALAPPDATA%); 0 if one in use cannot be deleted */
 extern int  gui_port_index(int port);   /* which device (0..9, as in the Port A / B lists) is plugged into controller port 0 / 1 */
 extern void waveout_set_enhance(int bass, int normalize, int overdrive);   /* Bass Boost, Even Out Loudness and Overdrive */
 extern void waveout_meter(int *l, int *r);                  /* peak levels since the last call, for the meter */
@@ -110,6 +112,8 @@ extern void  video_deinterlace(void);    /* Interlaced Mode > Double Field: remo
 extern void  video_repaint(HDC hdc);     /* redraw from WM_PAINT */
 extern void  video_set_ntsc(int mode);   /* 0 off, 1 composite, 2 s-video, 3 rgb */
 extern void  video_viewport_changed(void);
+extern int  gui_list_header_width(HWND list, int col);   /* the width the title of a column needs (room for the sort arrow included) */
+extern const char *video_scaling_path(int *note);   /* what really scales the picture (Direct3D 11 shader, Bilinear fallback ...); *note: 1 when it is not what was chosen */
 extern int   gui_pico_unsupported(int id);     /* 1: does nothing for the 32X game that is running (grayed out) */
 extern void  video_pico_frame(const void *src, int w, int h, int pitch);   /* a 32X game's picture (RGB565) into the frame buffer */
 extern void  video_force_redraw(void);
@@ -289,6 +293,16 @@ extern void debugwin_close(void);                 /* when the game stops */
 extern void debugwin_enable(int on);              /* off while a modal window is open */
 extern int  debugwin_owns(HWND h);
 extern int  vgm_sound_snapshot(unsigned char ym[2][256], unsigned char keyon[8], unsigned tone[3], unsigned char vol[4], unsigned char *noise);
+extern int  gui_input_gun_active(void);          /* 1 while a game runs with a light gun plugged in */
+extern void video_get_area_rect(RECT *area);     /* the room the picture has in the window (below the toolbar, above the status bar) */
+extern int  gui_theme_for_ini(void);             /* the theme and style to write to the settings file (not the ones high-contrast mode put on) */
+extern int  gui_style_for_ini(void);
+extern int  gui_accent_for_ini(void);
+extern int  gui_hc_applied(void);
+extern COLORREF gui_xh_color_of(int i);                       /* the color of an entry of the Crosshair Color list */
+extern void gui_xh_preview(HDC dc, int x, int y, int size, int style);      /* a picture of a light gun crosshair shape (the Settings list) */
+extern int  gui_clean_window_on(void);           /* 1 while the window shows the game only (View > Toolbars > Hide All Bars) */
+extern void waveout_set_crossfeed(int strength); /* headphone crossfeed: 0 off, 1 light, 2 medium, 3 strong */
 extern int  gui_input_gun_cursor(void);          /* 1 = crosshair over the picture with a light gun, else 0 */
 extern int  gui_input_ff_latched(void);          /* Emulation > Fast Forward is ticked */
 extern int  gui_input_rewind_latched(void);
@@ -485,6 +499,8 @@ extern int  gui_game_running(void);        /* a game is running */
 extern void gui_window_icon(HWND w);       /* the program's icon in the title bar of one of its windows */
 extern HBITMAP gui_logo_bitmap(int dh, int *pw);   /* the program's logo, dh pixels high (the caller deletes it); *pw = its width */
 extern HBITMAP gui_scale_rgba(const unsigned char *img, int sw, int sh, int dh, int *pw);   /* RGBA picture -> premultiplied BGRA bitmap dh high (box filter); *pw = its width */
+extern int  gui_game_drew_frame(void);   /* 1 once the game that runs has drawn a frame */
+extern void gui_log_window_size(void);   /* for the log: the main window's size now */
 extern int  gui_popup(HMENU menu, UINT flags, int x, int y);   /* a pop-up menu of one of the program's windows, drawn like the main menus; returns the command (TPM_RETURNCMD is added) */
 extern int  gui_pico_only(int id);      /* 1 = an option that only 32X games use, and a game of another system is running: gray it */
 extern int  gui_msgbox(HWND owner, const char *text, const char *caption, UINT flags);   /* MessageBox, centered over the program's window */
@@ -521,6 +537,7 @@ extern void dlg_shortcuts(HWND parent);
 extern void dlg_user_guide(HWND parent);
 extern HMENU gui_main_menu(void);
 extern int  gui_shader_available(void);          /* librashader + Direct3D 11 present (says what is missing) */
+extern int  gui_shader_scales(void);              /* 1: a shader preset is chosen with Direct3D 11, so it scales the picture and the Scaling Filter is not used */
 extern int  gui_set_shader(const char *path);    /* a .slangp preset, or NULL / "" for none */
 /* Tooltips for a dialog: a tip on a control by id and/or on the plain text label (a static with that
    text) beside it; they show after a short delay and hide after 30 seconds. */

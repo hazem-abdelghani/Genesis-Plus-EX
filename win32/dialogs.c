@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  dialogs.c -- the modal dialogs reachable from the menu.
  ****************************************************************************/
@@ -142,6 +143,15 @@ static void audio_set_slider(HWND dlg, int id, int text_id, int lo, int hi,
     int step = (hi - lo) / 8;
     if (step < 1) step = 1;
     while (step > 1 && (hi - lo) % step) step--;
+    if (lo <= 100 && hi >= 100 && step > 0 && (100 - lo) % step)       /* 100% is the value most levels are at: it gets a tick of its own (the knob sits on it) */
+    {
+      int a = hi - lo, b = 100 - lo, g;
+
+      while (b) { int t = a % b; a = b; b = t; }
+      g = a;
+      while (g > (hi - lo) / 6 && g % 2 == 0) g /= 2;
+      if (g >= 5) step = g;
+    }
     SendMessage(bar, TBM_SETTICFREQ, (WPARAM)step, 0);
   }
   SendMessage(bar, TBM_SETPOS, TRUE, (LPARAM)value);
@@ -3020,22 +3030,66 @@ static void audio_revert_live(void)
   audio_apply_live();
 }
 
+/* A readout is written only when its text changes: writing the same text again made a grayed (disabled) readout draw over itself, which looked
+   heavier and shadowed every time another slider moved. */
+static void audio_set_text(HWND dlg, int id, const char *text)
+{
+  char cur[32];
+
+  if (GetDlgItemTextA(dlg, id, cur, sizeof(cur)) > 0 && !lstrcmpA(cur, text)) return;
+  SetDlgItemTextA(dlg, id, text);
+}
+
+/* The slider a readout belongs to (0: not a readout of this window). */
+static int audio_text_slider(int id)
+{
+  switch (id)
+  {
+    case IDC_AUDIO_CDDA_TEXT: return IDC_AUDIO_CDDA;
+    case IDC_AUDIO_PWM_TEXT:  return IDC_AUDIO_PWM;
+    case IDC_ADV_PCM_TEXT:    return IDC_ADV_PCM;
+    case IDC_ADV_DAC_TEXT:    return IDC_ADV_DAC;
+    case IDC_ADV_LP_TEXT:     return IDC_ADV_LP;
+    case IDC_ADV_LG_TEXT:     return IDC_ADV_LG;
+    case IDC_ADV_MG_TEXT:     return IDC_ADV_MG;
+    case IDC_ADV_HG_TEXT:     return IDC_ADV_HG;
+  }
+  return 0;
+}
+
+/* The readout of a slider that does not apply (grayed): drawn gray here, in the dark theme, not by Windows' own disabled look (a text with a shadow
+   that got heavier each time it was drawn again). */
+static void audio_gray_text(HDC dc, HWND ctl, HBRUSH *brush)
+{
+  int sl = audio_text_slider(GetDlgCtrlID(ctl));
+
+  if (!sl || IsWindowEnabled(GetDlgItem(GetParent(ctl), sl))) return;
+  if (!*brush)                                   /* the light theme: the system's colors, the readout gray like a grayed label */
+  {
+    SetBkColor(dc, GetSysColor(COLOR_BTNFACE));
+    SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
+    *brush = GetSysColorBrush(COLOR_BTNFACE);
+    return;
+  }
+  SetTextColor(dc, RGB(0x6D, 0x6D, 0x6D));
+}
+
 static void audio_refresh_labels(HWND dlg)
 {
   char buf[32];
 
   wsprintfA(buf, "%d%%", aud.volume);
-  SetDlgItemTextA(dlg, IDC_AUDIO_VOLUME_TEXT, buf);
+  audio_set_text(dlg, IDC_AUDIO_VOLUME_TEXT, buf);
   wsprintfA(buf, "%d%%", aud.fm);
-  SetDlgItemTextA(dlg, IDC_AUDIO_FM_TEXT, buf);
+  audio_set_text(dlg, IDC_AUDIO_FM_TEXT, buf);
   wsprintfA(buf, "%d%%", aud.psg);
-  SetDlgItemTextA(dlg, IDC_AUDIO_PSG_TEXT, buf);
+  audio_set_text(dlg, IDC_AUDIO_PSG_TEXT, buf);
   wsprintfA(buf, "%d%%", aud.cdda);
-  SetDlgItemTextA(dlg, IDC_AUDIO_CDDA_TEXT, buf);
+  audio_set_text(dlg, IDC_AUDIO_CDDA_TEXT, buf);
   wsprintfA(buf, "%d%%", aud.pwm);
-  SetDlgItemTextA(dlg, IDC_AUDIO_PWM_TEXT, buf);
+  audio_set_text(dlg, IDC_AUDIO_PWM_TEXT, buf);
   wsprintfA(buf, "%d", aud.latency);
-  SetDlgItemTextA(dlg, IDC_AUDIO_LATENCY_TEXT, buf);
+  audio_set_text(dlg, IDC_AUDIO_LATENCY_TEXT, buf);
 }
 
 static void audio_load_controls(HWND dlg)
@@ -3048,7 +3102,7 @@ static void audio_load_controls(HWND dlg)
   audio_set_slider(dlg, IDC_AUDIO_LATENCY, IDC_AUDIO_LATENCY_TEXT, 2, 8,   aud.latency, "");
 }
 
-/* Audio filter, equalizer and Sega CD PCM volume (the right-hand side of the window). */
+/* Audio filter, equalizer, Mega CD PCM volume and DAC volume (the filter is the right-hand side of the window). */
 
 static struct
 {
@@ -3057,10 +3111,11 @@ static struct
   int lg, mg, hg;             /* EQ gains, % */
   int lowf, highf;            /* EQ band edges, Hz */
   int pcm;
+  int dac;                    /* the DAC level, % */
 } adv;
 
 /* The settings the window opened with; filter, strength, EQ bands and PCM volume act while sliding, Cancel puts these back. */
-static struct { int filter, lp, lg, mg, hg, lowf, highf, pcm; } adv_orig;
+static struct { int filter, lp, lg, mg, hg, lowf, highf, pcm, dac; } adv_orig;
 
 static void adv_apply_live(int lowf, int highf)
 {
@@ -3070,6 +3125,7 @@ static void adv_apply_live(int lowf, int highf)
   config.mg = (int16)adv.mg;
   config.hg = (int16)adv.hg;
   config.pcm_volume = (int16)adv.pcm;
+  gui.dac_level = adv.dac;
   if (lowf >= 20 && lowf <= 2000 && highf >= 1000 && highf <= 20000 && lowf < highf)
   {
     config.low_freq = (int16)lowf;
@@ -3082,7 +3138,7 @@ static void adv_apply_live(int lowf, int highf)
 static void adv_revert_live(void)
 {
   adv.filter = adv_orig.filter; adv.lp = adv_orig.lp; adv.lg = adv_orig.lg; adv.mg = adv_orig.mg;
-  adv.hg = adv_orig.hg; adv.pcm = adv_orig.pcm;
+  adv.hg = adv_orig.hg; adv.pcm = adv_orig.pcm; adv.dac = adv_orig.dac;
   adv_apply_live(adv_orig.lowf, adv_orig.highf);
 }
 
@@ -3091,14 +3147,14 @@ static void adv_enable_by_filter(HWND dlg)
   int lp = (adv.filter == 1), eq = (adv.filter == 2);
 
   EnableWindow(GetDlgItem(dlg, IDC_ADV_LP), lp);
-  EnableWindow(GetDlgItem(dlg, IDC_ADV_LP_TEXT), lp);
+  InvalidateRect(GetDlgItem(dlg, IDC_ADV_LP_TEXT), NULL, TRUE);          /* (the readouts stay enabled and are drawn gray by audio_gray_text: Windows' own disabled look is embossed) */
   EnableWindow(GetDlgItem(dlg, IDC_ADV_LABEL_LP), lp);
   EnableWindow(GetDlgItem(dlg, IDC_ADV_LG), eq);
   EnableWindow(GetDlgItem(dlg, IDC_ADV_MG), eq);
   EnableWindow(GetDlgItem(dlg, IDC_ADV_HG), eq);
-  EnableWindow(GetDlgItem(dlg, IDC_ADV_LG_TEXT), eq);
-  EnableWindow(GetDlgItem(dlg, IDC_ADV_MG_TEXT), eq);
-  EnableWindow(GetDlgItem(dlg, IDC_ADV_HG_TEXT), eq);
+  InvalidateRect(GetDlgItem(dlg, IDC_ADV_LG_TEXT), NULL, TRUE);
+  InvalidateRect(GetDlgItem(dlg, IDC_ADV_MG_TEXT), NULL, TRUE);
+  InvalidateRect(GetDlgItem(dlg, IDC_ADV_HG_TEXT), NULL, TRUE);
   EnableWindow(GetDlgItem(dlg, IDC_ADV_LOWF), eq);
   EnableWindow(GetDlgItem(dlg, IDC_ADV_HIGHF), eq);
   EnableWindow(GetDlgItem(dlg, IDC_ADV_LABEL_LG), eq);
@@ -3124,6 +3180,7 @@ static void adv_load_controls(HWND dlg)
   audio_set_slider(dlg, IDC_ADV_MG,  IDC_ADV_MG_TEXT,  0, 200, adv.mg, "%");
   audio_set_slider(dlg, IDC_ADV_HG,  IDC_ADV_HG_TEXT,  0, 200, adv.hg, "%");
   audio_set_slider(dlg, IDC_ADV_PCM, IDC_ADV_PCM_TEXT, 0, 200, adv.pcm, "%");
+  audio_set_slider(dlg, IDC_ADV_DAC, IDC_ADV_DAC_TEXT, 0, 150, adv.dac, "%");
 
   SetDlgItemInt(dlg, IDC_ADV_LOWF, (UINT)adv.lowf, FALSE);
   SetDlgItemInt(dlg, IDC_ADV_HIGHF, (UINT)adv.highf, FALSE);
@@ -3142,8 +3199,9 @@ static void adv_read_config(void)
   adv.lowf   = config.low_freq;
   adv.highf  = config.high_freq;
   adv.pcm    = config.pcm_volume;
+  adv.dac    = gui.dac_level;
   adv_orig.filter = adv.filter; adv_orig.lp = adv.lp; adv_orig.lg = adv.lg; adv_orig.mg = adv.mg;
-  adv_orig.hg = adv.hg; adv_orig.lowf = adv.lowf; adv_orig.highf = adv.highf; adv_orig.pcm = adv.pcm;
+  adv_orig.hg = adv.hg; adv_orig.lowf = adv.lowf; adv_orig.highf = adv.highf; adv_orig.pcm = adv.pcm; adv_orig.dac = adv.dac;
 }
 
 static void adv_current_freqs(HWND dlg, int *lowf, int *highf)
@@ -3153,6 +3211,54 @@ static void adv_current_freqs(HWND dlg, int *lowf, int *highf)
 }
 
 static int meter_shown_l, meter_shown_r;     /* what the Live Level meter shows now (it falls back slowly) */
+
+/* The frames of this window (Volumes, Audio Filter) are drawn like the frames of Settings and Controls: a thin rounded frame in the same color with the
+   title in a gap of it (the system draws a group box's title in black in the dark theme and its frame in another color). Only the frame and the title are
+   painted; what is inside belongs to the controls on top. */
+static LRESULT CALLBACK audio_groupbox_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
+{
+  (void)ref;
+
+  if (msg == WM_ERASEBKGND) return 1;                  /* (the dialog has painted the background) */
+  if (msg == WM_PAINT)
+  {
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(hwnd, &ps);
+    RECT rc, fr;
+    char text[128];
+    HWND dlg = GetParent(hwnd);
+    HFONT font = (HFONT)SendMessage(dlg, WM_GETFONT, 0, 0);
+    HGDIOBJ old = SelectObject(dc, font ? font : GetStockObject(DEFAULT_GUI_FONT));
+    SIZE sz;
+
+    GetClientRect(hwnd, &rc);
+    GetWindowTextA(hwnd, text, sizeof(text));
+    GetTextExtentPoint32A(dc, tr(text), lstrlenA(tr(text)), &sz);
+    SelectObject(dc, old);
+    fr = rc;
+    fr.top = rc.top + sz.cy / 2;                         /* the frame starts at the middle of the title's height */
+    fr.right = rc.right - 1;
+    fr.bottom = rc.bottom - 1;
+    settings_draw_frame(dc, dlg, &fr, text);
+    EndPaint(hwnd, &ps);
+    return 0;
+  }
+  if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, audio_groupbox_proc, id);
+  return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+static BOOL CALLBACK audio_style_groupbox(HWND child, LPARAM lp)
+{
+  char cls[16];
+
+  (void)lp;
+  if (GetClassNameA(child, cls, sizeof(cls)) && !lstrcmpiA(cls, "Button") && (GetWindowLongPtr(child, GWL_STYLE) & BS_TYPEMASK) == BS_GROUPBOX)
+  {
+    SetWindowSubclass(child, audio_groupbox_proc, 1, 0);
+    InvalidateRect(child, NULL, TRUE);
+  }
+  return TRUE;
+}
 
 static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -3173,12 +3279,14 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         { IDC_ADV_HG,     "EQ High Gain",        "Level of the high band (3-Band equalizer)." },
         { IDC_ADV_LOWF,   "EQ Low Frequency (Hz):",  "Where the low band ends and the middle band begins, in Hz." },
         { IDC_ADV_HIGHF,  "EQ High Frequency (Hz):", "Where the middle band ends and the high band begins, in Hz." },
-        { IDC_ADV_PCM,    "Sega CD PCM Volume",  "Volume of the Sega CD's PCM sound chip." },
+        { IDC_ADV_PCM,    "Mega CD PCM Volume",  "Volume of the Mega CD's PCM sound chip." },
+        { IDC_ADV_DAC,    "DAC Volume",          "Level of the DAC, the sample channel of the Genesis FM chip: the drums, voices and effects a game plays as recorded sound. 100% is as the game plays it, 0% silences it (also Audio > Mute > DAC Sound). Not for the Master System." },
         { IDC_AUDIO_DEFAULTS, NULL,             "Put these levels and filter settings back to their defaults." },
         { IDOK,              NULL,              "Save these settings." },
         { IDCANCEL,          NULL,              "Close without saving." },
       };
       theme_apply_to_window(dlg);
+      EnumChildWindows(dlg, audio_style_groupbox, 0);
       audio_load_controls(dlg);
       adv_load_controls(dlg);
       dlg_add_tips(dlg, tips, (int)(sizeof(tips) / sizeof(tips[0])));
@@ -3193,16 +3301,18 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       if (emu_running && !pico_active())                /* only a 32X game has PWM sound: the level does nothing for the others */
       {
         EnableWindow(GetDlgItem(dlg, IDC_AUDIO_PWM), FALSE);
-        EnableWindow(GetDlgItem(dlg, IDC_AUDIO_PWM_TEXT), FALSE);
         EnableWindow(GetDlgItem(dlg, IDC_AUDIO_PWM_LABEL), FALSE);
+      }
+      if (emu_running && (pico_active() || (system_hw & SYSTEM_PBC) != SYSTEM_MD))     /* only the Genesis chips have a DAC (not the Master System or Game Gear, and a 32X game runs in PicoDrive): the level does nothing for the others */
+      {
+        EnableWindow(GetDlgItem(dlg, IDC_ADV_DAC), FALSE);
+        EnableWindow(GetDlgItem(dlg, IDC_ADV_DAC_LABEL), FALSE);
       }
       if (emu_running && (pico_active() || system_hw != SYSTEM_MCD))    /* only a Sega CD game has the CD music and the PCM chip: those two levels do nothing for the others */
       {
         EnableWindow(GetDlgItem(dlg, IDC_AUDIO_CDDA), FALSE);
-        EnableWindow(GetDlgItem(dlg, IDC_AUDIO_CDDA_TEXT), FALSE);
         EnableWindow(GetDlgItem(dlg, IDC_AUDIO_CDDA_LABEL), FALSE);
         EnableWindow(GetDlgItem(dlg, IDC_ADV_PCM), FALSE);
-        EnableWindow(GetDlgItem(dlg, IDC_ADV_PCM_TEXT), FALSE);
         EnableWindow(GetDlgItem(dlg, IDC_ADV_PCM_LABEL), FALSE);
       }
       SendDlgItemMessage(dlg, IDC_AUDIO_METER_L, PBM_SETRANGE32, 0, 100);
@@ -3242,6 +3352,7 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CTLCOLORBTN:
     {
       HBRUSH br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
+      if (msg == WM_CTLCOLORSTATIC) audio_gray_text((HDC)wp, (HWND)lp, &br);
       if (br) return (LRESULT)br;
       break;
     }
@@ -3252,7 +3363,7 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       int pos = (int)SendMessage(bar, TBM_GETPOS, 0, 0);
       int id = GetDlgCtrlID(bar);
 
-      if (id == IDC_ADV_LP || id == IDC_ADV_LG || id == IDC_ADV_MG || id == IDC_ADV_HG || id == IDC_ADV_PCM)
+      if (id == IDC_ADV_LP || id == IDC_ADV_LG || id == IDC_ADV_MG || id == IDC_ADV_HG || id == IDC_ADV_PCM || id == IDC_ADV_DAC)
       {
         char tbuf[16];
         int text = 0, lowf, highf;
@@ -3262,6 +3373,7 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           case IDC_ADV_LG:  adv.lg  = pos; text = IDC_ADV_LG_TEXT;  break;
           case IDC_ADV_MG:  adv.mg  = pos; text = IDC_ADV_MG_TEXT;  break;
           case IDC_ADV_HG:  adv.hg  = pos; text = IDC_ADV_HG_TEXT;  break;
+          case IDC_ADV_DAC: adv.dac = pos; text = IDC_ADV_DAC_TEXT; break;
           default:          adv.pcm = pos; text = IDC_ADV_PCM_TEXT; break;
         }
         wsprintfA(tbuf, "%d%%", pos);
@@ -3317,6 +3429,7 @@ static INT_PTR CALLBACK audio_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           adv.lg = adv.mg = adv.hg = 100;
           adv.lowf = 200; adv.highf = 8000;
           adv.pcm = 100;
+          adv.dac = 100;
           adv_load_controls(dlg);
           adv_apply_live(adv.lowf, adv.highf);
           aud.volume  = 100;
@@ -3535,6 +3648,7 @@ void dlg_audio(HWND parent)
     config.low_freq  = (int16)adv.lowf;
     config.high_freq = (int16)adv.highf;
     config.pcm_volume = (int16)adv.pcm;
+    gui.dac_level = adv.dac;
     if (emu_running) audio_set_equalizer();
     if (pico_active()) pico_settings_changed();
 
@@ -3753,6 +3867,9 @@ static const char user_guide_text[] =
   "  Interface Size (Settings > General):\r\n"
   "   Normal or Large menus and dialogs. Changing it restarts the program.\r\n"
   "\r\n"
+  "  Hide All Bars (View > Toolbars, Ctrl+H):\r\n"
+  "   While a game runs, takes the menu bar, the toolbar and the status bar away, so the window shows the game only (for an arcade cabinet or a stream); in fullscreen it also stops the menu bar and the toolbar from coming in when the mouse touches the top edge. The same key brings them back; it is not saved, and the game list keeps its bars.\r\n"
+  "\r\n"
   "  Show Toolbar Labels (View > Toolbars):\r\n"
   "   Writes the name of each toolbar button (Open, Play, Settings ...) under its icon; switch it off for icons only.\r\n"
   "\r\n"
@@ -3797,13 +3914,16 @@ static const char user_guide_text[] =
   "   Esc also toggles fullscreen. In fullscreen, move the mouse to the top edge of the screen to show the menu bar; it hides again when the mouse moves away. The mouse cursor stays visible in fullscreen and hides itself after a few idle seconds. Closing the ROM leaves fullscreen and returns to the selected window size.\r\n"
   "\r\n"
   "  Render Filter:\r\n"
-  "   Pixel-art scalers and CRT looks (Scale2x, Scale4x, MMPX, MMPX Enhanced, 4xSaI, xBR, HQ2x, xBRZ, Catmull-Rom, Scanlines, CRT...) applied before the picture is shown.\r\n"
+  "   Pixel-art scalers and CRT looks (Scale2x, Scale4x, MMPX, MMPX Enhanced, 4xSaI, xBR, HQ2x, xBRZ, Scanlines, CRT...) applied before the picture is shown, at a fixed multiple. The resizing methods (Bilinear, Sharp Bilinear, Bicubic ...) are in Scaling Filter, which resizes the picture to the window.\r\n"
+  "\r\n"
+  "  Scaling Filter:\r\n"
+  "   How the picture is resized to the window, after the Render Filter. Nearest: sharp pixels; Sharp Nearest: the picture is enlarged by a whole multiple with sharp pixels first and smoothed only for the rest, so pixels stay crisp and even, without the borders of Integer Scaling (it looks close to Nearest); Bilinear: soft edges; Sharp Bilinear: Bilinear with a narrow blend (about half a source pixel, on a smooth curve), so much less blur; Bicubic: smoother than Bilinear with a little more edge contrast. Sharp Bilinear and Bicubic are pixel shaders with Direct3D 9 and 11; the classic renderer does Sharp Bilinear on the processor and has no Bicubic (grayed).\r\n"
   "\r\n"
   "  Shaders:\r\n"
   "   Runs a librashader (.slangp) shader chain on top of the picture, Direct3D 11 only, and 64-bit exe only (the 32-bit exe has no Shaders menu); librashader.dll ships in the Plugins folder next to the exe (see the README).\r\n"
   "\r\n"
   "  Visual Effects:\r\n"
-  "   Smooth Scaling (soft edges when enlarged), Integer Scaling (enlarges the picture by whole multiples only, 1x, 2x, 3x ..., so every pixel is the same size; it is centered, with borders, when the window is between two sizes, and follows the Aspect Ratio setting for the shape of the pixels), Brighten (a gentle brightness lift), Deinterlacing (for a game in the 448-line interlaced mode, such as Sonic the Hedgehog 2 in 2P Vs.: both fields of the picture are drawn from the same moment in every frame, so nothing that moves is combed; on at first; Interlaced Mode is not used while it is on), LCD Ghosting (bright pixels fade slowly, like a handheld screen).\r\n"
+  "   Integer Scaling (enlarges the picture by whole multiples only, 1x, 2x, 3x ..., so every pixel is the same size; it is centered, with borders, when the window is between two sizes, and follows the Aspect Ratio setting for the shape of the pixels), Brighten (a gentle brightness lift), Deinterlacing (for a game in the 448-line interlaced mode, such as Sonic the Hedgehog 2 in 2P Vs.: both fields of the picture are drawn from the same moment in every frame, so nothing that moves is combed; on at first; Interlaced Mode is not used while it is on), LCD Ghosting (bright pixels fade slowly, like a handheld screen), Color Correction (Light or Full: the paler, duller colors of a handheld LCD screen, with the colors bleeding into each other a little, for every console; the Picture Adjustments still apply on top).\r\n"
   "\r\n"
   "  Picture Adjustments...:\r\n"
   "   A window with Brightness, Contrast, Saturation, Gamma and Hue, each a slider that acts while you drag it (Restore Defaults puts them back to normal, Cancel puts back what they were when the window opened, OK keeps them), alongside Brighten (Settings > Video; the window is also a button there). They work with every renderer.\r\n"
@@ -3854,7 +3974,10 @@ static const char user_guide_text[] =
   "   Skips drawing some frames on a slow PC (Off, Auto, or Manual by audio-buffer level). Not used during netplay or recording.\r\n"
   "\r\n"
   "  VSync:\r\n"
-  "   Waits for the screen's refresh after each frame so motion is even. Works with any renderer (Direct3D 11 waits in its swap chain, the others wait for the Windows compositor); it is skipped for a frame whenever the sound buffer runs low, so it never causes crackle. Off by default.\r\n"
+  "   Waits for the screen's refresh after each frame so motion is even. Works with any renderer (Direct3D 11 waits in its swap chain, the others wait for the Windows compositor); it is skipped for a frame whenever the sound buffer runs low, so it never causes crackle. It is not used (grayed out) while Variable Refresh Rate is on. Off by default.\r\n"
+  "\r\n"
+  "  Variable Refresh Rate:\r\n"
+  "   For a display with variable refresh (G-Sync, FreeSync, Adaptive-Sync): the Direct3D 11 swap chain is made so that each frame is shown the moment it is ready and the display follows the game's own rate (about 59.92 frames a second for an NTSC game, 49.7 for PAL), with no tearing and no frame shown twice or skipped. It needs Windows 10 (version 1607 or later), a graphics driver that supports it and variable refresh turned on in Windows or the driver (in a window the driver may have a separate setting for windowed games). While it is in use it takes the place of VSync, which is then grayed out (it keeps its tick). If it is not available the program says so and goes on as before. Only for the Direct3D 11 renderer; off by default (Video menu).\r\n"
   "\r\n"
   "  Renderer:\r\n"
   "   GDI draws with the CPU; Direct3D 9 and Direct3D 11 use the graphics card instead (each falls back to GDI automatically if it isn't available). Direct3D 11 is what a shader tool such as librashader needs.\r\n"
@@ -3862,6 +3985,9 @@ static const char user_guide_text[] =
   "AUDIO\r\n"
   "  Mute (Ctrl+M):\r\n"
   "   Silences the sound; untick to hear it again.\r\n"
+  "\r\n"
+  "  Mute DAC Sound (Ctrl+D), DAC Volume:\r\n"
+  "   The DAC is the sample channel of the Genesis FM chip: the drums, voices and effects a game plays as recorded sound (the SEGA shout, the drum hits of many songs). Mute DAC Sound (Audio > Mute) silences it and the DAC Volume slider of Levels and Latency sets its level, from 0% to 150% (100% is as the game plays it). It works for Genesis, Mega CD and Pico games; not for the Master System or Game Gear, which have no DAC, nor for 32X games, which run in PicoDrive. Above 100% the loudest samples can clip, and a low level makes the sound a little coarse (the samples are 8 bits).\r\n"
   "\r\n"
   "  Mute FM Sound (Ctrl+N), Mute PSG Sound (Ctrl+B), Mute PWM Sound (Ctrl+P):\r\n"
   "   Silence the FM chip (the main music), the PSG chip (the square-wave sound) or, in a 32X game, the PWM sound (most of its music and effects) on its own, without touching the saved levels. The level of the PWM sound is the PWM Preamp slider of Levels and Latency.\r\n"
@@ -3948,6 +4074,12 @@ static const char user_guide_text[] =
   "  Gun Aim Offset X / Y:\r\n"
   "   Shifts where the light gun hits by up to 12 pixels, if shots land beside or above where you point.\r\n"
   "\r\n"
+  "  Light Gun Border:\r\n"
+  "   While a light gun is plugged in, draws a white frame round the picture and makes the picture smaller to leave room for it: Off, Thin (2%), Medium (4%), Thick (6%) or Extra Thick (8%) of the height of the window. A gun that finds the screen with a camera, such as the Sinden Lightgun, needs it. A gun that works through IR lights (Gun4IR) does not. The aim stays right: it is measured on the picture inside the frame. Off by default (Settings > Input only, not in a menu).\r\n"
+  "\r\n"
+  "  Shooting off the screen:\r\n"
+  "   With a light gun plugged in, a shot with the pointer on the black bars or the frame round the picture (inside the window) is a shot off the screen, which some games use to reload (Lethal Enforcers, for example). The mouse buttons are the triggers: the left button is the gun's A, the right button B and the middle button C.\r\n"
+  "\r\n"
   "  Confine Mouse to the Picture:\r\n"
   "   While a Sega Mouse or light gun game runs, keeps the pointer inside the picture. Pausing the game, opening a menu or dialog, pressing the Windows key or Alt+Tab lets it go; after the Windows key or Alt+Tab a click in the picture holds it again.\r\n"
   "\r\n"
@@ -4017,7 +4149,7 @@ static const char user_guide_text[] =
   "   Detects the console from the game, or forces a specific model.\r\n"
   "\r\n"
   "  Language:\r\n"
-  "   The language of the menus, windows, messages and the User Guide. The list is the .po files in the Languages folder (copy Template.pot to a new name and translate it; a text left empty stays English). Changing it asks to restart the program.\r\n"
+  "   The language of the menus, windows, messages and the User Guide. System uses the language of Windows when the Languages folder has a file for it (English when not). The list is the .po files in the Languages folder (copy Template.pot to a new name and translate it; a text left empty stays English). Changing it asks to restart the program.\r\n"
   "\r\n"
   "  Lock-On Cartridge:\r\n"
   "   Attaches a Game Genie, Action Replay or Sonic & Knuckles to the game. Settings > Options only (not in the Options menu).\r\n"
@@ -4027,6 +4159,15 @@ static const char user_guide_text[] =
   "\r\n"
   "  Emulate Address Error Exceptions:\r\n"
   "   Hardware-accurate crashes on bad memory access; turn off only for a few hacked games. Settings > Options only (not in the Options menu).\r\n"
+  "\r\n"
+  "  Enhanced Per-Tile Vertical Scroll, Vertical Scroll Limit:\r\n"
+  "   Lets each 8-pixel tile column scroll up and down on its own, instead of in 16-pixel pairs, in the few games that use that scroll mode (the limit: where two neighbouring tiles differ by that many pixels or more, it is not used). Settings > Options only.\r\n"
+  "\r\n"
+  "  System Lock-Ups:\r\n"
+  "   Emulates the lock-ups the real console has when a game uses an address that does not exist. Turn off only for a few demos and homebrew. Settings > Options only.\r\n"
+  "\r\n"
+  "  CPU Speed:\r\n"
+  "   Speed of the emulated main 68000 (and the Mega CD's second one), 50% to 400%. Above 100% can reduce slowdown but can cause glitches. The sound chips are not changed; always 100% during netplay. Settings > Options only.\r\n"
   "\r\n"
   "  Emulate Mega CD Disc Latency:\r\n"
   "   Makes the Mega CD drive seek slowly like the real one (some games need it); off makes loading instant. Settings > Options only (not in the Options menu).\r\n"
@@ -4065,7 +4206,7 @@ static const char user_guide_text[] =
   "   Off, or 5, 10, 15, 20, 25 or 30 seconds: when a game starts, its first seconds of game time run at full speed to get past logos and intros; this takes much less real time than the seconds chosen. A press of a game button ends the skip early. Not used when resuming a game or during netplay (Settings > Options). Off by default.\r\n"
   "\r\n"
   "  Enable Log:\r\n"
-  "   Writes genesis-plus-ex.log in the Logs folder next to the program: the machine (Windows, processor, memory, screens and sound devices) and every line of the settings file at the start; for each game its file, size and checksum, the ROM header, how the console was set up (region, CD hardware, cartridge hardware), the picture and sound it runs with and, when it closes, how it went (time, frames, slowest frame); resets, saved and loaded states, the cheat codes read and when the ROM ones go in, messages, errors, netplay events and crashes. Off by default; send it along with a bug report (Settings > Options).\r\n"
+  "   Writes genesis-plus-ex.log in the Logs folder next to the program: the program file (its size, date and SHA-256, to tell an official build from another), the machine (Windows, processor, memory, screens and sound devices) and every line of the settings file at the start; every command chosen (with its menu), every window opened and closed, which window has the focus, every change of the window's size, and every setting that changes; for each game its file, size and checksum, the ROM header, how the console was set up (region, CD hardware, cartridge hardware), the picture and sound it runs with and, when it closes, how it went (time, frames, slowest frame); resets, saved and loaded states, the cheat codes read and when the ROM ones go in, messages, errors, netplay events and crashes. Off by default; send it along with a bug report (Settings > Options).\r\n"
   "\r\n"
   "  Keep a Cover Cache:\r\n"
   "   On by default. Each finished cover is saved (small and compressed) in one file, Images\\Covers\\thumbs.dat, so the next time the program starts the grid covers appear almost at once instead of being read and scaled again. A cover you change, or a new cover size or frame, is made again by itself; the first run, and a new size, still take the usual time. The same option keeps what the game list found out about each file (the console of a disc, an archive or a .chd) in Covers\\library.dat, so the list loads faster the next time. The Refresh button of the game list also deletes that file and looks at every file again. Clear Cover Cache (next to it in Settings > General) deletes the saved covers and that file. The file holds roughly 20 to 60 KB per game and size, and is emptied by itself when it passes 300 MB.\r\n"
@@ -4212,6 +4353,41 @@ static int guide_is_header(const char *line)
   return letters >= 3;
 }
 
+/* A title of the guide has a \1 in front of it, an item (the name of a menu item or an option) a \2, put there while the text is still English:
+   what a line is does not depend on how it reads in another language (a title in Chinese has no capital letters, a full-width colon is not a
+   colon). The translation of a line keeps the mark; the page leaves it out. */
+static int guide_item_line(const char *p, int l)
+{
+  return l > 3 && p[0] == ' ' && p[1] == ' ' && p[2] != ' ' && p[l - 1] == ':';
+}
+
+static char *guide_mark(const char *text)
+{
+  size_t n = strlen(text);
+  char *out = (char *)malloc(n * 2 + 16), *o = out;
+  const char *p = text;
+
+  if (!out) return NULL;
+  while (*p)
+  {
+    const char *eol = strchr(p, '\n');
+    size_t len = eol ? (size_t)(eol - p) + 1 : strlen(p);          /* (with its line end) */
+    int l = (int)len;
+
+    while (l > 0 && (p[l - 1] == '\r' || p[l - 1] == '\n')) l--;
+    if (p[0] != '\1' && p[0] != '\2')
+    {
+      if (guide_is_header(p)) *o++ = '\1';
+      else if (guide_item_line(p, l)) *o++ = '\2';
+    }
+    memcpy(o, p, len);
+    o += len;
+    p += len;
+  }
+  *o = '\0';
+  return out;
+}
+
 /* The whole guide: the menus, then the windows (Settings is made from its own table of options, so it cannot fall behind). */
 static void guide_parse(void)
 {
@@ -4229,6 +4405,11 @@ static void guide_parse(void)
   lstrcatA(guide.text, "\r\n");
   lstrcatA(guide.text, guide_bios_text);                       /* the firmware files come last */
   lstrcatA(guide.text, "\r\n");
+  {
+    char *m = guide_mark(guide.text);                           /* (before it is translated) */
+
+    if (m) { free(guide.text); guide.text = m; }
+  }
   if (i18n_on)                                                 /* a language: the guide is translated a line at a time */
   {
     char *t = i18n_block(guide.text);
@@ -4244,7 +4425,7 @@ static void guide_parse(void)
     char *eol = strchr(p, '\n');
     if (!eol) eol = p + lstrlenA(p) - 1;
 
-    if (guide_is_header(p) && s + 1 < GUIDE_MAX_SECTIONS)
+    if (p[0] == '\1' && s + 1 < GUIDE_MAX_SECTIONS)
     {
       guide.end[s] = p;
       s++;
@@ -4487,7 +4668,7 @@ static void guide_show(HWND dlg)
 
       for (first_sp = 0; first_sp < l && (p[first_sp] == ' ' || p[first_sp] == '-'); first_sp++) ;
       q = (char *)memchr(p, '\t', (size_t)l);
-      if (q && !(p[0] == ' ' && p[1] == ' ' && p[2] != ' ' && p[l - 1] == ':'))     /* a line with a tab is a row of a list */
+      if (q && p[0] != '\1' && p[0] != '\2')     /* a line with a tab is a row of a list */
       {
         int a = (p[0] == '-' ? 2 : 0), b = (int)(q - p);
         while (a < b && (p[a] == ' ' || p[a] == '\t')) a++;
@@ -4500,11 +4681,16 @@ static void guide_show(HWND dlg)
       else
       {
         int a = 0, e = l;
-        if (guide_is_header(p)) type = GP_H1;
-        else if (p[0] == ' ' && p[1] == ' ' && p[2] != ' ' && p[l - 1] == ':') type = GP_H2;           /* an item: two spaces, then its name and a colon */
+        if (p[0] == '\1') type = GP_H1;
+        else if (p[0] == '\2') type = GP_H2;                   /* an item: two spaces, then its name and a colon */
         else type = GP_PARA;
+        if (type != GP_PARA) a = 1;                           /* (the mark) */
         while (a < e && p[a] == ' ') a++;
-        if (type == GP_H2) e--;                               /* the colon */
+        if (type == GP_H2)                                    /* the colon (a translation may end in a full-width one, or have none) */
+        {
+          if (e - a >= 1 && p[e - 1] == ':') e--;
+          else if (e - a >= 3 && !memcmp(p + e - 3, "\xEF\xBC\x9A", 3)) e -= 3;
+        }
         memcpy(out + len, p + a, (size_t)(e - a));
         if (type == GP_H1) { out[len + (e - a)] = '\0'; guide_title_case(out + len); }
         ps[n].start = len; ps[n].len = e - a; ps[n].type = type; ps[n].label = 0;
@@ -4648,7 +4834,9 @@ int gui_popup(HMENU menu, UINT flags, int x, int y)
 {
   int cur = gui_cursor_show(), cmd;
 
+  i18n_mirror_menu(menu);
   if (theme_menus_owner()) theme_ownerdraw_menu(menu);
+  if (i18n_rtl) flags |= TPM_LAYOUTRTL;
   cmd = (int)TrackPopupMenu(menu, flags | TPM_RETURNCMD, x, y, 0, g_hwnd, NULL);
   theme_unconvert_menu(menu);                       /* (gives back what the owner-drawn items held) */
   gui_cursor_restore(cur);
@@ -4732,6 +4920,7 @@ static INT_PTR CALLBACK user_guide_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
           int n = 0;
           const char *src = guide.name[s];
 
+          if (s > 0 && src[0] == '\1') src++;                  /* (the mark) */
           for (; src[n] && src[n] != '\r' && src[n] != '\n' && n < 60; n++) title[n] = src[n];
           title[n] = '\0';
           guide_title_case(title);                       /* "BIOS AND FIRMWARE FILES" -> "BIOS and Firmware Files" */
@@ -4913,6 +5102,30 @@ static char *rominfo_all_text(void)
   return all;
 }
 
+/* The width the title of a column needs, with room for the margins and the sort arrow. (LVSCW_AUTOSIZE_USEHEADER is not used for this: on the last
+   column it makes the column fill the rest of the list, whatever its title or contents need.) */
+int gui_list_header_width(HWND list, int col)
+{
+  HWND header = ListView_GetHeader(list);
+  char text[128] = "";
+  HDITEMA hi;
+  HDC dc;
+  HGDIOBJ old;
+  SIZE sz;
+
+  memset(&hi, 0, sizeof(hi));
+  hi.mask = HDI_TEXT;
+  hi.pszText = text;
+  hi.cchTextMax = (int)sizeof(text) - 1;
+  if (!header || !SendMessageA(header, HDM_GETITEMA, (WPARAM)col, (LPARAM)&hi)) return 0;
+  dc = GetDC(header);
+  old = SelectObject(dc, (HFONT)SendMessage(header, WM_GETFONT, 0, 0));
+  GetTextExtentPoint32A(dc, text, lstrlenA(text), &sz);
+  SelectObject(dc, old);
+  ReleaseDC(header, dc);
+  return sz.cx + TBS(28);
+}
+
 /* Right-clicking the title row of a list offers Size All Columns to Fit: every column gets the width
    its contents (or its title) need. */
 static LRESULT CALLBACK header_menu_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
@@ -4939,8 +5152,7 @@ static LRESULT CALLBACK header_menu_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         int w1, w2;
         ListView_SetColumnWidth(list, k, LVSCW_AUTOSIZE);
         w1 = ListView_GetColumnWidth(list, k);
-        ListView_SetColumnWidth(list, k, LVSCW_AUTOSIZE_USEHEADER);
-        w2 = ListView_GetColumnWidth(list, k);
+        w2 = gui_list_header_width(list, k);
         ListView_SetColumnWidth(list, k, (w1 > w2 ? w1 : w2) + 8);
       }
     }
@@ -5493,6 +5705,15 @@ int gui_msgbox(HWND owner, const char *text, const char *caption, UINT flags)
   HHOOK saved = msgbox_hook;
   HWND saved_owner = msgbox_owner;
 
+  if (gui.log_on)                                           /* for the log: what the message said (on one line) and what was answered */
+  {
+    char flat[420];
+    int i, n = 0;
+
+    for (i = 0; text && text[i] && n < (int)sizeof(flat) - 1; i++) flat[n++] = (text[i] == '\n' || text[i] == '\r') ? ' ' : text[i];
+    flat[n] = '\0';
+    gui_log("Message box \"%s\": %s", caption ? caption : "", flat);
+  }
   msgbox_owner = gui_visible_top(owner);
   msgbox_hook = SetWindowsHookExA(WH_CBT, msgbox_center_proc, NULL, GetCurrentThreadId());
   {
@@ -5505,6 +5726,7 @@ int gui_msgbox(HWND owner, const char *text, const char *caption, UINT flags)
   msgbox_owner = saved_owner;
   if (msgbox_hook) { UnhookWindowsHookEx(msgbox_hook); msgbox_hook = NULL; }
   msgbox_hook = saved;
+  if (gui.log_on) gui_log("Message box answered: %d", r);
   return r;
 }
 
@@ -5653,11 +5875,25 @@ unsigned short gui_rom_sum(unsigned long from, unsigned long to)
   return sum;
 }
 
+static const char *dialog_log_name(int id)
+{
+#define DLGN(x) case x: case x##_LARGE: return #x + 4
+  switch (id)
+  {
+    DLGN(IDD_SETTINGS); DLGN(IDD_INPUT); DLGN(IDD_AUDIO); DLGN(IDD_CHEATS); DLGN(IDD_HOTKEYS); DLGN(IDD_PADHK); DLGN(IDD_SHORTCUTS);
+    DLGN(IDD_USERGUIDE); DLGN(IDD_ROMFOLDERS); DLGN(IDD_DIRECTORIES); DLGN(IDD_PICTUREADJ); DLGN(IDD_SHADERPARAMS);
+  }
+#undef DLGN
+  return "";
+}
+
 INT_PTR gui_dialog_box(int template_id, HWND parent, DLGPROC proc)
 {
   INT_PTR r;
   int c = gui_cursor_show();
+  DWORD t0 = GetTickCount();
 
+  gui_log("Window opened: %s (%d)", dialog_log_name(template_id), template_id);
   cheat_search_enable(0);
   memview_enable(0);
   debugwin_enable(0);
@@ -5667,6 +5903,8 @@ INT_PTR gui_dialog_box(int template_id, HWND parent, DLGPROC proc)
   memview_enable(1);
   debugwin_enable(1);
   gui_cursor_restore(c);
+  gui_log("Window closed: %s (%d) after %lu ms, result %d", dialog_log_name(template_id), template_id, (unsigned long)(GetTickCount() - t0), (int)r);
+  gui_log_window_size();                                 /* (was the main window changed while it was open?) */
   return r;
 }
 
@@ -5697,6 +5935,7 @@ static int pick_file_legacy(HWND owner, const char *title, const char *filter,
                             const char *start_dir, char *out, int out_len)
 {
   OPENFILENAMEA ofn;
+  char flt[1024];
 
   out[0] = '\0';
   ZeroMemory(&ofn, sizeof(ofn));
@@ -5704,8 +5943,9 @@ static int pick_file_legacy(HWND owner, const char *title, const char *filter,
   ofn.hwndOwner       = owner;
   ofn.lpstrFile       = out;
   ofn.nMaxFile        = (DWORD)out_len;
-  ofn.lpstrTitle      = title;
-  ofn.lpstrFilter     = filter;
+  ofn.lpstrTitle      = tr(title);
+  i18n_filter(filter, flt, sizeof(flt));
+  ofn.lpstrFilter     = filter ? flt : NULL;
   ofn.nFilterIndex    = 1;
   ofn.lpstrInitialDir = (start_dir && start_dir[0]) ? start_dir : NULL;
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY |
@@ -5720,6 +5960,7 @@ static int pick_file_impl(HWND owner, int which, const char *title, const char *
   static wchar_t names[8][128], pats[8][256];
   COMDLG_FILTERSPEC specs[8];
   wchar_t wtitle[128], wpath[GUI_PATH_LEN];
+  char tfilter[1024];
   IFileOpenDialog *dlg = NULL;
   HRESULT hr, hr_init;
   const char *p;
@@ -5742,10 +5983,11 @@ static int pick_file_impl(HWND owner, int which, const char *title, const char *
   IFileOpenDialog_SetClientGuid(dlg, &pick_guids[which]);
   IFileOpenDialog_ClearClientData(dlg);
 
-  MultiByteToWideChar(CP_ACP, 0, title, -1, wtitle, 128);
+  MultiByteToWideChar(CP_ACP, 0, tr(title), -1, wtitle, 128);
   IFileOpenDialog_SetTitle(dlg, wtitle);
 
-  for (p = filter; p && *p && n < 8; n++)
+  i18n_filter(filter, tfilter, sizeof(tfilter));
+  for (p = tfilter; *p && n < 8; n++)
   {
     MultiByteToWideChar(CP_ACP, 0, p, -1, names[n], 128);
     p += lstrlenA(p) + 1;
@@ -5806,6 +6048,7 @@ int gui_save_file(HWND owner, const char *title, const char *filter, const char 
                   const char *suggest, char *out, int out_len)
 {
   OPENFILENAMEA ofn;
+  char flt[1024];
   int c = gui_cursor_show(), ok;
 
   lstrcpynA(out, suggest ? suggest : "", out_len);
@@ -5814,8 +6057,9 @@ int gui_save_file(HWND owner, const char *title, const char *filter, const char 
   ofn.hwndOwner = owner;
   ofn.lpstrFile = out;
   ofn.nMaxFile = (DWORD)out_len;
-  ofn.lpstrTitle = title;
-  ofn.lpstrFilter = filter;
+  ofn.lpstrTitle = tr(title);
+  i18n_filter(filter, flt, sizeof(flt));
+  ofn.lpstrFilter = filter ? flt : NULL;
   ofn.lpstrDefExt = defext;
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER | OFN_NOCHANGEDIR;

@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  eggs.c -- hidden extras. Nothing here is in the menus, the User Guide or
  *  the README on purpose. Compiled in only with GPEX_EGGS (Makefile: EGGS=1).
@@ -119,7 +120,7 @@ static void toast(int ms, const char *fmt, ...)
     ZeroMemory(&wc, sizeof(wc));
     wc.lpfnWndProc = toast_proc;
     wc.hInstance = g_inst;
-    wc.lpszClassName = "GpexToast";
+    wc.lpszClassName = "GpexToast"; i18n_keep_ltr("GpexToast");
     RegisterClassA(&wc);
     registered = 1;
   }

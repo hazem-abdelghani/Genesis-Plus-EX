@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  i18n.c -- translations from Languages\*.po (see i18n.h).
  ****************************************************************************/
@@ -133,6 +134,61 @@ static void unquote(const char *s, sb_t *out)
   }
 }
 
+extern void gui_log(const char *fmt, ...);
+
+/* The % markers of a text (%s %d %lu %X %5.2f %*d ...): written to sig as one entry for each, its length modifier and type (and a * for each
+   * width or precision), so two texts that fill in the same values in the same order have the same signature. %% and a % that is no marker are
+   not counted. A translation whose signature differs from the English one would make the program read a value as another kind (a crash, or
+   garbage), so it is not used. */
+/* (tools/check_po.py has the same rules in Python; its --selftest lists the cases both must give. Change them together.) */
+static void marker_signature(const char *t, char *sig, size_t cap)
+{
+  size_t n = 0;
+
+  while (*t && n + 8 < cap)
+  {
+    const char *p;
+    char tok[12];
+    int tn = 0;
+
+    if (*t != '%') { t++; continue; }
+    if (t[1] == '%') { t += 2; continue; }
+    p = t + 1;
+    while (*p == '-' || *p == '+' || *p == '0') p++;
+    if (*p == '*') { tok[tn++] = '*'; p++; } else while (*p >= '0' && *p <= '9') p++;
+    if (*p == '.')
+    {
+      p++;
+      if (*p == '*') { tok[tn++] = '*'; p++; } else while (*p >= '0' && *p <= '9') p++;
+    }
+    if (!strncmp(p, "I64", 3)) { memcpy(tok + tn, "I64", 3); tn += 3; p += 3; }
+    else if (!strncmp(p, "I32", 3)) { memcpy(tok + tn, "I32", 3); tn += 3; p += 3; }
+    else if (!strncmp(p, "ll", 2) || !strncmp(p, "hh", 2)) { tok[tn++] = p[0]; tok[tn++] = p[1]; p += 2; }
+    else if (*p == 'l' || *p == 'h' || *p == 'z' || *p == 'j' || *p == 't' || *p == 'L' || *p == 'w') { tok[tn++] = *p; p++; }
+    if (*p && strchr("diouxXeEfgGaAcCsSpn", *p))
+    {
+      tok[tn++] = *p;
+      memcpy(sig + n, tok, (size_t)tn);
+      n += (size_t)tn;
+      sig[n++] = ',';
+      t = p + 1;
+    }
+    else t++;                                                  /* (a % that is just a percent sign) */
+  }
+  sig[n] = '\0';
+}
+
+static int markers_match(const char *id, const char *str)
+{
+  char a[256], b[256];
+
+  marker_signature(id, a, sizeof(a));
+  marker_signature(str, b, sizeof(b));
+  return !strcmp(a, b);
+}
+
+static int po_skipped;
+
 static void load_po(char *data)
 {
   sb_t id = { 0 }, str = { 0 };
@@ -142,7 +198,7 @@ static void load_po(char *data)
   if ((unsigned char)data[0] == 0xEF && (unsigned char)data[1] == 0xBB && (unsigned char)data[2] == 0xBF) data += 3;
 
 #define FLUSH() do { \
-    if (id.n && str.n && !fuzzy) put(_strdup(id.p), _strdup(str.p)); \
+    if (id.n && str.n && !fuzzy) { if (markers_match(id.p, str.p)) put(_strdup(id.p), _strdup(str.p)); else { po_skipped++; gui_log("Language file: translation not used, its %% markers differ from the English: %.70s", id.p); } } \
     id.n = str.n = 0; if (id.p) id.p[0] = 0; if (str.p) str.p[0] = 0; field = 0; fuzzy = 0; } while (0)
 
   for (line = data; line && *line; line = next)
@@ -284,22 +340,50 @@ char *i18n_block(const char *text)
   {
     const char *eol = strchr(p, '\n');
     size_t len = eol ? (size_t)(eol - p) : strlen(p), body = len;
-    char line[1024];
+    char small[1024], *line = small;
     const char *t = NULL;
+    size_t mk;
 
     if (body && p[body - 1] == '\r') body--;
-    if (body > 0 && body < sizeof(line))
+    mk = (body && (p[0] == '\1' || p[0] == '\2')) ? 1 : 0;              /* (the User Guide marks its titles and items before it is translated: the mark is kept, the text after it is looked up) */
+    if (mk) sb_add(&out, p, 1);
+    if (body - mk >= sizeof(small)) line = (char *)malloc(body - mk + 1);          /* (the long lines of the User Guide) */
+    if (body > mk && line)
     {
-      memcpy(line, p, body);
-      line[body] = '\0';
+      memcpy(line, p + mk, body - mk);
+      line[body - mk] = '\0';
       t = find(line);
     }
-    if (t) sb_add(&out, t, strlen(t)); else sb_add(&out, p, body);
+    if (line != small) free(line);
+    if (t) sb_add(&out, t, strlen(t)); else sb_add(&out, p + mk, body - mk);
     sb_add(&out, p + body, len - body);
     if (eol) { sb_add(&out, "\n", 1); p = eol + 1; } else break;
   }
   if (!out.p) out.p = _strdup("");
   return out.p;
+}
+
+/* The kinds of file a file window offers: "text<NUL>pattern<NUL>text<NUL>pattern<NUL><NUL>" (out has room for cap bytes). The texts are translated, the
+   patterns are not. */
+void i18n_filter(const char *in, char *out, size_t cap)
+{
+  size_t n = 0;
+
+  if (!out || cap < 2) return;
+  while (in && *in)
+  {
+    const char *s = tr(in), *pat = in + strlen(in) + 1;          /* a text and its pattern go in together, or not at all */
+    size_t l = strlen(s), lp = strlen(pat);
+
+    if (n + l + 1 + lp + 1 + 2 > cap) break;
+    memcpy(out + n, s, l + 1);
+    n += l + 1;
+    memcpy(out + n, pat, lp + 1);
+    n += lp + 1;
+    in = pat + lp + 1;
+  }
+  out[n] = '\0';
+  out[n + 1 <= cap - 1 ? n + 1 : n] = '\0';
 }
 
 /* ---- fitting the controls to the translated text ------------------------
@@ -669,6 +753,9 @@ static LRESULT CALLBACK dlg_hook_proc(int code, WPARAM wp, LPARAM lp)
     char cls[32], text[512];
     HWND c;
 
+    if (i18n_rtl)                                          /* a right-to-left language: the window is mirrored (its controls too) and reads from the right */
+      SetWindowLongPtrA(r->hwnd, GWL_EXSTYLE, GetWindowLongPtrA(r->hwnd, GWL_EXSTYLE) | WS_EX_LAYOUTRTL | WS_EX_RTLREADING);
+
     GetWindowTextA(r->hwnd, text, sizeof(text));
     if (find(text)) SetWindowTextA(r->hwnd, find(text));
     for (c = GetWindow(r->hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT))
@@ -740,16 +827,26 @@ void i18n_language_name(const char *file, char *out, int len)
   if (e > p && e - p < len) { memcpy(out, p, (size_t)(e - p)); out[e - p] = '\0'; }
 }
 
+int i18n_rtl;
+
 void i18n_init(const char *language)
 {
   char path[MAX_PATH + 64];
   HANDLE f;
   DWORD size, got = 0;
   char *data;
+  char sysname[48];
 
   clear_table();
+  po_skipped = 0;
   i18n_on = 0;
+  i18n_rtl = 0;
   if (!language || !language[0] || !lstrcmpiA(language, "English")) return;
+  if (!lstrcmpiA(language, "System"))                       /* follow Windows: the file of the language of Windows, English when there is none */
+  {
+    if (!i18n_find_windows_language(sysname, sizeof(sysname))) return;
+    language = sysname;
+  }
   _snprintf(path, sizeof(path), "%s\\%s.po", osd_path("Languages"), language);
   f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
   if (f == INVALID_HANDLE_VALUE) return;
@@ -758,10 +855,21 @@ void i18n_init(const char *language)
   if (data && ReadFile(f, data, size, &got, NULL))
   {
     data[got] = '\0';
+    {
+      const char *d = strstr(data, "Language-Direction:");           /* the header of the file: "Language-Direction: rtl" for Arabic, Persian ... */
+
+      if (d)
+      {
+        d += 19;
+        while (*d == ' ' || *d == '\t') d++;
+        i18n_rtl = (d[0] == 'r' || d[0] == 'R') && (d[1] == 't' || d[1] == 'T') && (d[2] == 'l' || d[2] == 'L');
+      }
+    }
     load_po(data);
   }
   free(data);
   CloseHandle(f);
+  if (po_skipped) gui_log("Language file: %d translations not used (their %% markers differ from the English; tools/check_po.py shows which)", po_skipped);
   i18n_on = tab_count > 0;
   if (i18n_on && !dlg_hook) dlg_hook = SetWindowsHookExA(WH_CALLWNDPROCRET, dlg_hook_proc, NULL, GetCurrentThreadId());
 }
@@ -788,19 +896,22 @@ void i18n_language_menu(HMENU menu, const char *current)
 
   if (!menu || !find_language_menu(menu, &lm)) return;
   while (GetMenuItemCount(lm) > 0) DeleteMenu(lm, 0, MF_BYPOSITION);
-  AppendMenuA(lm, MF_STRING, IDM_OPT_LANGUAGE_BASE, "English");
-  n = i18n_list(names, 31);
+  AppendMenuA(lm, MF_STRING, IDM_OPT_LANGUAGE_BASE, "System");
+  AppendMenuA(lm, MF_SEPARATOR, 0, NULL);
+  AppendMenuA(lm, MF_STRING, IDM_OPT_LANGUAGE_BASE + 1, "English");
+  n = i18n_list(names, 30);
   for (i = 0; i < n; i++)
   {
     char shown[48];
 
     i18n_language_name(names[i], shown, sizeof(shown));
-    AppendMenuA(lm, MF_STRING, IDM_OPT_LANGUAGE_BASE + 1 + i, shown);
+    AppendMenuA(lm, MF_STRING, IDM_OPT_LANGUAGE_BASE + 2 + i, shown);
   }
-  CheckMenuRadioItem(lm, IDM_OPT_LANGUAGE_BASE, IDM_OPT_LANGUAGE_BASE + 31, IDM_OPT_LANGUAGE_BASE, MF_BYCOMMAND);
+  CheckMenuRadioItem(lm, IDM_OPT_LANGUAGE_BASE, IDM_OPT_LANGUAGE_BASE + 31, IDM_OPT_LANGUAGE_BASE + 1, MF_BYCOMMAND);
+  if (current && !lstrcmpiA(current, "System")) CheckMenuRadioItem(lm, IDM_OPT_LANGUAGE_BASE, IDM_OPT_LANGUAGE_BASE + 31, IDM_OPT_LANGUAGE_BASE, MF_BYCOMMAND);
   for (i = 0; i < n; i++)
     if (current && !lstrcmpiA(current, names[i]))
-      CheckMenuRadioItem(lm, IDM_OPT_LANGUAGE_BASE, IDM_OPT_LANGUAGE_BASE + 31, IDM_OPT_LANGUAGE_BASE + 1 + i, MF_BYCOMMAND);
+      CheckMenuRadioItem(lm, IDM_OPT_LANGUAGE_BASE, IDM_OPT_LANGUAGE_BASE + 31, IDM_OPT_LANGUAGE_BASE + 2 + i, MF_BYCOMMAND);
 }
 
 int i18n_language_from_command(int cmd, char *name, int len)
@@ -809,11 +920,41 @@ int i18n_language_from_command(int cmd, char *name, int len)
   int n;
 
   if (cmd < IDM_OPT_LANGUAGE_BASE || cmd > IDM_OPT_LANGUAGE_BASE + 31) return 0;
-  if (cmd == IDM_OPT_LANGUAGE_BASE) { lstrcpynA(name, "", len); return 1; }
-  n = i18n_list(names, 31);
-  if (cmd - IDM_OPT_LANGUAGE_BASE - 1 >= n) return 0;
-  lstrcpynA(name, names[cmd - IDM_OPT_LANGUAGE_BASE - 1], len);
+  if (cmd == IDM_OPT_LANGUAGE_BASE + 1) { lstrcpynA(name, "", len); return 1; }
+  if (cmd == IDM_OPT_LANGUAGE_BASE) { lstrcpynA(name, "System", len); return 1; }
+  n = i18n_list(names, 30);
+  if (cmd - IDM_OPT_LANGUAGE_BASE - 2 >= n) return 0;
+  lstrcpynA(name, names[cmd - IDM_OPT_LANGUAGE_BASE - 2], len);
   return 1;
+}
+
+/* Menus of a right-to-left language open to the left and list their items from the right. */
+void i18n_mirror_menu(HMENU menu)
+{
+  int i, n;
+
+  if (!i18n_rtl || !menu) return;
+  n = GetMenuItemCount(menu);
+  for (i = 0; i < n; i++)
+  {
+    MENUITEMINFOA mii;
+
+    memset(&mii, 0, sizeof(mii));
+    mii.cbSize = sizeof(mii);
+    mii.fMask = MIIM_FTYPE | MIIM_SUBMENU;
+    if (!GetMenuItemInfoA(menu, (UINT)i, TRUE, &mii)) continue;
+    if (!(mii.fType & MFT_RIGHTORDER))
+    {
+      MENUITEMINFOA set;
+
+      memset(&set, 0, sizeof(set));
+      set.cbSize = sizeof(set);
+      set.fMask = MIIM_FTYPE;
+      set.fType = mii.fType | MFT_RIGHTORDER;
+      SetMenuItemInfoA(menu, (UINT)i, TRUE, &set);
+    }
+    if (mii.hSubMenu) i18n_mirror_menu(mii.hSubMenu);
+  }
 }
 
 /* ---- the Windows calls --------------------------------------------------- */
@@ -836,19 +977,77 @@ static int is_class(HWND w, const char *cls)
 LRESULT WINAPI i18n_SendMessageA(HWND wnd, UINT msg, WPARAM wp, LPARAM lp);
 BOOL WINAPI i18n_SetWindowTextA(HWND wnd, LPCSTR text);
 
+/* A format that is more than its %d %lu ...: it has two letters in a row that are text. One that has none ("%lu|", the line of a settings file)
+   is never looked up, nor is a "key=value" line: a language file must not change what is written to a file. */
+static int format_has_text(const char *f)
+{
+  int run = 0;
+  const char *k;
+
+  for (k = f; (*k >= 'a' && *k <= 'z') || (*k >= 'A' && *k <= 'Z') || (*k >= '0' && *k <= '9') || *k == '_' || *k == '.' || *k == '%'; k++) ;
+  if (k > f && *k == '=') return 0;          /* "turbo_speed=%d": a line of a file the program writes (key=value), not text */
+
+  for (; *f; f++)
+  {
+    if (*f == '%')
+    {
+      f++;
+      while (*f && strchr("-+ 0#*.123456789hlIz64", *f)) f++;
+      if (!*f) break;
+      if (*f == '%') continue;
+      run = 0;
+      continue;
+    }
+    if ((*f >= 'a' && *f <= 'z') || (*f >= 'A' && *f <= 'Z')) { if (++run >= 2) return 1; }
+    else run = 0;
+  }
+  return 0;
+}
+
 int WINAPIV i18n_wsprintfA(LPSTR out, LPCSTR fmt, ...)
 {
   va_list ap;
   int n;
 
   va_start(ap, fmt);
-  n = wvsprintfA(out, tr(fmt), ap);
+  n = wvsprintfA(out, format_has_text(fmt) ? tr(fmt) : fmt, ap);
   va_end(ap);
   return n;
 }
 
+/* A right-to-left language: the windows of the program that stand on their own are mirrored (the controls in them too), the text of every
+   control reads from the right. Not mirrored: the main window (its picture and game list are drawn by the program, and the light gun reads
+   the pointer from it: they must not be flipped; its menus, toolbar and status bar are mirrored), and the tools that show code and numbers
+   (debugger, memory viewer, RAM search and watch), which are written left to right in any language. */
+static char keep_ltr[32][48];
+static int keep_ltr_n;
+
+void i18n_keep_ltr(const char *cls)                     /* the window class stays left to right (the window that registers it says so) */
+{
+  if (cls && keep_ltr_n < 32) lstrcpynA(keep_ltr[keep_ltr_n++], cls, 48);
+}
+
+static int rtl_keep_ltr(LPCSTR cls)
+{
+  int k;
+
+  for (k = 0; k < keep_ltr_n; k++) if (!lstrcmpiA(cls, keep_ltr[k])) return 1;
+  return 0;
+}
+
 HWND WINAPI i18n_CreateWindowExA(DWORD ex, LPCSTR cls, LPCSTR name, DWORD style, int x, int y, int w, int h, HWND parent, HMENU menu, HINSTANCE inst, LPVOID param)
 {
+  if (i18n_rtl && (ULONG_PTR)cls > 0xFFFF && !rtl_keep_ltr(cls))
+  {
+    int text_class = !lstrcmpiA(cls, "EDIT") || !lstrcmpiA(cls, "STATIC") || !lstrcmpiA(cls, "BUTTON") || !lstrcmpiA(cls, "COMBOBOX") || !lstrcmpiA(cls, "LISTBOX") || !strncmp(cls, "RichEdit", 8);
+    HWND top = parent;
+
+    while (top && (GetWindowLongA(top, GWL_STYLE) & WS_CHILD)) top = GetParent(top);
+    if ((style & WS_CHILD) && (!lstrcmpiA(cls, "GPBrowserBar") || !lstrcmpiA(cls, "msctls_statusbar32"))) ex |= WS_EX_LAYOUTRTL | WS_EX_RTLREADING;     /* the toolbar, the search bar and the status bar of the main window */
+    else if (!(style & WS_CHILD) && !parent) ex |= WS_EX_LAYOUTRTL | WS_EX_RTLREADING;            /* a window of its own */
+    else if (!(style & WS_CHILD) && top && !(GetWindowLongA(top, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) && strncmp(cls, "tooltips", 8) && !rtl_keep_ltr(cls)) ex |= WS_EX_LAYOUTRTL | WS_EX_RTLREADING;     /* (an owned window) */
+    else if (text_class) ex |= WS_EX_RTLREADING;                                              /* the text of a control reads from the right */
+  }
   if (i18n_on && name && (ULONG_PTR)cls > 0xFFFF && lstrcmpiA(cls, "EDIT") && strncmp(cls, "RichEdit", 8)) name = tr(name);
   return CreateWindowExA(ex, cls, name, style, x, y, w, h, parent, menu, inst, param);
 }
@@ -1028,6 +1227,38 @@ static int real_ptr(const void *p)
   return (ULONG_PTR)p > 0xFFFF && (LONG_PTR)p != -1;
 }
 
+/* A tip of several lines (an intro, then one line for each point): each line is translated on its own. The tooltip keeps the pointer it is given, so
+   the result is kept (one for each text). */
+static const char *tip_lines(const char *text)
+{
+  static struct tl { char *src, *out; } *cache;
+  static int n, cap;
+  int k;
+  char *bl, *o;
+  size_t nl = 0, l, w = 0;
+
+  for (k = 0; k < n; k++) if (!strcmp(cache[k].src, text)) return cache[k].out;          /* (by what it says: a buffer that is used again for another tip is not mistaken) */
+  if (n == cap)
+  {
+    struct tl *g = (struct tl *)realloc(cache, (size_t)(cap ? cap * 2 : 32) * sizeof(*cache));
+
+    if (!g) return text;
+    cache = g;
+    cap = cap ? cap * 2 : 32;
+  }
+  bl = i18n_block(text);
+  l = strlen(bl);
+  for (k = 0; (size_t)k < l; k++) if (bl[k] == '\n' && (k == 0 || bl[k - 1] != '\r')) nl++;
+  o = (char *)malloc(l + nl + 1);
+  if (!o) { free(bl); return text; }
+  for (k = 0; (size_t)k < l; k++) { if (bl[k] == '\n' && (k == 0 || bl[k - 1] != '\r')) o[w++] = '\r'; o[w++] = bl[k]; }       /* (a line end the tooltip surely takes) */
+  o[w] = '\0';
+  free(bl);
+  cache[n].src = _strdup(text);
+  cache[n].out = o;
+  return cache[n++].out;
+}
+
 LRESULT WINAPI i18n_SendMessageA(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
 {
   if (msg == SB_SETTEXTA && is_class(wnd, "msctls_statusbar32") && real_ptr((const void *)lp) && has_high((const char *)lp, -1))      /* the status bar: UTF-8, whatever the code page of the process is */
@@ -1084,7 +1315,7 @@ LRESULT WINAPI i18n_SendMessageA(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
       if (src && src->cbSize <= sizeof(ti) && real_ptr(src->lpszText))
       {
         memcpy(&ti, src, src->cbSize);
-        ti.lpszText = (LPSTR)tr(src->lpszText);
+        ti.lpszText = strchr(src->lpszText, '\n') ? (LPSTR)tip_lines(src->lpszText) : (LPSTR)tr(src->lpszText);
         return SendMessageA(wnd, msg, wp, (LPARAM)&ti);
       }
       break;
@@ -1233,4 +1464,85 @@ BOOL WINAPI i18n_GetTextExtentPoint32A(HDC dc, LPCSTR s, int n, LPSIZE size)
     }
   }
   return GetTextExtentPoint32A(dc, s, n, size);
+}
+
+
+/* ---- The language of Windows, for the first start ---- */
+
+/* "fr-FR", "fr_FR", "FR" -> "fr_fr", "fr"; primary gets what is before the first _ . */
+static void locale_norm(const char *in, char *out, int len, char *primary, int plen)
+{
+  int i, n = 0;
+
+  for (i = 0; in[i] && n < len - 1 && in[i] != '\\' && in[i] != '"' && in[i] != '\n' && in[i] != '\r'; i++)
+  {
+    char c = in[i];
+    if (c == ' ' || c == '\t') { if (n == 0) continue; break; }
+    out[n++] = c == '-' ? '_' : (char)((c >= 'A' && c <= 'Z') ? c + 32 : c);
+  }
+  out[n] = '\0';
+  for (i = 0; out[i] && out[i] != '_' && i < plen - 1; i++) primary[i] = out[i];
+  primary[i] = '\0';
+}
+
+int i18n_find_windows_language(char *out, int len)
+{
+  WCHAR wl[96];
+  char loc[64], loc_primary[16], dir[MAX_PATH + 16], pat[MAX_PATH + 32];
+  WIN32_FIND_DATAA fd;
+  HANDLE h;
+  int best = 0;
+
+  if (!out || len < 2) return 0;
+  out[0] = '\0';
+  if (!GetUserDefaultLocaleName(wl, 85)) return 0;
+  {
+    char narrow[96];
+
+    WideCharToMultiByte(CP_ACP, 0, wl, -1, narrow, (int)sizeof(narrow), NULL, NULL);
+    locale_norm(narrow, loc, sizeof(loc), loc_primary, sizeof(loc_primary));
+  }
+  if (!loc[0] || !strcmp(loc_primary, "en")) return 0;                  /* English is what the program has */
+
+  lstrcpynA(dir, osd_path("Languages"), sizeof(dir));
+  _snprintf(pat, sizeof(pat), "%s\\*.po", dir);
+  h = FindFirstFileA(pat, &fd);
+  if (h == INVALID_HANDLE_VALUE) return 0;
+  do
+  {
+    char path[MAX_PATH + 64], buf[4096], base[64], head[64], head_primary[16], base_norm[64], base_primary[16];
+    HANDLE f;
+    DWORD got = 0;
+    int score = 0;
+    char *p;
+
+    lstrcpynA(base, fd.cFileName, sizeof(base));
+    p = strrchr(base, '.');
+    if (p) *p = '\0';
+    if (!lstrcmpiA(base, "English") || !lstrcmpiA(base, "Template")) continue;
+    locale_norm(base, base_norm, sizeof(base_norm), base_primary, sizeof(base_primary));
+    if (!strcmp(base_norm, loc)) score = 2;
+    else if (!strcmp(base_primary, loc_primary) && base_primary[0] && strlen(base_norm) <= 6) score = 1;
+    _snprintf(path, sizeof(path), "%s\\%s", dir, fd.cFileName);
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f != INVALID_HANDLE_VALUE)
+    {
+      if (ReadFile(f, buf, sizeof(buf) - 1, &got, NULL)) buf[got] = '\0'; else buf[0] = '\0';
+      CloseHandle(f);
+      p = strstr(buf, "\"Language:");                                   /* the header: "Language: fr" */
+      if (p)
+      {
+        locale_norm(p + 10, head, sizeof(head), head_primary, sizeof(head_primary));
+        if (head[0] && !strcmp(head, loc)) score = 2;
+        else if (head[0] && !strcmp(head_primary, loc_primary) && score < 1) score = 1;
+      }
+    }
+    if (score > best)
+    {
+      best = score;
+      lstrcpynA(out, base, len);
+    }
+  } while (FindNextFileA(h, &fd));
+  FindClose(h);
+  return best > 0;
 }

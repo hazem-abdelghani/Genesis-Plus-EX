@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  patches.c -- ROM patches (.ips, .bps) applied in memory when a game loads,
  *  and the header checksum fixer.

@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  d3d11_video.h -- optional Direct3D 11 output path.
  *
@@ -69,6 +70,9 @@ void d3d11_overlay_slot(int slot);     /* which of two overlay textures the next
 int  d3d11_draw_overlay(const uint32 *argb_pixels, int argb_pitch,
                          int w, int h, const RECT *screen_area);
 
+void d3d11_set_vrr(int on);           /* variable refresh wanted (1) or not (0): used the next time the device is made */
+int  d3d11_resample_available(int mode);   /* Scaling Filter 1 (Sharp Nearest), 3 (Sharp Bilinear) and 4 (Bicubic): did its pixel shader compile? */
+int  d3d11_vrr_active(void);          /* 1 when the swap chain was made for variable refresh (gui.vrr on and the PC supports it) */
 void d3d11_set_sync(int on);          /* VSync: the next d3d11_present() waits for the display's refresh (1) or not (0) */
 void d3d11_present(void);
 

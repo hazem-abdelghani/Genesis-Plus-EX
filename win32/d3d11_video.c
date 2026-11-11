@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  d3d11_video.c -- see d3d11_video.h for the rationale.
  *
@@ -30,6 +31,7 @@
    its own equivalents unconditionally in a plain C translation unit. */
 #define COBJMACROS
 #include <d3d11.h>
+#include <dxgi1_5.h>
 #include <d3dcompiler.h>
 #include "d3d11_video.h"
 
@@ -44,6 +46,8 @@ typedef struct { float x, y, u, v; } d3d11_vertex_t;
    passthrough position (already in clip space -- computed on the CPU side
    from the destination rect, exactly like d3d9_video.c's screen-space quad,
    just expressed as NDC instead of D3D9's XYZRHW). */
+extern void i18n_keep_ltr(const char *cls);
+extern void gui_log(const char *fmt, ...);
 static const char *vs_src =
   "struct VSIn  { float2 pos : POSITION; float2 uv : TEXCOORD0; };\n"
   "struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };\n"
@@ -63,6 +67,81 @@ static const char *ps_src =
   "{\n"
   "  return tex0.Sample(samp0, i.uv);\n"
   "}\n";
+
+
+/* Scaling Filter pixel shaders over the picture:
+   Bicubic (Catmull-Rom) in nine bilinear reads (the weights of the four texels in each direction are folded into three reads: the two middle texels
+   are read with one bilinear fetch placed between them).
+   Sharp Bilinear: the sample point moves along the smootherstep curve (6f^5 - 15f^4 + 10f^3) between two pixel centers: the middle of each source pixel
+   stays flat and the blend with the next one happens over about half a source pixel, without a kink; the same at any window size.
+   Sharp Nearest: the sample point is moved so that the blend between two source pixels is one screen pixel wide (the way libretro's sharp-bilinear
+   does it): crisp pixels, even ones at any size. */
+static const char *ps_resample_src =
+  "Texture2D tex0 : register(t0);\n"
+  "SamplerState samp0 : register(s0);\n"
+  "struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };\n"
+  "float4 main_catmull(VSOut i) : SV_TARGET\n"
+  "{\n"
+  "  uint tw, th; tex0.GetDimensions(tw, th);\n"
+  "  float2 dims = float2(tw, th);\n"
+  "  float2 sp = i.uv * dims;\n"
+  "  float2 t1 = floor(sp - 0.5) + 0.5;\n"
+  "  float2 f = sp - t1;\n"
+  "  float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));\n"
+  "  float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);\n"
+  "  float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));\n"
+  "  float2 w3 = f * f * (-0.5 + 0.5 * f);\n"
+  "  float2 w12 = w1 + w2;\n"
+  "  float2 o12 = w2 / w12;\n"
+  "  float2 t0 = (t1 - 1.0) / dims;\n"
+  "  float2 t3 = (t1 + 2.0) / dims;\n"
+  "  float2 t12 = (t1 + o12) / dims;\n"
+  "  float4 r = tex0.Sample(samp0, float2(t0.x, t0.y)) * (w0.x * w0.y)\n"
+  "           + tex0.Sample(samp0, float2(t12.x, t0.y)) * (w12.x * w0.y)\n"
+  "           + tex0.Sample(samp0, float2(t3.x, t0.y)) * (w3.x * w0.y)\n"
+  "           + tex0.Sample(samp0, float2(t0.x, t12.y)) * (w0.x * w12.y)\n"
+  "           + tex0.Sample(samp0, float2(t12.x, t12.y)) * (w12.x * w12.y)\n"
+  "           + tex0.Sample(samp0, float2(t3.x, t12.y)) * (w3.x * w12.y)\n"
+  "           + tex0.Sample(samp0, float2(t0.x, t3.y)) * (w0.x * w3.y)\n"
+  "           + tex0.Sample(samp0, float2(t12.x, t3.y)) * (w12.x * w3.y)\n"
+  "           + tex0.Sample(samp0, float2(t3.x, t3.y)) * (w3.x * w3.y);\n"
+  "  return r;\n"
+  "}\n"
+  "float4 main_sharpbil(VSOut i) : SV_TARGET\n"
+  "{\n"
+  "  uint tw, th; tex0.GetDimensions(tw, th);\n"
+  "  float2 dims = float2(tw, th);\n"
+  "  float2 p = i.uv * dims + 0.5;\n"
+  "  float2 fl = floor(p);\n"
+  "  float2 f = p - fl;\n"
+  "  f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);\n"
+  "  float2 uvn = (fl + f - 0.5) / dims;\n"
+  "  return tex0.Sample(samp0, uvn);\n"
+  "}\n"
+  "float4 main_sharpnear(VSOut i) : SV_TARGET\n"
+  "{\n"
+  "  uint tw, th; tex0.GetDimensions(tw, th);\n"
+  "  float2 dims = float2(tw, th);\n"
+  "  float2 fp = max(float2(abs(ddx(i.uv.x)), abs(ddy(i.uv.y))) * dims, 0.0001);\n"      /* source pixels under one output pixel */
+  "  float2 k = max(1.0 / fp, float2(1.0, 1.0));\n"                                        /* output pixels for one source pixel: the blend is one of them wide */
+  "  float2 p = i.uv * dims;\n"
+  "  float2 fl = floor(p);\n"
+  "  float2 cd = p - fl - 0.5;\n"
+  "  float2 rr = 0.5 - 0.5 / k;\n"
+  "  float2 f = (cd - clamp(cd, -rr, rr)) * k + 0.5;\n"
+  "  float2 uvn = (fl + f) / dims;\n"
+  "  return tex0.Sample(samp0, uvn);\n"
+  "}\n";
+
+static ID3D11PixelShader *ps_resample[3];                /* Bicubic, Sharp Bilinear, Sharp Nearest (NULL when one did not compile: Bilinear is used) */
+/* The pixel shader of Scaling Filter number mode (1 Sharp Nearest, 3 Sharp Bilinear, 4 Bicubic), or NULL (the other modes, or it did not compile). */
+static ID3D11PixelShader *resample_shader(int mode)
+{
+  return mode == 1 ? ps_resample[2] : (mode == 3 ? ps_resample[1] : (mode == 4 ? ps_resample[0] : NULL));
+}
+
+int d3d11_resample_available(int mode) { return resample_shader(mode) != NULL; }
+
 
 /* d3dcompiler.h already typedefs the function pointer type as "pD3DCompile"
    (unfortunately the same spelling a variable holding one would naturally
@@ -144,12 +223,20 @@ static void release_pipeline(void)
   if (vbuffer)      { ID3D11Buffer_Release(vbuffer);              vbuffer = NULL; }
   if (input_layout) { ID3D11InputLayout_Release(input_layout);    input_layout = NULL; }
   if (pshader)      { ID3D11PixelShader_Release(pshader);         pshader = NULL; }
+  { int r; for (r = 0; r < 3; r++) if (ps_resample[r]) { ID3D11PixelShader_Release(ps_resample[r]); ps_resample[r] = NULL; } }
   if (vshader)      { ID3D11VertexShader_Release(vshader);        vshader = NULL; }
   if (samp_point)   { ID3D11SamplerState_Release(samp_point);     samp_point = NULL; }
   if (samp_linear)  { ID3D11SamplerState_Release(samp_linear);    samp_linear = NULL; }
   if (blend_opaque) { ID3D11BlendState_Release(blend_opaque);     blend_opaque = NULL; }
   if (blend_alpha)  { ID3D11BlendState_Release(blend_alpha);      blend_alpha = NULL; }
 }
+
+static int vrr_active;     /* the swap chain is a flip-model one that may tear, for a display with variable refresh (see create_flip_swapchain) */
+
+static int vrr_want;       /* asked for by video.c (Video > Variable Refresh Rate) before the device is made */
+
+int d3d11_vrr_active(void) { return vrr_active; }
+void d3d11_set_vrr(int on) { vrr_want = on ? 1 : 0; }
 
 static void release_device(void)
 {
@@ -161,6 +248,7 @@ static void release_device(void)
   if (context)   { ID3D11DeviceContext_Release(context); context = NULL; }
   if (device)    { ID3D11Device_Release(device); device = NULL; }
   swap_w = 0; swap_h = 0;
+  vrr_active = 0;
 }
 
 /* Loaded once, kept for the life of the process -- there is nothing to
@@ -184,7 +272,12 @@ static int compile_shader(const char *src, const char *entry, const char *target
   ID3DBlob *errors = NULL;
   HRESULT hr = d3dcompile_fn(src, strlen(src), NULL, NULL, NULL, entry, target,
                             0, 0, out, &errors);
-  if (errors) ID3D10Blob_Release(errors);   /* ID3DBlob and ID3D10Blob are the same interface */
+  if (errors)
+  {
+    if (FAILED(hr)) gui_log("Direct3D 11: the shader %s did not compile: %.300s", entry, (const char *)ID3D10Blob_GetBufferPointer(errors));
+    ID3D10Blob_Release(errors);   /* ID3DBlob and ID3D10Blob are the same interface */
+  }
+  else if (FAILED(hr)) gui_log("Direct3D 11: the shader %s did not compile (0x%08lX)", entry, (unsigned long)hr);
   return SUCCEEDED(hr);
 }
 
@@ -212,6 +305,22 @@ static int create_pipeline(void)
   {
     ID3D10Blob_Release(vs_blob); ID3D10Blob_Release(ps_blob);
     return 0;
+  }
+
+  {
+    static const char *const entries[3] = { "main_catmull", "main_sharpbil", "main_sharpnear" };
+    int r;
+
+    for (r = 0; r < 3; r++)                               /* (an extra: when one does not compile, the picture is scaled with the bilinear filter instead) */
+    {
+      ID3DBlob *rb = NULL;
+
+      if (compile_shader(ps_resample_src, entries[r], "ps_4_0", &rb))
+      {
+        if (FAILED(ID3D11Device_CreatePixelShader(device, ID3D10Blob_GetBufferPointer(rb), ID3D10Blob_GetBufferSize(rb), NULL, &ps_resample[r]))) ps_resample[r] = NULL;
+        ID3D10Blob_Release(rb);
+      }
+    }
   }
 
   ZeroMemory(layout, sizeof(layout));
@@ -280,6 +389,68 @@ static int create_rtv(void)
   return SUCCEEDED(hr);
 }
 
+/* Variable refresh (G-Sync, FreeSync): the swap chain is a flip-model one with two buffers that is allowed to tear, and each frame is presented with
+   no wait (DXGI_PRESENT_ALLOW_TEARING): a display with variable refresh then shows the frame the moment it arrives, at the pace the game is run at.
+   Needs Windows 10 (version 1607 or later) and a driver that says it can (CheckFeatureSupport). Returns 0, with nothing left made, when something of
+   that is missing: the normal swap chain is made then. */
+static int create_flip_swapchain(int w, int h, const D3D_FEATURE_LEVEL *levels, int nlevels)
+{
+  D3D_FEATURE_LEVEL got_level;
+  IDXGIDevice *dxgi_dev = NULL;
+  IDXGIAdapter *adapter = NULL;
+  IDXGIFactory2 *factory = NULL;
+  IDXGIFactory5 *factory5 = NULL;
+  IDXGISwapChain1 *sc1 = NULL;
+  DXGI_SWAP_CHAIN_DESC1 sd;
+  BOOL allow = FALSE;
+  int ok = 0;
+
+  if (FAILED(D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, levels, (UINT)nlevels, D3D11_SDK_VERSION, &device, &got_level, &context)))
+  {
+    device = NULL; context = NULL;
+    return 0;
+  }
+  if (FAILED(ID3D11Device_QueryInterface(device, &IID_IDXGIDevice, (void **)&dxgi_dev)) || !dxgi_dev) goto done;
+  if (FAILED(IDXGIDevice_GetAdapter(dxgi_dev, &adapter)) || !adapter) goto done;
+  if (FAILED(IDXGIAdapter_GetParent(adapter, &IID_IDXGIFactory2, (void **)&factory)) || !factory) goto done;
+  if (FAILED(IDXGIFactory2_QueryInterface(factory, &IID_IDXGIFactory5, (void **)&factory5)) || !factory5) goto done;
+  if (FAILED(IDXGIFactory5_CheckFeatureSupport(factory5, DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allow, sizeof(allow))) || !allow) goto done;
+
+  ZeroMemory(&sd, sizeof(sd));
+  sd.Width  = (UINT)((w < 1) ? 1 : w);
+  sd.Height = (UINT)((h < 1) ? 1 : h);
+  sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  sd.SampleDesc.Count = 1;
+  sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+  sd.BufferCount = 2;
+  sd.Scaling = DXGI_SCALING_STRETCH;
+  sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+  sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+  sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+  if (FAILED(IDXGIFactory2_CreateSwapChainForHwnd(factory, (IUnknown *)device, child_hwnd, &sd, NULL, NULL, &sc1)) || !sc1) goto done;
+  if (FAILED(IDXGISwapChain1_QueryInterface(sc1, &IID_IDXGISwapChain, (void **)&swapchain)) || !swapchain)
+  {
+    swapchain = NULL;
+    goto done;
+  }
+  IDXGIFactory2_MakeWindowAssociation(factory, child_hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);     /* (the program has its own fullscreen) */
+  ok = 1;
+
+done:
+  if (sc1) IDXGISwapChain1_Release(sc1);
+  if (factory5) IDXGIFactory5_Release(factory5);
+  if (factory) IDXGIFactory2_Release(factory);
+  if (adapter) IDXGIAdapter_Release(adapter);
+  if (dxgi_dev) IDXGIDevice_Release(dxgi_dev);
+  if (!ok)
+  {
+    if (swapchain) { IDXGISwapChain_Release(swapchain); swapchain = NULL; }
+    if (context) { ID3D11DeviceContext_Release(context); context = NULL; }
+    if (device) { ID3D11Device_Release(device); device = NULL; }
+  }
+  return ok;
+}
+
 static int create_device_and_swapchain(int w, int h)
 {
   static const D3D_FEATURE_LEVEL levels[] =
@@ -309,11 +480,17 @@ static int create_device_and_swapchain(int w, int h)
                                                   effects need Windows 8+ and bring nothing this
                                                   simple single-quad workload benefits from. */
 
-  hr = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0,
-         levels, sizeof(levels) / sizeof(levels[0]), D3D11_SDK_VERSION,
-         &sd, &swapchain, &device, &got_level, &context);
+  vrr_active = 0;
+  if (vrr_want && create_flip_swapchain(w, h, levels, (int)(sizeof(levels) / sizeof(levels[0])))) vrr_active = 1;
 
-  if (FAILED(hr)) return 0;
+  if (!vrr_active)
+  {
+    hr = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0,
+           levels, sizeof(levels) / sizeof(levels[0]), D3D11_SDK_VERSION,
+           &sd, &swapchain, &device, &got_level, &context);
+
+    if (FAILED(hr)) return 0;
+  }
 
   /* VSync (Present with a sync interval of 1) waits when the driver already has this many frames queued: the default is 3, which
      would add up to three frames of delay between a button press and the picture. One keeps it as short as the display allows. */
@@ -349,7 +526,8 @@ static int resize_swapchain(int w, int h)
   release_swapchain_views();
   ID3D11DeviceContext_OMSetRenderTargets(context, 0, NULL, NULL);
 
-  hr = IDXGISwapChain_ResizeBuffers(swapchain, 1, (UINT)w, (UINT)h, DXGI_FORMAT_B8G8R8A8_UNORM, 0);
+  hr = IDXGISwapChain_ResizeBuffers(swapchain, vrr_active ? 2 : 1, (UINT)w, (UINT)h, DXGI_FORMAT_B8G8R8A8_UNORM,
+                                    vrr_active ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
   if (FAILED(hr))
   {
     /* The caller sets device_ok = 0 on this failure and won't touch this
@@ -379,7 +557,7 @@ static void ensure_child_class(void)
   wc.hInstance     = GetModuleHandleA(NULL);
   wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
   wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-  wc.lpszClassName = CHILD_CLASS_NAME;
+  wc.lpszClassName = CHILD_CLASS_NAME; i18n_keep_ltr(CHILD_CLASS_NAME);
 
   child_class = RegisterClassExA(&wc);
 }
@@ -556,7 +734,7 @@ static int upload_texture(const uint16 *src_pixels, int src_pitch, int src_w, in
 }
 
 static void draw_quad(const RECT *dest, ID3D11ShaderResourceView *srv,
-                      ID3D11SamplerState *sampler, ID3D11BlendState *blend)
+                      ID3D11SamplerState *sampler, ID3D11BlendState *blend, ID3D11PixelShader *ps)
 {
   D3D11_MAPPED_SUBRESOURCE mapped;
   d3d11_vertex_t verts[4];
@@ -595,7 +773,7 @@ static void draw_quad(const RECT *dest, ID3D11ShaderResourceView *srv,
   ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
   ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &vbuffer, &stride, &offset);
   ID3D11DeviceContext_VSSetShader(context, vshader, NULL, 0);
-  ID3D11DeviceContext_PSSetShader(context, pshader, NULL, 0);
+  ID3D11DeviceContext_PSSetShader(context, ps ? ps : pshader, NULL, 0);
   ID3D11DeviceContext_PSSetShaderResources(context, 0, 1, &srv);
   ID3D11DeviceContext_PSSetSamplers(context, 0, 1, &sampler);
   ID3D11DeviceContext_OMSetBlendState(context, blend, blend_factor, 0xFFFFFFFF);
@@ -668,7 +846,7 @@ int d3d11_render_frame(const uint16 *src_pixels, int src_pitch,
        leaves nothing drawn on failure) -- the plain textured-quad path
        below is what every frame used before this feature existed, and
        what every frame still uses without it. */
-    draw_quad(dest, tex_srv, smooth ? samp_linear : samp_point, blend_opaque);
+    draw_quad(dest, tex_srv, smooth ? samp_linear : samp_point, blend_opaque, resample_shader(smooth));
   }
   return 1;
 }
@@ -743,7 +921,7 @@ int d3d11_draw_overlay(const uint32 *argb_pixels, int argb_pitch,
 
   /* Point-sampled, same as d3d9_video.c's overlay: this is 1:1 pixel text
      and iconography, not something that should ever be softened. */
-  draw_quad(screen_area, overlay_srv, samp_point, blend_alpha);
+  draw_quad(screen_area, overlay_srv, samp_point, blend_alpha, NULL);
   return 1;
 }
 
@@ -761,7 +939,8 @@ void d3d11_present(void)
   HRESULT hr;
 
   if (!device_ok) return;
-  hr = IDXGISwapChain_Present(swapchain, present_sync, 0);
+  if (vrr_active) hr = IDXGISwapChain_Present(swapchain, 0, DXGI_PRESENT_ALLOW_TEARING);      /* the display follows: no wait */
+  else            hr = IDXGISwapChain_Present(swapchain, present_sync, 0);
   if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)      /* the graphics driver was reset or the GPU went away */
   {
     release_device();

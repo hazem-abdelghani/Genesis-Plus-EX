@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  hotkeys.c -- the keyboard shortcuts: their defaults, the table Windows
  *  reads them from (rebuilt when they change), the text shown next to menu
@@ -79,11 +80,13 @@ static const hk_t hk[] =
   { "Game Speed: Normal",             IDM_EMU_SPEEDRESET,          K_CTRL | '0' },
   { "Rewind (Hold)",                  HK_REWIND,                   VK_BACK },
   { "Show / Hide the Search Bar",     IDM_VIEW_FINDSEARCH,         K_CTRL | 'F' },
+  { "Hide / Show All Bars", IDM_VIEW_CLEANWINDOW,  K_CTRL | 'H' },
   { "Fullscreen",                     IDM_VIDEO_FULLSCREEN,        K_ALT | VK_RETURN },
   { "Leave Fullscreen",               IDM_ACCEL_LEAVE_FULLSCREEN,  VK_ESCAPE },
   { "Mute",                           IDM_AUDIO_ENABLE,            K_CTRL | 'M' },
   { "Mute FM Sound",                 IDM_AUDIO_MUTE_FM,           K_CTRL | 'N' },
   { "Mute PSG Sound",                IDM_AUDIO_MUTE_PSG,          K_CTRL | 'B' },
+  { "Mute DAC Sound",                IDM_AUDIO_MUTE_DAC,          K_CTRL | 'D' },
   { "Mute PWM Sound",                IDM_AUDIO_MUTE_PWM,          K_CTRL | 'P' },
   { "Show / Hide the Frame Rate",    IDM_VIDEO_SHOWFPS,           K_CTRL | 'T' },
   { "Console Model: Default",         IDM_SET_MODEL_BASE + 0,      K_CTRL | K_SHIFT | '3' },

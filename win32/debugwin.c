@@ -610,7 +610,7 @@ static void vdp_reg_edit(HWND owner, int reg)
     wc.hInstance = g_inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-    wc.lpszClassName = "GPEXVdpRegEdit";
+    wc.lpszClassName = "GPEXVdpRegEdit"; i18n_keep_ltr("GPEXVdpRegEdit");
     if (!RegisterClassA(&wc)) return;
     registered = 1;
   }
@@ -1859,7 +1859,7 @@ static void dv_open(int which, HWND parent)
     wc.style = CS_DBLCLKS;
     wc.hInstance = g_inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = DV_CLASS;
+    wc.lpszClassName = DV_CLASS; i18n_keep_ltr(DV_CLASS);
     if (!RegisterClassA(&wc)) return;
     registered = 1;
   }

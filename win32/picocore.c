@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  picocore.c -- 32X games, run by PicoDrive (picodrive_libretro.dll).
  *

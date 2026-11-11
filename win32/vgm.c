@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  vgm.c -- logs what the sound chips are told to play to a .vgm file, which
  *  players that support the format can play back. The writes are caught by
@@ -130,6 +131,17 @@ static void at_cycles(unsigned cycles)
   wait_to(frame_cycles ? (unsigned)(((unsigned long long)cycles * spf) / frame_cycles) : 0);
 }
 
+/* The DAC (the YM2612's sample channel): a write of a sample (register 2Ah of the first part) is scaled around its middle by Audio > DAC Volume,
+   0 when Mute DAC Sound is on. Only what the chip is given is changed: a VGM recording keeps the sample as the game wrote it. */
+static unsigned int dac_scaled(unsigned int address, unsigned int data)
+{
+  int level = gui.mute_dac ? 0 : gui.dac_level, v;
+
+  if (level == 100 || address != 1 || fm_latch[0] != 0x2A || fm_chip_is_opll()) return data;
+  v = 128 + (((int)data - 128) * level) / 100;
+  return (unsigned int)(v < 0 ? 0 : (v > 255 ? 255 : v));
+}
+
 static void hook_fm(unsigned int cycles, unsigned int address, unsigned int data)
 {
   shadow_fm(address, data);
@@ -142,7 +154,7 @@ static void hook_fm(unsigned int cycles, unsigned int address, unsigned int data
     else if (fm_is_opll) { put8(0x51); put8(fm_reg[0]); put8((int)data); }
     else { put8(0x52 + port); put8(fm_reg[port]); put8((int)data); }
   }
-  real_fm(cycles, address, data);
+  real_fm(cycles, address, dac_scaled(address, data));
 }
 
 void __wrap_psg_write(unsigned int clocks, unsigned int data)

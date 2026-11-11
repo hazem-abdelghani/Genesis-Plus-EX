@@ -47,7 +47,7 @@ Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx) by Eke-Eke
 |---|---|
 | **Systems** | Mega Drive / Genesis, Master System, Game Gear, SG-1000, Mega CD / Sega CD (multi-disc too), Pico, 32X (through PicoDrive) |
 | **Files** | `.zip`, `.gz` and `.7z` open directly; Mega CD from `.cue`, `.chd` or `.bin` (also inside a `.zip` or `.7z`); 32X from `.32x` |
-| **Picture** | GDI, Direct3D 9 or Direct3D 11; 60+ built-in render filters in families (xBRZ, real HQx, xBR, LQ2x, ScaleFX, CRT Geom, Super Eagle, 2xSaI, bicubic, Lanczos, scanlines, aperture grille and more); RetroArch `.slangp` shader presets (Direct3D 11, 64-bit); NTSC filter, scanlines, LCD ghosting, Deinterlacing, integer scaling, bezels; Picture Adjustments (Brightness, Contrast, Saturation, Gamma, Hue) |
+| **Picture** | GDI, Direct3D 9 or Direct3D 11; 40+ built-in render filters in families (xBRZ, real HQx, xBR, LQ2x, ScaleFX, CRT Geom, Super Eagle, 2xSaI, scanlines, aperture grille and more); RetroArch `.slangp` shader presets (Direct3D 11, 64-bit); NTSC filter, scanlines, LCD ghosting, Deinterlacing, integer scaling, bezels; Picture Adjustments (Brightness, Contrast, Saturation, Gamma, Hue) |
 | **Sound** | Five FM chip emulations, low-pass filter or 3-band EQ, stereo width, bass boost, WASAPI / XAudio2 / waveOut output |
 | **Input** | Keyboard and gamepads (Xbox pads through XInput; PlayStation, Nintendo and other pads through DirectInput), remappable per player; every Sega peripheral (mouse, light guns, Team Player, EA 4-Way Play and more); turbo, combos, profiles |
 | **Saving** | 10 save-state slots with thumbnails, rewind, auto resume, rolling backup states, undo for a state load |
@@ -70,8 +70,8 @@ Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx) by Eke-Eke
 | Grid view with cover art (dark theme, Modern style) | Game list (light theme) |
 | ![A 32X game](win32/images/screenshots/32x.png) | ![CRT shader](win32/images/screenshots/crt-shader.png) |
 | A 32X game (Knuckles' Chaotix, run by PicoDrive) | CRT look |
-| ![Mega Bezel shader with a bezel](win32/images/screenshots/mega-bezel-shader%2Bbezel.png) | ![xBRZ filter with Smooth Scaling](win32/images/screenshots/xbrz-filter-smooth-scaling.png) |
-| Mega Bezel shader with a bezel | xBRZ filter + Smooth Scaling |
+| ![Mega Bezel shader with a bezel](win32/images/screenshots/mega-bezel-shader%2Bbezel.png) | ![xBRZ filter with Bilinear scaling](win32/images/screenshots/xbrz-filter-smooth-scaling.png) |
+| Mega Bezel shader with a bezel | xBRZ filter + Bilinear |
 | ![Settings, Modern style](win32/images/screenshots/modern-general-settings.png) | ![Controls window](win32/images/screenshots/controls.png) |
 | Settings (Modern style, dark theme) | Controls window |
 
@@ -113,12 +113,12 @@ Genesis Plus EX.exe
 Plugins/               the DLLs the program loads when needed: librashader.dll (shaders) and
                        picodrive_libretro-64.dll / -32.dll (the 32X emulator, PicoDrive)
 genesis-plus-ex.ini    all settings
-ROMs/                  a place for your games (add it under ROM Directories; any other folder works just as well)
+ROMs/                  a place for your games, with a folder per console made at the first start (MegaDrive, MasterSystem ...; add it under ROM Directories; any other folder works just as well)
 BIOS/                  optional BIOS and add-on ROMs
 Saves/                 battery saves (.srm) and Mega CD backup RAM (.brm; MegaCD/cart.brm is the Mega CD's 512 KB RAM cartridge, extra save space)
 States/                save states
 Screenshots/           PNG screenshots, one folder per console
-Cheats/                cheat lists (.cht), one folder per console (the console folders of Cheats and Images/Covers are made at the first start, to put files in;
+Cheats/                cheat lists (.cht), one folder per console (the console folders of ROMs, Cheats and Images/Covers are made at the first start, to put files in;
                        `Other`, for a game that is no known console, is made when needed)
 Images/                pictures: Covers/ (cover art, one folder per console, matched to games by file name), Bezels/ (bezel images)
                        and Pico-Storyware/ (the pages of Sega Pico books: a folder per game).
@@ -127,6 +127,7 @@ Languages/             translations (Name.po), see Languages below
 Profiles/              controller profiles
 Shaders/               shader presets you pick (created on first use)
 Logs/                  genesis-plus-ex.log (with Enable Log), the crash report and dump (with Enable Crash Report)
+                       (Settings → Options → Troubleshooting → **Factory Reset...** deletes the settings file (both the one beside the program and the one in `%LOCALAPPDATA%\Genesis Plus EX`, when each exists) and starts the program again as a new copy)
 ```
 
 **Settings → General → Data Folders...** moves any of these folders (everything but Plugins and Logs) somewhere else: a list of the folders and their paths, with **Change...** and **Use Default**. Empty means beside the program; files already in the old place are not moved.
@@ -208,6 +209,8 @@ pad with its vendor and product ids.
 - **Turbo** is a box beside A, B, C, X, Y and Z; **Turbo Rate** sets how fast: Slower (7.5 presses a second), Slow (10), Medium (15, the default), Fast (22.5) or Faster (30).
 - **Deadzone** sets how far a stick must move before it counts.
 - **Allow Opposing Directions** (Player 1 and Player 2 tabs, below the D-pad buttons) lets Left and Right, or Up and Down, be held together. A real pad cannot do it, so only one of the two reaches the game unless this is ticked (a few games and glitch tricks need both).
+- **Stick Directions** (Settings → Input): how the left stick makes the D-pad's diagonals. *Classic* compares each direction with the deadzone on its own (a small push off a straight line already adds a second direction); the other choices use the angle of the push, the deadzone being only how far it has to go: *Wide Straight Zones* (a drifting stick keeps running straight: Sonic does not roll), *Even Eight Directions* and *Wide Diagonal Zones*.
+- **Crosshair Shape, Color and Size** (Settings → Input → Light Gun): the look of the light gun crosshair (the list draws each shape beside its name; the Windows cross, or one of eight shapes drawn by the program (plus, plus with a gap, dot, circle with a dot, circle with ticks, crosshair target, diamond, diamond with a dot); white, red, green, yellow, cyan or black, with an outline of the opposite brightness; four sizes).
 - **Controller Model** and the **Extras** tab choose what is plugged into
   each port: Control Pad, Mouse, Light Phaser, Menacer, Justifier, XE-1AP,
   Activator, Paddle Control, Sports Pad, Graphic Board (Pico), Team Player,
@@ -280,10 +283,11 @@ Every shortcut can be changed in **Input → Hotkeys...**. The defaults:
 | `\` or `Tab` | Advance one frame while paused |
 | Page Down / Page Up | Sega Pico: previous / next page of the book (opens the Storyware window) |
 | Alt+Enter, Esc | Fullscreen |
-| Ctrl+M / Ctrl+N / Ctrl+B / Ctrl+P | Mute all / FM / PSG / PWM (32X games) |
+| Ctrl+M / Ctrl+N / Ctrl+B / Ctrl+D / Ctrl+P | Mute all / FM / PSG / DAC (drums and voices) / PWM (32X games) |
 | Ctrl+T | Show / hide the frame rate |
 | Ctrl+C | Cheats |
 | Ctrl+F | Search the game list |
+| Ctrl+H | Hide / show all the bars (menu bar, toolbar and status bar) while a game runs, in a window or fullscreen (View → Toolbars → Hide All Bars) |
 | F12 | Screenshot |
 | Shift+F11 / Ctrl+F11 / Ctrl+F12 / Alt+F11 | Record video / audio / GIF / stop |
 | Shift+F10 | Record a VGM file |
@@ -304,6 +308,12 @@ folder set, *Open ROM Directory* opens a list of them.
   shape, rounded corners, captions and a card frame are in Settings → General.
   *Console Badge on Covers* (on by default; switch it off in Settings → General) puts a small coloured tag in the corner of each cover to tell
   the consoles apart: MD, MCD, 32X, SMS, GG, SG or PICO.
+  *Region Flags* (on by default; Settings → General) draws a small flag for each region of a game, taken from the tags of the file name such as `(USA)`
+  or `(Japan, Europe)`: in the Region column of the list instead of the region text (a game without a region tag gets a flag with a question mark),
+  and in the bottom left corner of each cover in the grid view. The pictures are in the `images/flags` folder of the source (USA, Europe, Japan, World, Korea,
+  Brazil, Australia, Canada, China, Hong Kong, Russia, Taiwan, Unknown) and are built into the program. The countries of Europe (Germany, France,
+  Spain, Italy, Sweden, Netherlands, UK) show the flag of Europe, Asia the World flag; for those the column also writes the name after the flag, so the
+  country can still be told. `python3 tools/check_po.py --selftest` checks the rules of the translation check. Switch the option off to see the region text again.
   Covers are cached so they appear at once the next time (*Keep a Cover Cache*), and the console of each
   game file is kept too (`Images/Covers/library.dat`), so a big library loads faster after the first start. The Refresh button forgets it and looks at every file again.
 - **Search and filters.** Type in the search bar (Ctrl+F). Search words narrow
@@ -357,12 +367,13 @@ settings screen. It needs the BIOS file of that region in the `BIOS` folder (`bi
 
 - **Video → Renderer:** GDI (CPU), Direct3D 9 or Direct3D 11. Each falls back
   to GDI by itself when it is not available.
-- **Window Size** 1× to 10× (3× by default; a window you drag to a size keeps it for the next game until you pick a size again), fullscreen as a borderless window or
+- **Window Size** 1× to 10× (3× by default; a window you drag to a size keeps it for the next game until you pick a size again; **Lock Window Shape When Resizing** in Settings → Video, on by default, can be switched off to drag the window to any shape), fullscreen as a borderless window or
   exclusive with its own resolution, hide the mouse pointer after
   a few seconds.
+- **Light Gun Border:** a white frame (2, 4, 6 or 8% of the window's height) round a smaller picture while a light gun is plugged in, for guns that find the screen with a camera (the Sinden Lightgun). Off by default (Settings → Input). A shot with the pointer on the bars or the frame is a shot off the screen (reload in Lethal Enforcers and others).
 - **Aspect Ratio:** *Original Console Pixels* (the default, the Mega Drive's own
   pixel shape), 1:1, 4:3 or 16:9. **Integer Scaling** keeps every pixel the same
-  size. **Smooth Scaling**, border color, overscan borders and interlaced mode
+  size. **Scaling Filter** (Nearest, Sharp Nearest, Bilinear, Sharp Bilinear or Bicubic; Sharp Nearest first enlarges the picture by a whole multiple with sharp pixels, then smooths only the rest of the way; Sharp Bilinear is Bilinear with a narrow blend (about half a source pixel, on a smooth curve), so much less blur; Sharp Bilinear and Bicubic are pixel shaders with Direct3D 9 and 11; the classic renderer does Sharp Bilinear on the processor and has no Bicubic, which is grayed there; the whole filter is grayed while a Direct3D 11 shader runs, because the shader scales the picture itself), border color, overscan borders and interlaced mode
   (single or double field) are all options. In a game that draws a 448-line picture (Sonic 2's two player mode) *Single Field* shows the same
   half of it every frame, so it stays steady; *Double Field* shows all 448 lines: where something moves, the older field's lines are rebuilt from the new ones (which stay exactly as the game drew them), so there are hardly any comb teeth and a moving object stays sharp (a pattern that repeats and scrolls, such as blades of grass, is found too).
 - **Picture adjustments:** Brightness, Contrast, Saturation, Gamma and Hue (sliders in **Video → Picture Adjustments...**, with *Restore Defaults* and *Cancel*) and Brighten; **Video → Visual Effects → Deinterlacing** for a game in the 448-line interlaced mode (Sonic the Hedgehog 2 in 2P Vs. mode, Ys III, Air Strike Patrol): the graphics processor draws both fields from the same moment in every frame, so every frame is a whole picture and nothing that moves is combed (on by default; Interlaced Mode is not used while it is on);
@@ -371,7 +382,7 @@ settings screen. It needs the BIOS file of that region in the `BIOS` folder (`bi
   fake transparency look solid); **Dither Smoothing**; a **Bezel Image**
   drawn around the picture in fullscreen.
 - **Effects:** the Blargg **NTSC filter** (composite, S-Video or RGB),
-  **Scanlines** (25 – 100 %), **LCD Ghosting**.
+  **Scanlines** (25 – 100 %), **LCD Ghosting**, **Color Correction** (Off, Light, Full: every console gets the paler, duller, slightly blended colors of a handheld LCD screen (as on the Game Gear) instead of the raw ones; Hue, Saturation and the other Picture Adjustments still apply on top).
 
 ### Render Filters
 
@@ -392,25 +403,19 @@ to the window. They are built into the program.
 | LQ2x | A lighter, faster cousin of hq2x |
 | xBR 2x / 3x / 4x | Hyllian's xBR: smooth diagonals and curves, sharp edges (a close relative of xBRZ) |
 | **xBRZ 2× to 6×** | The real xBRZ: smooth curves and clean thin lines; slightly softer |
-| Sharp 4x | Pixel replication; with *Smooth Scaling* on it gives the "sharp bilinear" look |
-| Sharp Bilinear 2x - 6x | Crisp pixels with a short blend along each seam, so edges look clean when the picture is resized |
-| Lanczos 2x - 6x | A real resampling filter: smooth and non-pixelated, with sharp edges |
-| Catmull-Rom 2x - 6x | A bicubic resampling filter: smooth, with crisp edges (like Lanczos, a little gentler) |
-| Mitchell 2x - 6x | A bicubic filter between sharp and soft |
-| B-Spline 2x - 6x | The softest bicubic filter: smooth, no ringing at hard edges |
 | Scanlines 2x / 3x / 4x | Rows dimmed (3x and 4x have a bright middle and dimmer edges, like a beam) |
 | Glow Scanlines 3x | Scanlines where bright pixels keep their beam and bleed a little sideways |
 | CRT 3x (RGB Mask) | Red / green / blue phosphor stripes plus scanlines |
 | CRT Aperture Grille 3x | Trinitron-style stripes with hardly dimmed rows |
-| CRT Geom 3x / 4x | The classic CRT-Geom: curved glass with rounded corners, beams that widen with brightness, a dot mask and the CRT's gamma (ported from its shader; **very heavy**, it uses up to four processor threads) |
+| CRT Geom 3x | The classic CRT-Geom: curved glass with rounded corners, beams that widen with brightness, a dot mask and the CRT's gamma (ported from its shader; **very heavy**, it uses up to four processor threads) |
 | CRT Shadow Mask 3x | Staggered phosphor dots with darker rows between them |
 | LCD Grid 2x - 6x | The pixel grid of a handheld screen (use *LCD Ghosting* in Video > Visual Effects for the ghosting) |
 
 The 5x and 6x sizes (and xBRZ) are in the normal build; they make a large picture, so they ask a lot of the
 processor.
 
-The **Render Filter** menu lists the filters sorted by name, with each family (Bicubic, CRT, HQ, Lanczos, LCD Grid, Scale,
-Scanlines, Sharp, Smooth, xBR, xBRZ) in a sub-menu of its own.
+The **Render Filter** menu lists the filters sorted by name, with each family (CRT, HQ, LCD Grid, Scale,
+Scanlines, Smooth, xBR, xBRZ) in a sub-menu of its own. The resizing methods (Nearest, Sharp Nearest, Bilinear, Sharp Bilinear, Bicubic) are in **Scaling Filter**, which scales the picture to the window after the render filter.
 
 A render filter and the NTSC filter cannot be on together. xBRZ keeps a 64 MB
 table while it is selected (about 80 – 100 MB extra) and frees it when you
@@ -443,6 +448,7 @@ preset's own settings while it runs.
   selections, tabs and list headings.
 - **Colorful Icons:** the icons of the menus, the toolbar and the favorite star in color, one color for each kind of
   action (off by default: black and white, in the color of the text).
+- **High Contrast Mode** (off by default): while Windows is in a high-contrast mode the program uses the Light theme and the Classic style, so the windows take the colors Windows chose; your own theme and style come back when high contrast is turned off.
 - **Interface Size:** Normal or Large (the program restarts to change it).
 - **On-screen messages (Settings → OSD):** position, size, color, time (1 – 7
   seconds), how many show at once (1 – 7), and a frame-rate counter.
@@ -456,12 +462,15 @@ open); `Name` is the file name; the menu shows the `Language-Name` of the file's
 To make one, copy `Languages/Template.pot` to `Languages/Name.po` and fill in the `msgstr` of the texts to translate.
 A text without a translation stays English, so a language can be made a little at a time. Keep the `&` (the underlined
 key of a menu item), the `%s`, `%d`, `%X` (they are replaced by values, in the same order) and the line ends `\n`
-and `\r\n`. New text in the source needs no marking: the program looks every text up in the language file. `make -f Makefile.win32 pot` (it runs
+and `\r\n`. The program does not use a translation whose `%` markers differ from the English text (it would read a value as another kind and could
+crash or show garbage): that text stays English, and a line in the log tells how many. `python3 tools/check_po.py Languages/Name.po` (run in the `win32` folder) lists them,
+with warnings for line ends, tabs and `&` keys that differ. New text in the source needs no marking: the program looks every text up in the language file. `make -f Makefile.win32 pot` (it runs
 `tools/make_pot.py`) makes `Template.pot` again from the source, so the new text appears in it; translators then add the new lines to their
 `.po` files. It finds text written as quoted strings in the `.c` files and the menus and dialogs of `gpex.rc`; a sentence put together from
 pieces at run time is translated piece by piece.
 A translation is often longer than the English: a button, check box, label or drop-down that is too narrow for its text is made wider where there is room (a dialog grows if it must), and a label that still does not fit ends in "...".
 Only English ships with the program; `Template.pot` is the template for community translations.
+Options → Language (and Settings → General → Language) lists **System** first, then English: the program then uses the `.po` file of the `Languages` folder that is for the language of Windows (its header says `Language: fr`, or the file is named `fr.po`, `fr_CA.po` ...), and English when there is none. For a language written from right to left (Arabic, Persian, Hebrew) put `Language-Direction: rtl` in the header: the windows, dialogs, message boxes, menus (the menu bar and the pop-up menus), toolbar, search bar and status bar are then mirrored and read from the right. The picture of the game and the game list are not flipped (the light gun reads the pointer from the picture, and the covers must keep their side), and the debugger, memory viewer, RAM search and RAM watch stay left to right, as code and numbers are in any language; the text in them still reads from the right.
 To translate, [Poedit](https://poedit.net) (free) is the easiest way: choose *File > New from POT/PO file...*, pick `Languages/Template.pot`, choose the language, and save the result as `Languages/Name.po`; set `Language-Name` in the header (Catalog > Properties > Custom headers) to the name the language gives itself, which is what the Options > Language menu shows.
 To see how the windows cope with long translations without knowing a language, run `python3 tools/make_pseudo.py` in the `win32` folder: it makes `Languages/Pseudo.po` (every text about 40% longer, accented, between `[` and `]`; a missing `]` means that control crops). Pick Pseudo in Options > Language. It is a test file, not part of the release.
 
@@ -477,11 +486,11 @@ To see how the windows cope with long translations without knowing a language, r
   own chip choice.
 - **Tone:** a **low-pass filter** (adjustable strength) or a **3-band EQ**; only
   one at a time. **Console Model** presets set up a Model 1 or Model 2 sound.
-  Also **Stereo Width**, **Bass Boost**, **Overdrive**, **Even Out Loudness**,
+  Also **Stereo Width**, **Headphone Crossfeed** (Light, Medium or Strong: a little of each ear's sound, with the highs taken off, goes into the other ear), **Bass Boost**, **Overdrive**, **Even Out Loudness**,
   mono output and high-quality PSG resampling.
-- **Levels and Latency...:** master, FM, PSG, CD audio and Sega CD PCM volume,
+- **Levels and Latency...:** master, FM, PSG, CD audio, Mega CD PCM and DAC volume,
   buffer size, and a live level meter.
-- **Mute** all sound, FM only (Ctrl+N) or PSG only (Ctrl+B); *Mute When
+- **Mute** all sound, FM only (Ctrl+N), PSG only (Ctrl+B) or the DAC (drums and voices, Ctrl+D) only; *Mute When
   Inactive* silences the game when another window has focus. *Pause When Inactive* pauses it instead.
 - Changing the FM chip or unit during a game can leave some instruments quiet
   until the game sets them again or you reset. These choices are locked during
@@ -622,7 +631,7 @@ do for other games.
   a Mega Drive game, and the 32X needs a bit more of the PC for it).
 - **Also work:** input recording and playback (the recording starts from a state of the game), the Region setting (the library
   changes its region, and with it 50 or 60 Hz, at once), the Low-Pass Filter (the library's own, with the same range), Mute FM,
-  Mute PSG (the PWM sound of the 32X has its own **Mute PWM Sound** in Audio > Mute, and a **PWM Preamp** slider in Levels and Latency) and LCD Ghosting.
+  Mute PSG (the PWM sound of the 32X has its own **Mute PWM Sound** in Audio > Mute, and a **PWM Preamp** slider in Levels and Latency; **Mute DAC Sound** and **DAC Volume** do not reach 32X games) and LCD Ghosting.
 - **VGM recording:** logs the FM chip, the PSG and the 32X PWM to a `.vgm` file (format 1.71), starting with the state the chips are in, so a
   recording that begins while a song plays still has its instruments (also after a state was loaded: the FM chip is read back, for a Mega Drive game with either kind of FM chip and for a 32X game); the end of the file releases every held note and turns the PSG down. Most of a 32X game's music is PWM, which only some players can
   play (libvgm-based ones); the FM and PSG parts play anywhere.
@@ -820,7 +829,9 @@ so the core sees this port's `osd.h`.
 
 ## License
 
-The same terms as Genesis Plus GX: the source must accompany modified
+The Windows front end (`win32/`, apart from the code listed below as taken from other projects) is Copyright (c) 2026 Hazem Abdelghani.
+
+It is under the same terms as Genesis Plus GX: the source must accompany modified
 redistributions, and the program may not be sold or used commercially. See
 `LICENSE.txt` in the repository root.
 
@@ -839,6 +850,8 @@ Other code used here (libraries, and code ported from other projects):
 | MMPX and MMPX Enhanced (`filters.c`, `mmpx_ex.cpp`) | MMPX by Morgan McGuire and Mara Gagiu; MMPX Enhanced by CrashGG (adapted for Slang by hunterk; the `mmpx-ex` shader of libretro's slang-shaders) | MIT (MMPX) |
 | Sega Pico speech chip (`picopcm.c`) | Ported from PicoDrive's `xpcm.c` and `memory.c` by notaz and irixxxx; the ADPCM was derived from MAME's upd7759 driver | MAME license (see `picodrive/COPYING`) |
 | ScaleFX 3x (`filters.c`) | A port of Sp00kyFox's ScaleFX shader passes | MIT (Copyright (c) 2016 Sp00kyFox) |
-| CRT Geom 3x / 4x (`filters.c`) | A port of the CRT-Geom shader by cgwg, Themaister and DOLLS | GPL 2 or later |
+| CRT Geom 3x (`filters.c`) | A port of the CRT-Geom shader by cgwg, Themaister and DOLLS | GPL 2 or later |
 
 The shader presets are the RetroArch `.slangp` / Slang format, which librashader runs.
+
+Sega, Genesis, Mega Drive, Mega CD, Sega CD, 32X, Game Gear, Master System, SG-1000 and Pico are trademarks or registered trademarks of Sega Corporation. Genesis Plus EX is not affiliated with or endorsed by Sega. Use it only with games and BIOS files you own.

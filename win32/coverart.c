@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  coverart.c -- see coverart.h. Decoding is stb_image (public domain,
  *  single header, bundled in this directory) rather than GDI+/WIC: both

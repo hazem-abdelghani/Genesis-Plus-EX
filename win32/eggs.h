@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  eggs.h -- hidden extras, compiled in only when GPEX_EGGS is defined (the
  *  Makefile's EGGS=1, on for test builds; EGGS=0 leaves every call below empty).

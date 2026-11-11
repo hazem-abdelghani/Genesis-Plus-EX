@@ -422,7 +422,7 @@ static int rw_edit_dialog(HWND parent, watch_t *w, int is_new, int *set, unsigne
     wc.hInstance = g_inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-    wc.lpszClassName = RW_EDIT_CLASS;
+    wc.lpszClassName = RW_EDIT_CLASS; i18n_keep_ltr(RW_EDIT_CLASS);
     if (!RegisterClassA(&wc)) return 0;
     registered = 1;
   }
@@ -882,7 +882,7 @@ void ramwatch_open(HWND parent)
     wc.lpfnWndProc = rw_proc;
     wc.hInstance = g_inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = RW_CLASS;
+    wc.lpszClassName = RW_CLASS; i18n_keep_ltr(RW_CLASS);
     if (!RegisterClassA(&wc)) return;
     registered = 1;
   }

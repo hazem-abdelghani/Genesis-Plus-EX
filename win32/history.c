@@ -1,10 +1,11 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  history.c -- when each game was last opened (View > Game List > Show Recently Played).
  *
  *  Kept in the [history] section of genesis-plus-ex.ini (written by config_save), one entry
- *  per game: last opened (Unix time) and the full path. The newest 1000 games are kept.
+ *  per game: last opened (Unix time) and the full path. The newest 100 games are kept.
  ****************************************************************************/
 
 #include <windows.h>
@@ -13,7 +14,7 @@
 #include <string.h>
 #include <time.h>
 
-#define H_MAX 1000
+#define H_MAX 100
 
 #include "shared.h"
 #include "gui.h"
@@ -71,6 +72,12 @@ void history_load(void)
 void history_restore(const char *path, unsigned long long last)
 {
   int idx = h_find(path);
+  if (idx < 0 && h_n >= H_MAX)           /* a longer list from an older version: only the newest games are kept, whatever order they come in */
+  {
+    int i, old = 0;
+    for (i = 1; i < h_n; i++) if (h_list[i].last < h_list[old].last) old = i;
+    if (last <= h_list[old].last) return;
+  }
   if (idx < 0) idx = h_add(path);
   if (idx >= 0) h_list[idx].last = last;
 }

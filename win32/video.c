@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  video.c -- frame output, scaling, fullscreen and screenshots.
  *
@@ -583,7 +584,7 @@ int video_init(void)
   video_set_ntsc(config.ntsc);
 
   if (gui.renderer == RENDERER_D3D9)  d3d9_init(g_hwnd);
-  if (gui.renderer == RENDERER_D3D11) { d3d11_init(g_hwnd); video_reload_shader_preset(); }
+  if (gui.renderer == RENDERER_D3D11) { d3d11_set_vrr(gui.vrr); d3d11_init(g_hwnd); video_reload_shader_preset(); }
 
   return 1;
 }
@@ -616,13 +617,36 @@ static int hw_renderer_active(void)
   return 0;
 }
 
+/* What really scales the picture now (the Scaling Filter that is chosen and the thing that draws can differ), for the log and for the message that
+   tells when the choice is not what draws. note: set to 1 when the choice is not what is used. */
+const char *video_scaling_path(int *note)
+{
+  if (note) *note = 0;
+  if (gui.renderer == RENDERER_D3D11 && d3d11_available())
+  {
+    if (shader_chain_active()) { if (note) *note = 1; return "a shader preset scales the picture, the Scaling Filter is not used"; }
+    if (gui.smooth == 1 || gui.smooth >= 3)
+    {
+      if (d3d11_resample_available(gui.smooth)) return "Direct3D 11 pixel shader";
+      if (note) *note = 1;
+      return gui.smooth == 1 ? "Direct3D 11, but its shader did not compile: the picture is enlarged on the processor" : "Direct3D 11, but its shader did not compile: Bilinear";
+    }
+    return "Direct3D 11";
+  }
+  if (gui.renderer == RENDERER_D3D11) { if (note) *note = 1; return "Direct3D 11 is not working (the classic renderer draws): Bilinear"; }
+  if (gui.renderer == RENDERER_D3D9 && d3d9_available() && gui.smooth >= 3 && d3d9_resample_available(gui.smooth)) return "Direct3D 9 pixel shader";
+  if (gui.smooth == 3) return "on the processor (Sharp Bilinear)";
+  if (gui.smooth >= 3) { if (note) *note = 1; return gui.renderer == RENDERER_D3D9 ? "Direct3D 9, but its shader did not compile: Bilinear" : "the classic renderer has no Bicubic: Bilinear"; }
+  return gui.renderer == RENDERER_D3D9 ? "Direct3D 9" : "the classic renderer";
+}
+
 void video_set_renderer(int renderer)
 {
   if (d3d9_available())  d3d9_shutdown();
   if (d3d11_available()) d3d11_shutdown();
 
   if (renderer == RENDERER_D3D9)  d3d9_init(g_hwnd);
-  if (renderer == RENDERER_D3D11) { d3d11_init(g_hwnd); video_reload_shader_preset(); }
+  if (renderer == RENDERER_D3D11) { d3d11_set_vrr(gui.vrr); d3d11_init(g_hwnd); video_reload_shader_preset(); }
 }
 
 /*
@@ -1001,12 +1025,37 @@ double video_display_aspect(void)
   return corrected_width(sw, sh) / shape_height(sh);
 }
 
-static void get_dest_rect(const RECT *area, int sw, int sh, RECT *out)
+void video_get_area_rect(RECT *area) { get_video_rect(area); }
+
+/* Light Gun Border (Video menu, Settings > Input): while a light gun is plugged in, the picture is made smaller and everything round it is white,
+   a frame of 2, 4, 6 or 8% of the height of the room the picture has. A gun that finds the screen with a camera (the Sinden Lightgun) looks for it. */
+static int gun_border_on(void)
 {
-  int aw = area->right - area->left;
-  int ah = area->bottom - area->top;
+  return gui.gun_border > 0 && gui.gun_border <= 4 && gui_input_gun_active();
+}
+
+static void get_dest_rect(const RECT *area_in, int sw, int sh, RECT *out)
+{
+  RECT inner;
+  const RECT *area = area_in;
+  int aw, ah;
   int dw, dh;
   double ar;
+
+  if (gun_border_on())
+  {
+    int h = area_in->bottom - area_in->top, w = area_in->right - area_in->left, px = (h < w ? h : w) * (gui.gun_border * 2) / 100;
+
+    if (px < 1) px = 1;
+    if (w > 2 * px + 8 && h > 2 * px + 8)
+    {
+      inner.left = area_in->left + px; inner.right = area_in->right - px;
+      inner.top = area_in->top + px;   inner.bottom = area_in->bottom - px;
+      area = &inner;
+    }
+  }
+  aw = area->right - area->left;
+  ah = area->bottom - area->top;
 
   if (aw < 1) aw = 1;
   if (ah < 1) ah = 1;
@@ -1072,7 +1121,7 @@ void video_preferred_size(int scale, int *w, int *h)
 {
   int sw, sh;
 
-  if (bitmap.data && emu_running)
+  if (bitmap.data && emu_running && gui_game_drew_frame() && (pico_active() || (system_hw & SYSTEM_MD)))
   {
     get_source_size(&sw, &sh);
 
@@ -1080,7 +1129,10 @@ void video_preferred_size(int scale, int *w, int *h)
     if (config.ntsc && !pico_active()) sw = (reg[12] & 0x01) ? 320 : 256;
     if (interlaced && config.render) sh /= 2;
   }
-  else { sw = 320; sh = 224; }      /* (nothing runs: what the last game left in the VDP's registers does not count, a double field one would halve the height) */
+  /* Anything else is the plain 320x224 base the window is sized from: nothing runs, a game that has not drawn a frame yet (the core's picture size is
+     still that of the game before it), or a Master System, Game Gear or SG-1000 game, whose smaller picture then fits inside the window of the size
+     chosen (a Game Gear game used to get a window of its own, small size when it started). */
+  else { sw = 320; sh = 224; }
 
   if (uses_corrected_width())
   {
@@ -1111,6 +1163,7 @@ COLORREF video_bar_color_of(int n)
 
 unsigned video_bar_color(void)
 {
+  if (gun_border_on()) return 0xFFFFFF;                       /* (the frame of the Light Gun Border) */
   return bar_colors[gui.bar_color >= 0 && gui.bar_color < 7 ? gui.bar_color : 0];
 }
 
@@ -1244,7 +1297,7 @@ static int adj_dirty = 1;
 
 static int adj_active(void)
 {
-  return gui.adj_bright != 0 || gui.adj_contrast != 100 || gui.adj_sat != 100 || gui.adj_gamma != 100 || gui.adj_hue != 0;
+  return gui.lcd_color != 0 || gui.adj_bright != 0 || gui.adj_contrast != 100 || gui.adj_sat != 100 || gui.adj_gamma != 100 || gui.adj_hue != 0;
 }
 
 static void adj_build(void)
@@ -1254,7 +1307,7 @@ static void adj_build(void)
   double bri = gui.adj_bright / 200.0;                   /* brightness: every color moved up or down by this part of the whole range (the readout's 50% is a quarter of it) */
   double ch = cos(h) * s, sh = sin(h) * s;
   static float gam[1025];          /* the gamma curve, sampled: 65536 colors times three pow() calls took long enough to be seen as a stutter */
-  int p, k;
+  int p, k, lcd = gui.lcd_color;
 
   if (!adj_lut) adj_lut = (uint16 *)malloc(65536 * sizeof(uint16));
   if (!adj_lut) return;
@@ -1265,6 +1318,19 @@ static void adj_build(void)
     double y, i, q, o[3];
     int v[3];
 
+    if (lcd)
+    {
+      /* The handheld LCD: the three colors bleed into each other (the filter of the panel is far from pure), the picture is paler and dimmer. The
+         mix is the one used for the Game Boy Color's screen by other emulators (a matrix on the gamma-coded colors), then a little less
+         saturation and brightness; Light is half way between the raw and the corrected color. */
+      double lr = (r * 26.0 + g * 4.0 + b * 2.0) / 32.0, lg = (g * 24.0 + b * 8.0) / 32.0, lb = (r * 6.0 + g * 4.0 + b * 22.0) / 32.0;
+      double ly = 0.299 * lr + 0.587 * lg + 0.114 * lb;
+
+      lr = ly + (lr - ly) * 0.85; lg = ly + (lg - ly) * 0.85; lb = ly + (lb - ly) * 0.85;          /* (paler) */
+      lr *= 0.93; lg *= 0.93; lb *= 0.93;                                                        /* (dimmer) */
+      if (lcd == 1) { r = (r + lr) / 2; g = (g + lg) / 2; b = (b + lb) / 2; }
+      else { r = lr; g = lg; b = lb; }
+    }
     r = (r - 0.5) * c + 0.5 + bri; g = (g - 0.5) * c + 0.5 + bri; b = (b - 0.5) * c + 0.5 + bri;
     y = 0.299 * r + 0.587 * g + 0.114 * b;
     i = 0.596 * r - 0.274 * g - 0.322 * b;
@@ -1339,6 +1405,145 @@ static int ensure_fx_dib(void)
   fx.old_bmp = SelectObject(fx.mem_dc, fx.dib);
 
   build_brighten_tables();
+  return 1;
+}
+
+/* The buffer for a picture enlarged by whole multiples (Sharp Nearest), made again when its size changes. */
+static struct
+{
+  HBITMAP dib;
+  HDC     dc;
+  HGDIOBJ old_bmp;
+  void   *pixels;
+  int     w, h;
+} sharp;
+
+/* How many times a side of src pixels can be enlarged by a whole multiple to fit in dest pixels: 1 to 8, and the result at most 4096 pixels. */
+static int sharp_factor(int dest, int src)
+{
+  int n = src > 0 ? dest / src : 1;
+
+  if (n > 8) n = 8;
+  while (n > 1 && src * n > 4096) n--;
+  return n < 1 ? 1 : n;
+}
+
+static int ensure_sharp_dib(int w, int h)
+{
+  struct
+  {
+    BITMAPINFOHEADER hdr;
+    DWORD mask[3];
+  } bi;
+  HDC screen;
+
+  if (sharp.dib && sharp.dc && sharp.w == w && sharp.h == h) return 1;
+  if (sharp.dc)
+  {
+    SelectObject(sharp.dc, sharp.old_bmp);
+    if (sharp.dib) DeleteObject(sharp.dib);
+    sharp.dib = NULL;
+  }
+  else
+  {
+    sharp.dc = CreateCompatibleDC(NULL);
+    if (!sharp.dc) return 0;
+    sharp.old_bmp = GetCurrentObject(sharp.dc, OBJ_BITMAP);
+  }
+  ZeroMemory(&bi, sizeof(bi));
+  bi.hdr.biSize        = sizeof(BITMAPINFOHEADER);
+  bi.hdr.biWidth       = w;
+  bi.hdr.biHeight      = -h;
+  bi.hdr.biPlanes      = 1;
+  bi.hdr.biBitCount    = 16;
+  bi.hdr.biCompression = BI_BITFIELDS;
+  bi.mask[0]           = 0xF800;
+  bi.mask[1]           = 0x07E0;
+  bi.mask[2]           = 0x001F;
+  screen = GetDC(NULL);
+  sharp.dib = CreateDIBSection(screen, (BITMAPINFO *)&bi, DIB_RGB_COLORS, &sharp.pixels, NULL, 0);
+  ReleaseDC(NULL, screen);
+  if (!sharp.dib || !sharp.pixels) { sharp.dib = NULL; return 0; }
+  SelectObject(sharp.dc, sharp.dib);
+  sharp.w = w;
+  sharp.h = h;
+  return 1;
+}
+
+/* Scaling Filter > Sharp Bilinear on the processor (the classic renderer, or Direct3D 9 when its shader is not there): the picture is resampled to dw x dh pixels
+   the way the shader does it, one bilinear read per pixel at a point that moves along the smootherstep curve between two source pixel centers, so the middle of
+   each pixel stays sharp and only the seam is blended. The blend is done on 5-bit weights on the packed RGB565 value. dw and dh are at most 4096. */
+static void sharp_bilinear_axes(int dn, int sn, int *i0, int *i1, unsigned char *w)
+{
+  int d;
+
+  for (d = 0; d < dn; d++)
+  {
+    float p = ((float)d + 0.5f) * (float)sn / (float)dn + 0.5f;
+    float fl = (float)(int)p, f = p - fl;
+    int a = (int)fl - 1, b = (int)fl, wt;
+
+    f = f * f * f * (f * (f * 6.0f - 15.0f) + 10.0f);
+    wt = (int)(f * 32.0f + 0.5f);
+    if (wt > 32) wt = 32;
+    if (a < 0) a = 0;
+    if (a > sn - 1) a = sn - 1;
+    if (b < 0) b = 0;
+    if (b > sn - 1) b = sn - 1;
+    i0[d] = a; i1[d] = b; w[d] = (unsigned char)wt;
+  }
+}
+
+static int sharp_bilinear_cpu(const uint16 *src, int pitch, int sw, int sh, int dw, int dh)
+{
+  static int *xi, *yi;
+  static unsigned char *xw, *yw;
+  static int cap_x, cap_y;
+  int y, x;
+
+  if (dw < 1 || dh < 1 || dw > 4096 || dh > 4096 || sw < 1 || sh < 1) return 0;
+  if (dw > cap_x)
+  {
+    int *n = (int *)realloc(xi, sizeof(int) * 2 * (size_t)dw);
+    unsigned char *m = (unsigned char *)realloc(xw, (size_t)dw);
+
+    if (n) xi = n;
+    if (m) xw = m;
+    if (!n || !m) return 0;
+    cap_x = dw;
+  }
+  if (dh > cap_y)
+  {
+    int *n = (int *)realloc(yi, sizeof(int) * 2 * (size_t)dh);
+    unsigned char *m = (unsigned char *)realloc(yw, (size_t)dh);
+
+    if (n) yi = n;
+    if (m) yw = m;
+    if (!n || !m) return 0;
+    cap_y = dh;
+  }
+  if (!ensure_sharp_dib(dw, dh)) return 0;
+  sharp_bilinear_axes(dw, sw, xi, xi + dw, xw);
+  sharp_bilinear_axes(dh, sh, yi, yi + dh, yw);
+  for (y = 0; y < dh; y++)
+  {
+    const uint16 *ra = (const uint16 *)((const uint8 *)src + (size_t)yi[y] * pitch);
+    const uint16 *rb = (const uint16 *)((const uint8 *)src + (size_t)yi[dh + y] * pitch);
+    unsigned wy = yw[y];
+    uint16 *out = (uint16 *)sharp.pixels + (size_t)y * dw;
+
+    for (x = 0; x < dw; x++)
+    {
+      unsigned wx = xw[x], a0 = ra[xi[x]], a1 = ra[xi[dw + x]], b0 = rb[xi[x]], b1 = rb[xi[dw + x]], ha, hb, v;
+
+      a0 = (a0 | (a0 << 16)) & 0x07E0F81Fu; a1 = (a1 | (a1 << 16)) & 0x07E0F81Fu;
+      b0 = (b0 | (b0 << 16)) & 0x07E0F81Fu; b1 = (b1 | (b1 << 16)) & 0x07E0F81Fu;
+      ha = (((a0 * (32 - wx) + a1 * wx) >> 5) & 0x07E0F81Fu);
+      hb = (((b0 * (32 - wx) + b1 * wx) >> 5) & 0x07E0F81Fu);
+      v  = (((ha * (32 - wy) + hb * wy) >> 5) & 0x07E0F81Fu);
+      out[x] = (uint16)(v | (v >> 16));
+    }
+  }
   return 1;
 }
 
@@ -2091,6 +2296,41 @@ static void present(HDC hdc)
       }
     }
 
+    /* Scaling Filter > Sharp Nearest with the classic or the Direct3D 9 renderer: the picture is first enlarged by whole multiples with sharp pixels
+       (nearest) and a smaller step is left for the bilinear filter, so the pixels stay crisp and all of the same size. Direct3D 11 does the same in
+       a pixel shader, without this copy. A shader preset gets the picture as it is. */
+    if (gui.smooth == 1 && !(gui.renderer == RENDERER_D3D11 && hw_renderer_active() && (shader_chain_active() || d3d11_resample_available(1))))
+    {
+      int nx = sharp_factor(dest.right - dest.left, src_w), ny = sharp_factor(dest.bottom - dest.top, src_h);
+
+      if ((nx > 1 || ny > 1) && ensure_sharp_dib(src_w * nx, src_h * ny))
+      {
+        SetStretchBltMode(sharp.dc, COLORONCOLOR);
+        StretchBlt(sharp.dc, 0, 0, src_w * nx, src_h * ny, src_dc, 0, 0, src_w, src_h, SRCCOPY);
+        src_dc = sharp.dc;
+        src_pixels = (const uint16 *)sharp.pixels;
+        src_pitch = ((src_w * nx * FRAME_BPP + 3) & ~3);
+        src_w *= nx;
+        src_h *= ny;
+      }
+    }
+
+    /* Scaling Filter > Sharp Bilinear without a pixel shader (the classic renderer, Direct3D 9 whose shader did not compile): resampled on the processor to the
+       size of the box, so the last stretch is one to one. */
+    if (gui.smooth == 3 && gui.renderer != RENDERER_D3D11 && !(gui.renderer == RENDERER_D3D9 && hw_renderer_active() && d3d9_resample_available(3)))
+    {
+      int dw = dest.right - dest.left, dh = dest.bottom - dest.top;
+
+      if ((dw != src_w || dh != src_h) && sharp_bilinear_cpu(src_pixels, src_pitch, src_w, src_h, dw, dh))
+      {
+        src_dc = sharp.dc;
+        src_pixels = (const uint16 *)sharp.pixels;
+        src_pitch = dw * FRAME_BPP;
+        src_w = dw;
+        src_h = dh;
+      }
+    }
+
     /* The graphics driver was reset (a driver update, a GPU switch, waking from sleep): the device that was working is gone.
        Without this the picture stayed on the slow software path, filters and shaders off, until the renderer was picked
        again by hand. A few tries, three seconds apart; a renderer that never worked is not retried. */
@@ -2274,7 +2514,8 @@ void video_frame(void)
   HDC hdc = GetDC(g_hwnd);
   /* Direct3D 11: the swap chain waits for the display's refresh itself (a real VSync). The other renderers wait for the compositor
      after the frame is shown (vsync_wait). Either way not when the sound buffer is low. */
-  int swap_sync = gui.vsync && vsync_allowed && gui.renderer == RENDERER_D3D11 && hw_renderer_active();
+  int vrr = gui.renderer == RENDERER_D3D11 && hw_renderer_active() && d3d11_vrr_active();      /* variable refresh: the display follows the game, no waiting */
+  int swap_sync = gui.vsync && vsync_allowed && gui.renderer == RENDERER_D3D11 && hw_renderer_active() && !vrr;
 
   if (!hdc) return;
   new_frame = 1;
@@ -2282,7 +2523,7 @@ void video_frame(void)
   present(hdc);
   d3d11_set_sync(0);                  /* (a repaint of the window must not wait) */
   new_frame = 0;
-  if (!swap_sync) vsync_wait();
+  if (!swap_sync && !vrr) vsync_wait();
   ReleaseDC(g_hwnd, hdc);
 }
 

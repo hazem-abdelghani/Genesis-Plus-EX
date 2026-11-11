@@ -1,4 +1,4 @@
-Genesis Plus EX v3.1.0
+Genesis Plus EX v3.2.0
 ===================
 
 Genesis Plus EX is a Windows emulator based on Genesis Plus GX (32X games run in PicoDrive).
@@ -132,7 +132,7 @@ PLAYING
                 forwarding or recording.
   Backups       Backup State saves quietly every 1-10 minutes into three
                 rolling backups (Load State > Load Backup State).
-  Sound         Audio > Mute (Ctrl+M), Mute FM (Ctrl+N), Mute PSG (Ctrl+B).
+  Sound         Audio > Mute (Ctrl+M), Mute FM (Ctrl+N), Mute PSG (Ctrl+B), Mute DAC (Ctrl+D).
                 Output: waveOut, XAudio2, WASAPI shared (default) or
                 exclusive. Also Stereo Width, Bass Boost, Overdrive,
                 Console Model and Levels and Latency (with a live Level meter).
@@ -147,8 +147,8 @@ PLAYING
   Languages     Options > Language lists the Name.po files of the Languages
                 folder (only English ships; Template.pot is the template,
                 and Poedit, https://poedit.net, is a good editor for it).
-  Picture       Video > Visual Effects (Smooth Scaling, Integer Scaling,
-                Brighten, LCD Ghosting), Video > Picture Adjustments (Brightness,
+  Picture       Video > Visual Effects (Scaling Filter, Integer Scaling,
+                Brighten, Color Correction, LCD Ghosting), Video > Picture Adjustments (Brightness,
                 Contrast, Saturation, Gamma, Hue), Scanlines, NTSC Filter, Aspect Ratio, Rotation
                 (turns the picture by 90, 180 or 270 degrees). New render filters:
                 MMPX and MMPX Enhanced. File > Run Mega CD BIOS starts the BIOS with
@@ -162,38 +162,40 @@ PLAYING
 
 CHEATS, RECORDING AND NETPLAY
 -----------------------------
-  Cheats        Tools > Cheats (Ctrl+C): Game Genie, Action Replay and raw
-                patch codes and work RAM bytes (aaaaaa:dd), saved per game.
-                Click Code, Description or Status to sort the list. Status
-                says Active, Off, Cheats are off, Game not running or Code
-                not valid for this system. ROM codes wait for the first button press (twenty seconds at most) after
-                a game starts or is reset. In netplay both PCs need the same
-                cheats on. Convert shows a code in another
-                format. Cheat Search finds where a value (lives, health)
-                is kept. Tools > Fix Checksum saves a copy of a Mega Drive game with
-                the checksum of its header made right. Tools > Debugger > Memory shows the game's memory in hex
-                (click a byte and type to change it: any memory, also VRAM, CRAM and the ROM). VDP Viewer, Sound Viewer and CPU Viewer
-                show the video chip (registers, palette, tiles, sprites,
-                planes), the sound chips and the processors, also for a 32X game (with the plugin of
-                the same version). A .cht file named after a game's CRC32 in
-                Cheats/library is used by any game without its own list.
-                RAM Watch keeps a list of addresses and their values (Gens .wch
+  Cheats        Tools > Cheats (Ctrl+C): Game Genie, Action Replay and raw patch
+                codes and work RAM bytes (aaaaaa:dd), saved per game. Click
+                Code, Description or Status to sort the list. Status says
+                Active, Off, Cheats are off, Game not running or Code not valid
+                for this system. ROM codes wait for the first button press
+                (twenty seconds at most) after a game starts or is reset. In
+                netplay both PCs need the same cheats on. Convert shows a code
+                in another format. Cheat Search finds where a value (lives,
+                health) is kept. Tools > Fix Checksum saves a copy of a Mega
+                Drive game with the checksum of its header made right. Tools >
+                Debugger > Memory shows the game's memory in hex (click a byte
+                and type to change it: any memory, also VRAM, CRAM and the ROM).
+                VDP Viewer, Sound Viewer and CPU Viewer show the video chip
+                (registers, palette, tiles, sprites, planes), the sound chips
+                and the processors, also for a 32X game (with the plugin of the
+                same version). A .cht file named after a game's CRC32 in
+                Cheats/library is used by any game without its own list. RAM
+                Watch keeps a list of addresses and their values (Gens .wch
                 files), Memory Viewer has Copy / Paste / Dump on its right-click
                 menu, and the VDP Viewer has Dump / Load buttons for the palette
                 and VRAM, an Edit Register window, a Sprite Layer and Preview, a
                 plane view with tile details on hover, and H / V Scroll plots.
                 RAM Search narrows down RAM addresses by how their values change
-                (previous value, a value, an address, the number of changes) and sends
-                them to RAM Watch.
-                All the debug tools open in one window, the Debugger: the CPU
-                Debugger on top, and tabs under it for Memory, VDP, Sound, CPU,
-                RAM Search and RAM Watch (drag the bar between them to resize).
-                CPU Debugger stops the 68000 (breakpoints on execute, read and
-                write; step into, over and out; disassembly, registers, calls);
-                in a 32X game also the Master and Slave SH-2 (execute
-                breakpoints). RAM Search covers a 32X game's SDRAM too.
-                The debug tools are a port of gpgx_debugger by Vladimir
-                Kononovich (lab313ru, https://github.com/lab313ru).
+                (previous value, a value, an address, the number of changes) and
+                sends them to RAM Watch. All the debug tools open in one window,
+                the Debugger: the CPU Debugger on top, and tabs under it for
+                Memory, VDP, Sound, CPU, RAM Search and RAM Watch (drag the bar
+                between them to resize). CPU Debugger stops the 68000
+                (breakpoints on execute, read and write; step into, over and
+                out; disassembly, registers, calls); in a 32X game also the
+                Master and Slave SH-2 (execute breakpoints). RAM Search covers a
+                32X game's SDRAM too. The debug tools are a port of
+                gpgx_debugger by Vladimir Kononovich (lab313ru,
+                https://github.com/lab313ru).
   Recording     Tools > Record: Video (.mp4), Audio (.wav), GIF and VGM,
                 each in its own folder under Recordings (and in it the
                 console's folder). They stop in the background. Settings > Options >
@@ -212,23 +214,28 @@ CHEATS, RECORDING AND NETPLAY
 
 32X GAMES
 ---------
-Sega 32X games (.32x, or a .bin / .zip / .7z with the "SEGA 32X" header) run on
-PicoDrive, which is loaded from picodrive_libretro-64.dll or -32.dll (in the Plugins
-folder next to the program, 64-bit with the 64-bit program, 32-bit with the 32-bit one) only when a 32X game is
-opened. Picture, sound, controls, states and recording are the program's own, so
-filters, shaders, screenshots, volume and the rest work as usual. Controls are
-six-button pads on both ports. Saves and states go in their own 32X folder.
-Cheats and Cheat Search work on the Mega Drive half of a 32X game (cartridge ROM and the
-68000 work RAM; not the memory of the two SH-2 processors), and so does Rewind (its history
-holds fewer seconds than for a Mega Drive game). Input recording, Region, Low-Pass Filter,
-Mute FM, Mute PSG and LCD Ghosting work too, and so do VGM recording (FM, PSG and 32X PWM;
-the PWM part plays in libvgm-based players only) and netplay (both PCs start the game again
-from power-on and compare a fingerprint of the machine; it needs the same game file and program
-version). FM Chip (the YM3438 kinds play as a YM3438, the others as a YM2612), Console Model, High-Quality FM, the
-3-Band EQ, the Sample Rate and the FM and PSG levels of Levels and Latency work too (its CD audio and PCM levels are grayed out). Not available for 32X games: the
-Master System FM unit and chip, High-Quality PSG, borders, and controllers other than the six-button
-pad (the port and controller model drop-downs in Controls too). They are grayed out in the menus and in Settings while a 32X game runs.
-The NTSC Filter works for 32X games as the program's own version of the look (the picture keeps its size).
+Sega 32X games (.32x, or a .bin / .zip / .7z with the "SEGA
+32X" header) run on PicoDrive, which is loaded from picodrive_libretro-64.dll or
+-32.dll (in the Plugins folder next to the program, 64-bit with the 64-bit
+program, 32-bit with the 32-bit one) only when a 32X game is opened. Picture,
+sound, controls, states and recording are the program's own, so filters,
+shaders, screenshots, volume and the rest work as usual. Controls are six-button
+pads on both ports. Saves and states go in their own 32X folder. Cheats and
+Cheat Search work on the Mega Drive half of a 32X game (cartridge ROM and the
+68000 work RAM; not the memory of the two SH-2 processors), and so does Rewind
+(its history holds fewer seconds than for a Mega Drive game). Input recording,
+Region, Low-Pass Filter, Mute FM, Mute PSG and LCD Ghosting work too, and so do
+VGM recording (FM, PSG and 32X PWM; the PWM part plays in libvgm-based players
+only) and netplay (both PCs start the game again from power-on and compare a
+fingerprint of the machine; it needs the same game file and program version). FM
+Chip (the YM3438 kinds play as a YM3438, the others as a YM2612), Console Model,
+High-Quality FM, the 3-Band EQ, the Sample Rate and the FM and PSG levels of
+Levels and Latency work too (its CD audio and PCM levels are grayed out). Not
+available for 32X games: the Master System FM unit and chip, High-Quality PSG,
+borders, and controllers other than the six-button pad (the port and controller
+model drop-downs in Controls too). They are grayed out in the menus and in
+Settings while a 32X game runs. The NTSC Filter works for 32X games as the
+program's own version of the look (the picture keeps its size).
 
 MD+ AND MSU-MD GAMES (ENHANCED SOUND)
 ------------------------------------
@@ -253,7 +260,7 @@ underneath.
   General     View: Language, View Mode (list or grid), Style, Theme, Accent
                 Color, Colorful Icons, Interface Size, Toolbar Icon Size.
               Covers: Cover Size, Cover Frame, Rounded Cover Corners, Show
-                Name Under Covers, Frame Around Cover and Name, Console Badge
+                Name Under Covers, Frame Around Cover and Name, Region Flags, Console Badge
                 on Covers, Keep a Cover Cache, Clear Cover Cache.
               Program Behavior: Pause When Inactive, Mute When Inactive,
                 Keep Only One Instance, Always on Top, Keep the PC Awake While
@@ -264,19 +271,22 @@ underneath.
                 ROM Directories... (the folders of the game list, and Scan
                 Subfolders).
 
-  Video       Window and Screen: Window Size (1x to 10x), Fullscreen Mode
-                (borderless or exclusive), Fullscreen Resolution, Start ROM in
-                Fullscreen.
+  Video       Window and Screen: Window Size (1x to 10x), Lock Window Shape When
+                Resizing, Fullscreen Mode (borderless or exclusive), Fullscreen
+                Resolution, Start ROM in Fullscreen.
               Scaling and Shape: Render Filter, Integer Scaling, Aspect
                 Ratio, Rotation, Borders, Interlaced Mode.
               Bezel and Border: Bezel Image, Remove Bezel, Border Color.
               Filters and Effects: NTSC Filter, LCD Ghosting, Scanlines,
-                Smooth Scaling, Deinterlacing, Dither Smoothing, Flicker
+                Scaling Filter (Nearest, Sharp Nearest, Bilinear, Sharp Bilinear,
+                Bicubic; grayed while a Direct3D 11 shader runs),
+                Deinterlacing, Dither Smoothing, Flicker
                 Blending, Brighten, Picture Adjustments (Brightness, Contrast,
                 Saturation, Gamma, Hue).
               Speed and Smoothness: Renderer (GDI, Direct3D 9 or 11), VSync,
-                Limit Redraws, Frameskip, Shader (a .slangp preset, 64-bit
-                only), Shader Parameters, Skip Render Filter with Shaders.
+                Variable Refresh Rate, Limit Redraws, Frameskip, Shader (a
+                .slangp preset, 64-bit only), Shader Parameters, Skip Render
+                Filter with Shaders.
 
   Audio       Mute: All Sound, FM, PSG and PWM (the 32X).
               Tone: Stereo Width, Bass Boost, Low-Pass Filter, 3-Band EQ,
@@ -297,8 +307,9 @@ underneath.
   Options     Console: Region, Force VDP Mode, Console, Lock-On Cartridge,
                 Boot from BIOS When Available, Show Extended Game Gear Screen,
                 Show Master System Side Borders.
-              Accuracy: Emulate Address Error Exceptions, Emulate Mega CD
-                Disc Latency.
+              Accuracy: Emulate Address Error Exceptions, Enhanced Per-Tile
+                Vertical Scroll and its Limit, System Lock-Ups, CPU Speed,
+                Emulate Mega CD Disc Latency.
               Video Recording: Recording Size, Quality and Shape.
               Screenshots: Screenshot Output (Corrected, Raw or Final) and
                 Screenshot Size.
@@ -307,7 +318,8 @@ underneath.
               Start and Backup: Backup State (a rolling state backup,
                 restored with Load State > Load Backup State), Skip Intro on
                 Launch.
-              Troubleshooting: Enable Log, Enable Crash Report.
+              Troubleshooting: Enable Log, Enable Crash Report, Factory Reset
+                (deletes the settings file and restarts).
 
   OSD         Messages: Show Messages, Messages for Changed Options, Message
                 Position, Messages Shown, Message Time.
@@ -376,6 +388,7 @@ KEYBOARD SHORTCUTS
   Ctrl+F                  Show / hide the search bar
   Alt+Enter / Esc         Toggle fullscreen
   Ctrl+M / Ctrl+N / Ctrl+B  Mute / mute FM / mute PSG
+  Ctrl+D                    Mute DAC (drums and voices)
   Ctrl+C                  Cheats
   Shift+F11               Record video + audio (start / stop)
   Shift+F10               Record a VGM file (start; Alt+F11 stops)
@@ -412,7 +425,8 @@ Example:
   "Genesis Plus EX.exe" --fullscreen --exit-on-close "C:\Roms\Sonic.zip"
 
 The fullscreen options apply to that launch only. For Mega CD games give the
-.cue (or .chd) file of the first disc; for MD+ and MSU-MD games give the ROM. More frontend setups are in README.md.
+.cue (or .chd) file of the first disc; for MD+ and MSU-MD games give the ROM.
+More frontend setups are in README.md.
 
 
 BIOS FILES (optional)
@@ -453,8 +467,9 @@ MORE HELP
 LICENSE
 -------
 Same terms as Genesis Plus GX: source must accompany modified
-redistributions, and it may not be sold or used commercially.
-See LICENSE.txt in the repository root.
-Other code used: Paprium code (BillyTimeGames), the debug tools (ported from gpgx_debugger by Vladimir Kononovich, lab313ru), PicoDrive (Dave, notaz, irixxxx and others), xBRZ (Zenju), xBR / HQx
-(Hyllian and others), 7-Zip LZMA SDK (Igor Pavlov), stb_image (Sean Barrett),
-librashader (chyyran). Details are in README.md.
+redistributions, and it may not be sold or used commercially. See LICENSE.txt in
+the repository root. Other code used: Paprium code (BillyTimeGames), the debug
+tools (ported from gpgx_debugger by Vladimir Kononovich, lab313ru), PicoDrive
+(Dave, notaz, irixxxx and others), xBRZ (Zenju), xBR / HQx (Hyllian and others),
+7-Zip LZMA SDK (Igor Pavlov), stb_image (Sean Barrett), librashader (chyyran).
+Details are in README.md.

@@ -80,7 +80,9 @@ def literals(text):
 
 def wanted(s, srcline):
     if s == "English": return False                                                                       # a language is named in its own language
-    if not re.search(r"[A-Za-z]{2}", s): return False
+    if re.match(r"^[A-Za-z0-9_.%]+=", s) or re.search(r"\n[A-Za-z0-9_.%]+=", s): return False                        # (key=value: a line of a file the program writes, not text)
+    if re.search(r"\bfprintf\s*\(\s*[A-Za-z_]\w*\s*,\s*\"", srcline): return False                               # (a line of a file the program writes, such as a .cht: not text)
+    if not re.search(r"[A-Za-z]{2}", re.sub(r"%[-+ 0#]*[0-9*]*(?:\.[0-9*]+)?(?:hh|h|ll|l|I64|z)?[a-zA-Z%]", "", s)): return False      # (no text outside the %d %lu ...: "%lu|" writes the history file, it is not for translators)
     if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", s): return False                                          # binary data
     if " " not in s and re.search(r"[a-z0-9][A-Z]", s): return False                                      # CamelCase names of API calls
     if re.search(r"\b(ini_|GetPrivateProfile|WritePrivateProfile|gui_log|OutputDebug|GetProcAddress|LoadLibrary|RegisterClass|CreateWindow[A-Za-z]*\(\s*[0-9A-Za-z_|]+\s*,\s*\")", srcline) and "CreateWindow" not in srcline: return False
@@ -113,14 +115,34 @@ def main():
     for f in SRC:
         text = open(f, encoding="utf-8", errors="replace").read()
         for ln, srcline, s in literals(text):
+            s = s.lstrip("\x01\x02")                          # (the marks the User Guide puts before a title and an item: not text)
+            if f == "settings.c" and "\n" in s and re.match(r"\s*(CHOICE|CHECK|DYNCHOICE)\s*\(", srcline):      # a tip of several lines: the program translates it a line at a time
+                for part in s.split("\n"):
+                    part = part.strip()
+                    if re.search(r"[A-Za-z]{2}", part) and part not in seen:
+                        seen[part] = "%s:%d" % (f, ln); order.append(part)
+                continue
             if len(s) > 300 and "\n" in s:                      # a long text (the User Guide): the program translates it a line at a time
                 for part in s.split("\n"):
                     part = part.rstrip("\r")
-                    if 0 < len(part) < 1024 and re.search(r"[A-Za-z]{2}", part) and part not in seen:
+                    if 0 < len(part) < 20000 and re.search(r"[A-Za-z]{2}", part) and part not in seen:
                         seen[part] = "%s:%d" % (f, ln); order.append(part)
                 continue
             if f == "upnp.c" and not re.search(r"router|UPnP", s): continue          # (the rest of upnp.c is the network protocol)
+            if "\x00" in s and re.search(r"\*\.", s):                 # the kinds of file of a file window: the texts are translated (the patterns are not)
+                for k, part in enumerate(s.split("\x00")[::2]):
+                    if re.search(r"[A-Za-z]{2}", part) and part not in seen:
+                        seen[part] = "%s:%d" % (f, ln); order.append(part)
+                continue
+            if "|" in s and re.search(r"\(\*\.[a-z*]+\)\|", s):          # the same, written "text|pattern|text|pattern"
+                for part in s.split("|")[::2]:
+                    if part not in seen:
+                        seen[part] = "%s:%d" % (f, ln); order.append(part)
+                continue
+            if f == "settings.c" and s.endswith("\r\n") and s.count("\n") == 1: s = s[:-2]      # a row of the User Guide made in settings_guide_text: its line as the guide looks it up (no line end)
             if s not in seen and wanted(s, srcline):
+                seen[s] = "%s:%d" % (f, ln); order.append(s)
+            if s in ("USA", "missing") and s not in seen:                  # short words that are shown (the filter above drops short lowercase and all-capital words)
                 seen[s] = "%s:%d" % (f, ln); order.append(s)
     for where, s in rc_strings():
         if s not in seen: seen[s] = where; order.append(s)
@@ -129,7 +151,7 @@ def main():
         o.write('# Genesis Plus EX: the text of the program.\n# Copy this file to <Language>.po (the name is what the Options > Language menu shows),\n'
                 '# fill in msgstr for the text to translate and leave the others empty. Keep the & (the underlined key of a menu item),\n'
                 '# the %s %d %X ... (they are replaced by values, in the same order) and the \\n and \\r\\n line ends.\n# Language-Name (in the header below) is how the language is listed in the Options menu: write it in that language (Français).\n\n'
-                'msgid ""\nmsgstr ""\n"Content-Type: text/plain; charset=UTF-8\\n"\n"Language: \\n"\n"Language-Name: \\n"\n\n')
+                'msgid ""\nmsgstr ""\n"Content-Type: text/plain; charset=UTF-8\\n"\n"Language: \\n"\n"Language-Name: \\n"\n"Language-Direction: ltr\\n"\n\n')
         for s in order:
             o.write("#: %s\nmsgid \"%s\"\nmsgstr \"\"\n\n" % (seen[s], esc(s)))
     print(len(order), "texts")

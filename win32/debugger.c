@@ -172,7 +172,8 @@ static void db_view_menu(void)
   RECT r;
   int i, k, n, cur, cmd;
 
-  AppendMenuA(menu, MF_STRING | (db_sel == DBGPANE_MEMORY ? MF_CHECKED : 0), DBM_MEMORY, "Memory");
+  AppendMenuA(menu, MF_STRING, DBM_MEMORY, "Memory");
+  if (db_sel == DBGPANE_MEMORY) CheckMenuRadioItem(menu, DBM_MEMORY, DBM_MEMORY, DBM_MEMORY, MF_BYCOMMAND);       /* (one choice of several: a dot, not a check mark) */
   AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
   for (i = 0; i < 3; i++)
   {
@@ -180,12 +181,17 @@ static void db_view_menu(void)
     n = debugwin_view_count(i);
     cur = debugwin_view_current(i);
     for (k = 0; k < n; k++)
-      AppendMenuA(subs[i], MF_STRING | (k == cur && db_sel == pane_of[i] ? MF_CHECKED : 0), (UINT_PTR)(base_of[i] + k), debugwin_view_name(i, k));
+    {
+      AppendMenuA(subs[i], MF_STRING, (UINT_PTR)(base_of[i] + k), debugwin_view_name(i, k));
+      if (k == cur && db_sel == pane_of[i]) CheckMenuRadioItem(subs[i], (UINT)(base_of[i] + k), (UINT)(base_of[i] + k), (UINT)(base_of[i] + k), MF_BYCOMMAND);
+    }
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)subs[i], name_of[i]);
   }
   AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuA(menu, MF_STRING | (db_sel == DBGPANE_SEARCH ? MF_CHECKED : 0), DBM_SEARCH, "RAM Search");
-  AppendMenuA(menu, MF_STRING | (db_sel == DBGPANE_WATCH ? MF_CHECKED : 0), DBM_WATCH, "RAM Watch");
+  AppendMenuA(menu, MF_STRING, DBM_SEARCH, "RAM Search");
+  AppendMenuA(menu, MF_STRING, DBM_WATCH, "RAM Watch");
+  if (db_sel == DBGPANE_SEARCH) CheckMenuRadioItem(menu, DBM_SEARCH, DBM_SEARCH, DBM_SEARCH, MF_BYCOMMAND);
+  if (db_sel == DBGPANE_WATCH) CheckMenuRadioItem(menu, DBM_WATCH, DBM_WATCH, DBM_WATCH, MF_BYCOMMAND);
   if (theme_menus_owner()) theme_ownerdraw_menu(menu);
   GetWindowRect(db_view, &r);
   cmd = gui_popup(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom);
@@ -338,7 +344,7 @@ static int db_create(HWND parent)
     wc.lpfnWndProc = db_proc;
     wc.hInstance = g_inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = DB_CLASS;
+    wc.lpszClassName = DB_CLASS; i18n_keep_ltr(DB_CLASS);
     if (!RegisterClassA(&wc)) return 0;
     registered = 1;
   }

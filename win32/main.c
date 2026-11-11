@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  main.c -- window, menu handling, ROM lifecycle and the emulation loop.
  *
@@ -10,6 +11,7 @@
  ****************************************************************************/
 
 #include <windows.h>
+#include <wincrypt.h>
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -148,6 +150,7 @@ static int16 soundframe[4096];
 
 static int   in_modal_loop;
 static int   menu_popups_open;      /* drop-down menus open now (the game waits only while one is) */
+static double menu_next_step;       /* the clock time the game may run its next frame at while a menu is open */
 static int   menu_loop_active;      /* a menu is open (the loop of the menu bar or of a drop-down is running) */
 static int   menu_rebuild_pending;  /* the Style changed while a menu was open: the menu bar is made again when the menu closes */
 static int   menu_keyboard_mode;   /* the menu bar was opened with Alt or F10 and is still open: losing the focus to it is not leaving the program */
@@ -156,6 +159,9 @@ static char  vgm_name[160];     /* the file name of the VGM log being recorded *
 static int   skip_autosave_once;   /* set by the exit question when "Resume this game next time" is unticked: the game is closed without being kept for Auto Resume */
 static int   frames_this_second;
 static unsigned long session_frames, session_slow;     /* the game's frames, and those that took more than 25 ms to run (for the log) */
+
+/* 1 once the game that runs has drawn a frame (before that the core's picture size is still the one of the game before it). */
+int gui_game_drew_frame(void) { return session_frames > 0; }
 static double session_work_max;                          /* the longest a frame took to run */
 static DWORD session_start;                              /* when the game started */
 static DWORD fps_tick;
@@ -240,6 +246,38 @@ static void data_base_choose(char *base, int n)
     CreateDirectoryA(app, NULL);
     if (dir_writable(app)) { lstrcpynA(base, app, n); gui_data_in_appdata = 1; }
   }
+}
+
+/* Factory Reset: the settings file in use, and (when that is one of the two usual places) the other usual one too: the one beside the program and the one in
+   %LOCALAPPDATA%\\Genesis Plus EX, so that no old copy is picked up again later (say when the program folder becomes writable). 0 when the one in use cannot be deleted. */
+int gui_delete_settings_files(void)
+{
+  const char *use = config_ini_path();
+  char beside[GUI_PATH_LEN], app[GUI_PATH_LEN], local[GUI_PATH_LEN];
+  int standard;
+
+  osd_path("genesis-plus-ex.ini");                       /* (makes sure the data folder is chosen) */
+  gui_snprintf(beside, sizeof(beside), "%s\\genesis-plus-ex.ini", exe_dir);
+  local[0] = '\0';
+  if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, app)) && lstrlenA(app) + 40 < GUI_PATH_LEN)
+    gui_snprintf(local, sizeof(local), "%s\\Genesis Plus EX\\genesis-plus-ex.ini", app);
+  standard = !lstrcmpiA(use, beside) || (local[0] && !lstrcmpiA(use, local));      /* (not a file chosen with --config) */
+
+  if (GetFileAttributesA(use) != INVALID_FILE_ATTRIBUTES && !DeleteFileA(use)) return 0;
+  gui_log("Factory Reset: deleted %s", use);
+  if (standard)
+  {
+    const char *other[2] = { beside, local };
+    int i;
+
+    for (i = 0; i < 2; i++)
+      if (other[i][0] && lstrcmpiA(other[i], use) && GetFileAttributesA(other[i]) != INVALID_FILE_ATTRIBUTES)
+      {
+        if (DeleteFileA(other[i])) gui_log("Factory Reset: deleted %s", other[i]);
+        else gui_log("Factory Reset: %s could not be deleted (error %lu)", other[i], GetLastError());
+      }
+  }
+  return 1;
 }
 
 char *osd_path(const char *filename)
@@ -899,17 +937,17 @@ static void rebuild_filter_menu(void)
 
   if (count > 0)
   {
-    /* Sorted by name (the table in filters.c is), the families in a sub-menu of their own; a filter with no family of its
-       own is listed directly. */
+    /* Sorted by name, the families in a sub-menu of their own (and the families sorted among the filters that have none, by the name of the family);
+       a filter with no family of its own is listed directly. The members of a family come in the order of the table in filters.c, which is by name. */
     HMENU groups[24];
     const char *gname[24];
-    int ng = 0, k;
+    struct { const char *name; int group, filter; } top[FILTER_MENU_MAX + 24];
+    int ng = 0, nt = 0, k, j;
 
     AppendMenuA(filters, MF_SEPARATOR, 0, NULL);
     for (i = 0; i < count; i++)
     {
       const char *g = video_filter_group(i);
-      HMENU target = filters;
 
       if (g)
       {
@@ -918,12 +956,24 @@ static void rebuild_filter_menu(void)
         {
           groups[ng] = CreatePopupMenu();
           gname[ng] = g;
-          AppendMenuA(filters, MF_POPUP | MF_STRING, (UINT_PTR)groups[ng], g);
+          top[nt].name = g; top[nt].group = ng; top[nt].filter = -1; nt++;
           ng++;
         }
-        if (k < ng) target = groups[k];
+        if (k < ng) { AppendMenuA(groups[k], MF_STRING, (UINT_PTR)(IDM_VIDEO_FILTER_BASE + i), video_filter_name(i)); continue; }
       }
-      AppendMenuA(target, MF_STRING, (UINT_PTR)(IDM_VIDEO_FILTER_BASE + i), video_filter_name(i));
+      top[nt].name = video_filter_name(i); top[nt].group = -1; top[nt].filter = i; nt++;
+    }
+    for (k = 1; k < nt; k++)                                   /* (a few dozen entries: a plain insertion sort) */
+    {
+      typeof(top[0]) t = top[k];
+
+      for (j = k - 1; j >= 0 && lstrcmpiA(top[j].name, t.name) > 0; j--) top[j + 1] = top[j];
+      top[j + 1] = t;
+    }
+    for (k = 0; k < nt; k++)
+    {
+      if (top[k].group >= 0) AppendMenuA(filters, MF_POPUP | MF_STRING, (UINT_PTR)groups[top[k].group], top[k].name);
+      else AppendMenuA(filters, MF_STRING, (UINT_PTR)(IDM_VIDEO_FILTER_BASE + top[k].filter), top[k].name);
     }
 
     for (k = 0; k < ng; k++)
@@ -1206,6 +1256,10 @@ int gui_pico_unsupported(int id)
   if (id >= IDM_SET_MOUSESENS_BASE && id < IDM_SET_MOUSESENS_BASE + 5) return 1;
   if (id >= IDM_SET_GUNX_BASE && id < IDM_SET_GUNX_BASE + 7) return 1;
   if (id >= IDM_SET_GUNY_BASE && id < IDM_SET_GUNY_BASE + 7) return 1;
+  if (id >= IDM_SET_GUNBORDER_BASE && id < IDM_SET_GUNBORDER_BASE + 5) return 1;
+  if (id >= IDM_SET_XHSTYLE_BASE && id < IDM_SET_XHSTYLE_BASE + 9) return 1;
+  if (id >= IDM_SET_XHCOLOR_BASE && id < IDM_SET_XHCOLOR_BASE + 6) return 1;
+  if (id >= IDM_SET_XHSIZE_BASE && id < IDM_SET_XHSIZE_BASE + 4) return 1;
   return 0;
 }
 
@@ -1216,6 +1270,9 @@ int gui_pico_only(int id)
   if (!emu_running || pico_active()) return 0;
   return id == IDM_AUDIO_MUTE_PWM;
 }
+
+static void apply_clean_window(void);
+static int clean_window;         /* (see below) */
 
 void gui_update_menu(void)
 {
@@ -1373,8 +1430,7 @@ void gui_update_menu(void)
                 MF_BYCOMMAND | (gui.fullscreen_on_load ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_VIDEO_ALWAYS_ON_TOP,
                 MF_BYCOMMAND | (gui.always_on_top ? MF_CHECKED : MF_UNCHECKED));
-  CheckMenuItem(g_menu, IDM_VIDEO_SMOOTH,
-                MF_BYCOMMAND | (gui.smooth ? MF_CHECKED : MF_UNCHECKED));
+  check_radio(g_menu, IDM_VIDEO_FILTER_MODE_BASE, 5, gui.smooth);
   CheckMenuItem(g_menu, IDM_INPUT_BACKGROUND,
                 MF_BYCOMMAND | (gui.background_input ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_VIDEO_FLICKER,
@@ -1389,14 +1445,28 @@ void gui_update_menu(void)
   check_radio(g_menu, IDM_VIDEO_RENDERER_BASE, 3, gui.renderer);
   CheckMenuItem(g_menu, IDM_VIDEO_VSYNC,
                 MF_BYCOMMAND | (gui.vsync ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(g_menu, IDM_VIDEO_VRR, MF_BYCOMMAND | (gui.vrr ? MF_CHECKED : MF_UNCHECKED));
+  EnableMenuItem(g_menu, IDM_VIDEO_VSYNC, MF_BYCOMMAND | ((gui.vrr && gui.renderer == RENDERER_D3D11 && d3d11_vrr_active()) ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED));      /* (VSync is not used while the display follows the game: it keeps its tick) */
+  EnableMenuItem(g_menu, IDM_VIDEO_VRR, MF_BYCOMMAND | (gui.renderer == RENDERER_D3D11 ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));       /* (only the Direct3D 11 renderer has it) */
+  { int k; for (k = 0; k < 5; k++)         /* (a shader scales the picture itself: the Scaling Filter is not used while one runs) */
+      EnableMenuItem(g_menu, IDM_VIDEO_FILTER_MODE_BASE + k, MF_BYCOMMAND | (gui_shader_scales() ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED)); }
+  if (!gui_shader_scales())
+  EnableMenuItem(g_menu, IDM_VIDEO_FILTER_MODE_BASE + 4, MF_BYCOMMAND | (gui.renderer != RENDERER_GDI ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));       /* Bicubic is a pixel shader: Direct3D 9 and 11 have it, the classic renderer does not */
   check_radio(g_menu, IDM_VIDEO_SCANLINE_BASE, 5, gui.scanline_pct / 25);
-  check_radio(g_menu, IDM_VIDEO_THEME_BASE, THEME_COUNT, theme_get_mode());
-  check_radio(g_menu, IDM_SET_STYLE_BASE, 2, gui.ui_style);
+  check_radio(g_menu, IDM_VIDEO_THEME_BASE, THEME_COUNT, gui_theme_for_ini());
+  check_radio(g_menu, IDM_SET_STYLE_BASE, 2, gui_style_for_ini());
+  {
+    int hc_wait = gui.follow_hc ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED, k;
+
+    for (k = 0; k < THEME_COUNT; k++) EnableMenuItem(g_menu, IDM_VIDEO_THEME_BASE + k, MF_BYCOMMAND | hc_wait);
+    for (k = 0; k < 2; k++) EnableMenuItem(g_menu, IDM_SET_STYLE_BASE + k, MF_BYCOMMAND | hc_wait);      /* (while Windows' high-contrast colors are followed) */
+  }
   CheckMenuItem(g_menu, IDM_VIDEO_SHOWFPS,
                 MF_BYCOMMAND | (gui.show_fps ? MF_CHECKED : MF_UNCHECKED));
   check_radio(g_menu, IDM_VIDEO_INTERLACE_BASE, 2, config.render ? 1 : 0);
   check_radio(g_menu, IDM_VIDEO_LCD_BASE, 4,
               config.lcd == 0 ? 0 : (config.lcd <= 128 ? 1 : (config.lcd <= 160 ? 2 : 3)));
+  check_radio(g_menu, IDM_VIDEO_LCDCOLOR_BASE, 3, gui.lcd_color);
   check_radio(g_menu, IDM_VIDEO_FRAMESKIP_BASE, 6, gui.frameskip);
   CheckMenuItem(g_menu, IDM_EMU_REWIND,
                 MF_BYCOMMAND | (gui.rewind ? MF_CHECKED : MF_UNCHECKED));
@@ -1433,6 +1503,7 @@ void gui_update_menu(void)
   EnableMenuItem(g_menu, IDM_EMU_REWINDNOW, MF_BYCOMMAND | ((emu_running && gui.rewind && !netplay_active()) ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));
   CheckMenuItem(g_menu, IDM_AUDIO_MUTE_FM, MF_BYCOMMAND | (gui.mute_fm ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_AUDIO_MUTE_PSG, MF_BYCOMMAND | (gui.mute_psg ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(g_menu, IDM_AUDIO_MUTE_DAC, MF_BYCOMMAND | (gui.mute_dac ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_AUDIO_MUTE_PWM, MF_BYCOMMAND | (gui.mute_pwm ? MF_CHECKED : MF_UNCHECKED));
   EnableMenuItem(g_menu, IDM_AUDIO_MUTE_PWM, MF_BYCOMMAND | (gui_pico_only(IDM_AUDIO_MUTE_PWM) ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED));      /* (grayed only while a game of another system runs) */
   CheckMenuItem(g_menu, IDM_VIDEO_INTSCALE, MF_BYCOMMAND | (gui.integer_scale ? MF_CHECKED : MF_UNCHECKED));
@@ -1481,6 +1552,10 @@ void gui_update_menu(void)
   }
   theme_menu_icon_marks(g_menu);
   status_set_slot();
+  if (!emu_running) clean_window = 0;                    /* (it is for a game that runs: the next game starts with its bars) */
+  CheckMenuItem(g_menu, IDM_VIEW_CLEANWINDOW, MF_BYCOMMAND | (clean_window ? MF_CHECKED : MF_UNCHECKED));
+  EnableMenuItem(g_menu, IDM_VIEW_CLEANWINDOW, MF_BYCOMMAND | (emu_running ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));
+  apply_clean_window();
 }
 
 int gui_port_index(int port)
@@ -1572,8 +1647,10 @@ void gui_resize_to_scale(int scale)
   w0 = w;
 
   /* With no game running the ROM browser is what is shown: wide enough for
-     its toolbar. */
-  if (!gui.hide_toolbar && w < TBS(480)) w = TBS(480);
+     its toolbar. A game's window is the size asked for: when that is narrower than the toolbar the toolbar goes onto more rows (it does so for
+     any narrow window). Widening it to the toolbar made 1x, 2x and 3x of a Game Gear game (160x144) all come out the same, and the picture larger
+     than the Window Size chosen. */
+  if (!gui.hide_toolbar && w < TBS(480) && !emu_running) w = TBS(480);
 
   /* The Large interface's toolbar is wide: the window is made wide enough for it to stay on one row (as far as the screen allows). */
   if (gui.large_ui && !gui.hide_toolbar)
@@ -2818,8 +2895,8 @@ static void log_game_report(void)
           sys, (int)region_code, region_code == REGION_USA ? "USA" : region_code == REGION_EUROPE ? "Europe" : "Japan", vdp_pal ? "PAL" : "NTSC",
           pico_active() ? "32X in PicoDrive" : "Genesis Plus GX core", system_hw == SYSTEM_MCD ? "on" : "off", (int)cdd.loaded, (unsigned)system_bios, (unsigned)scd.cartridge.boot,
           (unsigned)cart.special, cheats_count(), sram.on ? "on" : "off");
-  gui_log("Video: renderer %d, filter '%s', %s, window scale %d, fullscreen %d, vsync %d", gui.renderer, gui.render_filter[0] ? gui.render_filter : "none",
-          config.render ? "interlaced Double Field" : "normal", gui.scale, gui.fullscreen, gui.vsync);
+  gui_log("Video: renderer %d, filter '%s', %s, window scale %d, fullscreen %d, vsync %d, variable refresh %d (in use %d)", gui.renderer, gui.render_filter[0] ? gui.render_filter : "none",
+          config.render ? "interlaced Double Field" : "normal", gui.scale, gui.fullscreen, gui.vsync, gui.vrr, d3d11_vrr_active());
   gui_log("Sound: rate %d Hz (chosen %d), FM %s, backend %d, latency %d, volume %d%%, queue %d", snd.sample_rate, gui.sample_rate, config.ym3438 ? "Nuked" : "YM2612", gui.audio_backend,
           gui.latency, gui.volume, gui.sound_enabled ? waveout_pending() : -1);
   gui_log("Input: Player 1 device %d, Player 2 device %d", gui.pad[0].device, gui.pad[1].device);
@@ -2832,6 +2909,84 @@ static void log_game_summary(void)
 
   gui_log("Played %lu:%02lu: %lu frames (%lu fps on average), slowest frame %d ms, %lu frames over 25 ms, %d messages shown", (unsigned long)(secs / 60), (unsigned long)(secs % 60),
           session_frames, secs ? (unsigned long)(session_frames / secs) : 0UL, (int)(session_work_max * 1000.0), session_slow, notify_count);
+}
+
+/* For the log: the window's size when it changes. While the edge is dragged a line comes at most four times a second; the size the drag ends with is
+   always written (force). */
+static void log_window_size(HWND hwnd, int cw, int ch, int force)
+{
+  static int last_cw, last_ch;
+  static DWORD last_t;
+  DWORD now;
+  RECT wr;
+
+  if (!gui.log_on || (cw == last_cw && ch == last_ch && !force)) return;
+  now = GetTickCount();
+  if (!force && (DWORD)(now - last_t) < 250) return;
+  last_cw = cw; last_ch = ch; last_t = now;
+  GetWindowRect(hwnd, &wr);
+  {
+    MONITORINFO mi;
+
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) memset(&mi.rcWork, 0, sizeof(mi.rcWork));
+    gui_log("Window: client %dx%d, outer %dx%d at %d,%d, screen work area %dx%d, menu bar %s, toolbar %d, status bar %s, game %s%s, Window Size %dx, %s", cw, ch,
+            (int)(wr.right - wr.left), (int)(wr.bottom - wr.top), (int)wr.left, (int)wr.top, (int)(mi.rcWork.right - mi.rcWork.left), (int)(mi.rcWork.bottom - mi.rcWork.top),
+            GetMenu(hwnd) ? "shown" : "hidden", browser_toolbar_height(), (g_status && IsWindowVisible(g_status)) ? "shown" : "hidden", emu_running ? "running" : "none",
+            emu_paused ? " (paused)" : "", gui.scale, gui.fullscreen ? "fullscreen" : (IsZoomed(hwnd) ? "maximized" : "in a window"));
+  }
+}
+
+/* The window's size now, for the log, written even when it did not change (a window closed: a dialog is done). */
+void gui_log_window_size(void)
+{
+  RECT cr;
+
+  if (!gui.log_on || !g_hwnd) return;
+  GetClientRect(g_hwnd, &cr);
+  log_window_size(g_hwnd, cr.right, cr.bottom, 1);
+}
+
+/* The program file: its size, its date and its SHA-256, so a log says whether it comes from the exe of an official release (the hash of that exe
+   is the same on every machine). The file is read once when the log starts; the hash is by the Windows crypto library. */
+static void log_program_hash(const char *exe)
+{
+  HANDLE f;
+  HCRYPTPROV prov = 0;
+  HCRYPTHASH hash = 0;
+  static unsigned char buf[65536];
+  DWORD got;
+  unsigned long long size = 0;
+  FILETIME wt;
+  SYSTEMTIME st;
+  char hex[80] = "";
+  int ok = 0;
+
+  if (!gui.log_on || !exe[0]) return;
+  f = CreateFileA(exe, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (f == INVALID_HANDLE_VALUE) { gui_log("Program file: could not be read for its hash"); return; }
+  if (CryptAcquireContextW(&prov, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT) && CryptCreateHash(prov, CALG_SHA_256, 0, 0, &hash))
+  {
+    while (ReadFile(f, buf, sizeof(buf), &got, NULL) && got) { CryptHashData(hash, buf, got, 0); size += got; }
+    {
+      BYTE d[32];
+      DWORD n = sizeof(d);
+      int i;
+
+      if (CryptGetHashParam(hash, HP_HASHVAL, d, &n, 0) && n == 32)
+      {
+        for (i = 0; i < 32; i++) wsprintfA(hex + i * 2, "%02x", (unsigned)d[i]);
+        ok = 1;
+      }
+    }
+  }
+  if (hash) CryptDestroyHash(hash);
+  if (prov) CryptReleaseContext(prov, 0);
+  memset(&st, 0, sizeof(st));
+  if (GetFileTime(f, NULL, NULL, &wt)) FileTimeToSystemTime(&wt, &st);
+  CloseHandle(f);
+  if (ok) gui_log("Program file: %lu bytes, written %04d-%02d-%02d %02d:%02d (UTC), SHA-256 %s", (unsigned long)size, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, hex);
+  else gui_log("Program file: its hash could not be made");
 }
 
 /* The program and machine, and the settings that matter most: written when the log starts and when it is switched on, so a
@@ -2848,6 +3003,7 @@ static void log_system_info(void)
   if (rtl) rtl(&vi);
   if (!GetModuleFileNameA(NULL, exe, sizeof(exe))) exe[0] = '\0';
   gui_log("Version %s, Windows %lu.%lu build %lu, %s", APP_VERSION, (unsigned long)vi.dwMajorVersion, (unsigned long)vi.dwMinorVersion, (unsigned long)vi.dwBuildNumber, exe);
+  log_program_hash(exe);
   gui_log("Settings: renderer %d, %s style, theme %d, %s interface, display scale %d%%, sound rate %d", gui.renderer, gui.ui_style ? "Modern" : "Classic",
           gui.theme_mode, gui.large_ui ? "larger" : "normal", gui_dpi * 100 / 96, gui.sample_rate);
   log_machine();
@@ -4632,6 +4788,15 @@ static void run_one_frame(int present_video, int record)
     /* RAM patches are overwritten by the game, so they go back in each frame. */
     cheats_ram_update();
 
+#ifdef M68K_OVERCLOCK_SHIFT
+    {                                       /* CPU Speed: fewer cycles per instruction means a faster CPU (100% is exactly 1 << shift) */
+      static const int pct[8] = { 50, 75, 100, 125, 150, 200, 300, 400 };
+      int p = netplay_active() ? 100 : pct[gui.cpu_speed & 7];
+      int ratio = (int)(((long long)100 << M68K_OVERCLOCK_SHIFT) / p);
+      m68k.cycle_ratio = ratio;
+      s68k.cycle_ratio = ratio;
+    }
+#endif
     if (system_hw == SYSTEM_MCD)              system_frame_scd(skip_render);
     else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD) system_frame_gen(skip_render);
     else                                      system_frame_sms(skip_render);
@@ -4923,6 +5088,11 @@ static void tick_fullscreen_menu_hover(void)
 
   if (!gui.fullscreen) return;
   if (in_modal_loop || menu_loop_active) return;             /* a menu or dialog is open: the person is using the mouse */
+  if (gui_clean_window_on())                                 /* Hide All Bars: the bars stay away, the mouse at the top edge brings nothing */
+  {
+    if (GetMenu(g_hwnd)) { browser_fullscreen_toolbar(0); set_fullscreen_menu(0); }
+    return;
+  }
   if (!GetCursorPos(&p) || !GetWindowRect(g_hwnd, &rc)) return;
 
   if (GetMenu(g_hwnd)) theme_paint_menubar(g_hwnd, 0);   /* the item under the mouse lights up */
@@ -5186,7 +5356,15 @@ static const struct { int base, n; int *val; } setgroups[] =
   { IDM_SET_STEREO_BASE,    4, &gui.stereo_idx },
   { IDM_SET_MOUSESENS_BASE, 5, &gui.mouse_sens },
   { IDM_SET_GUNX_BASE,      7, &gui.gun_ox },
+  { IDM_SET_VSLIMIT_BASE,   8, &gui.vs_limit },
+  { IDM_SET_CPUSPEED_BASE,  8, &gui.cpu_speed },
   { IDM_SET_GUNY_BASE,      7, &gui.gun_oy },
+  { IDM_SET_GUNBORDER_BASE, 5, &gui.gun_border },
+  { IDM_SET_STICKSHAPE_BASE, 4, &gui.stick_shape },
+  { IDM_SET_CROSSFEED_BASE, 4, &gui.crossfeed },
+  { IDM_SET_XHSTYLE_BASE,   9, &gui.xh_style },
+  { IDM_SET_XHCOLOR_BASE,   6, &gui.xh_color },
+  { IDM_SET_XHSIZE_BASE,    4, &gui.xh_size },
   { IDM_SET_BARCOLOR_BASE,  7, &gui.bar_color },
   { IDM_SET_FSMODE_BASE,    2, &gui.fs_exclusive },
   { IDM_SET_COVERSHAPE_BASE, 3, &gui.cover_shape },
@@ -5204,6 +5382,8 @@ static const struct { int base, n; int *val; } setgroups[] =
   { IDM_SET_OSDSIZE_BASE,   4, &gui.osd_size },
   { IDM_SET_OSDCOLOR_BASE,  8, &gui.osd_color },
   { IDM_SET_OSDLINES_BASE,  7, &gui.osd_lines },
+  { IDM_VIDEO_LCDCOLOR_BASE, 3, &gui.lcd_color },
+  { IDM_VIDEO_FILTER_MODE_BASE, 5, &gui.smooth },
   { IDM_SET_FPSPOS_BASE,    4, &gui.fps_pos },
   { IDM_SET_STYLE_BASE,     2, &gui.ui_style },
 };
@@ -5301,9 +5481,11 @@ int gui_dyn_list(int base, char names[][96], int max, int *cur)
   else if (base == IDM_OPT_LANGUAGE_BASE)                          /* English, then the files of the Languages folder */
   {
     char found[31][48];
-    int nl = i18n_list(found, 31);
+    int nl = i18n_list(found, 30);
 
+    lstrcpyA(names[n++], "System");
     lstrcpyA(names[n++], "English");
+    *cur = !lstrcmpiA(gui.language, "System") ? 0 : 1;
     for (i = 0; i < nl && n < max; i++)
     {
       { char shown[48]; i18n_language_name(found[i], shown, sizeof(shown)); lstrcpynA(names[n], shown, 96); }
@@ -5372,6 +5554,7 @@ static void stereo_apply(void)
   static const int pct[4] = { 50, 100, 150, 200 };
   waveout_set_width(pct[gui.stereo_idx >= 0 && gui.stereo_idx < 4 ? gui.stereo_idx : 1]);
   waveout_set_enhance(gui.bass, gui.normalize, gui.overdrive);
+  waveout_set_crossfeed(gui.crossfeed);
 }
 
 static BOOL CALLBACK redraw_all_cb(HWND w, LPARAM lp)
@@ -5396,7 +5579,7 @@ int gui_setgroup_set(int id)
     if (id >= setgroups[k].base && id < setgroups[k].base + setgroups[k].n)
     {
       *setgroups[k].val = id - setgroups[k].base;
-      if (setgroups[k].base == IDM_SET_STEREO_BASE) stereo_apply();
+      if (setgroups[k].base == IDM_SET_STEREO_BASE || setgroups[k].base == IDM_SET_CROSSFEED_BASE) stereo_apply();
       else if (setgroups[k].base == IDM_SET_BACKEND_BASE)
       {
         if (gui.sound_enabled)
@@ -5406,7 +5589,20 @@ int gui_setgroup_set(int id)
           else gui_status("That sound output is not available; sound is off");
         }
       }
-      else if (setgroups[k].base == IDM_SET_BARCOLOR_BASE) video_adjust_changed();
+      else if (setgroups[k].base == IDM_SET_BARCOLOR_BASE || setgroups[k].base == IDM_VIDEO_LCDCOLOR_BASE) video_adjust_changed();
+      else if (setgroups[k].base == IDM_SET_GUNBORDER_BASE || setgroups[k].base == IDM_VIDEO_FILTER_MODE_BASE)
+      {
+        video_viewport_changed();
+        if (setgroups[k].base == IDM_VIDEO_FILTER_MODE_BASE)                         /* (the log says what really draws it; a message only when it is not what was chosen) */
+        {
+          int note;
+          const char *path = video_scaling_path(&note);
+
+          gui_log("Scaling Filter %d: %s", gui.smooth, path);
+          if (note) gui_status("Scaling Filter: %s", path);
+        }
+      }
+      else if (setgroups[k].base == IDM_SET_VSLIMIT_BASE) config.enhanced_vscroll_limit = (uint8)(2 * (gui.vs_limit + 1));
       else if (setgroups[k].base == IDM_SET_OSDSIZE_BASE) { video_osd_font_changed(); video_invalidate(); }
       else if (setgroups[k].base == IDM_SET_OSDPOS_BASE || setgroups[k].base == IDM_SET_FPSPOS_BASE || setgroups[k].base == IDM_SET_OSDCOLOR_BASE || setgroups[k].base == IDM_SET_OSDLINES_BASE) video_invalidate();
       else if (setgroups[k].base == IDM_SET_COVERSHAPE_BASE) browser_cover_style_changed();
@@ -5851,6 +6047,12 @@ int gui_shader_available(void)
 
 /* Switches to the shader preset at `path`, or turns shaders off when `path`
    is NULL or empty. Returns 1 on success. */
+int gui_shader_scales(void)
+{
+  return gui.shader_preset_path[0] && gui.renderer == RENDERER_D3D11;
+}
+
+
 int gui_set_shader(const char *path)
 {
   void *device;
@@ -5935,6 +6137,18 @@ static void on_command(int id)
   UINT before = g_menu ? GetMenuState(g_menu, (UINT)id, MF_BYCOMMAND) : (UINT)-1;
   int shown = notify_count;
 
+  if (gui.log_on)                                                         /* for the log: every command, with the name of its menu item */
+  {
+    char item[96] = "", group[96] = "";
+
+    if (g_menu && before != (UINT)-1)
+    {
+      menu_item_text(g_menu, id, 0, item, sizeof(item));
+      menu_parent_title(g_menu, id, group, sizeof(group));
+    }
+    gui_log("Command %d: %s%s%s", id, group, group[0] && item[0] ? " > " : "", item);
+  }
+
   on_command_inner(id);
 
   if (!gui.osd_opts || before == (UINT)-1 || notify_count != shown || !g_menu) return;
@@ -5965,11 +6179,263 @@ static void on_command(int id)
   }
 }
 
+/* ---- Light gun crosshair: a cursor made to the chosen shape, color and size (Settings > Input > Light Gun) ---- */
+
+/* Is the pixel (x, y) of a size x size picture on the shape (grown by `grow` pixels, for the outline)? */
+static int xh_hit(int style, int x, int y, int size, int grow)
+{
+  int c = size / 2, dx = x - c, dy = y - c, adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
+  int t = size >= 32 ? 3 : 2, ht = t / 2 + grow, gap = size / 8;
+  int rr = c - 3, d2 = dx * dx + dy * dy, lo = rr - ht, hi = rr + ht;
+  int dr = size / 6 < 2 ? 2 : size / 6;
+  int dotr = size / 10 < 1 ? 1 : size / 10;
+  int ring = 0, arms = 0, ticks = 0, dot = 0;
+  if (lo < 0) lo = 0;
+  if (gap < 2) gap = 2;
+
+  switch (style)
+  {
+    case 1:                                              /* plus */
+      return (ady <= ht && adx <= c - 1 + grow) || (adx <= ht && ady <= c - 1 + grow);
+    case 2:                                              /* plus with a gap in the middle */
+      return (ady <= ht && adx <= c - 1 + grow && adx >= gap - grow) || (adx <= ht && ady <= c - 1 + grow && ady >= gap - grow);
+    case 3:                                              /* dot */
+      return d2 <= (dr + grow) * (dr + grow);
+    case 4:  ring = 1; dot = 1; break;                   /* circle with a dot */
+    case 5:  ring = 1; ticks = 1; break;                 /* circle with ticks */
+    case 6:  ring = 1; arms = 2; dot = 1; break;         /* crosshair target: circle, long lines, dot */
+    case 7:                                              /* diamond: a thick outline and a short tick inside each side; 8: and a small diamond in the middle */
+    case 8:
+    {
+      int R = c - 1, d = adx + ady, th = t * 3 / 2, tw = ht - grow, cr = R / 6 < 2 ? 2 : R / 6;
+      int t0 = R * 42 / 100, t1 = R * 62 / 100;
+
+      if (d <= R + 2 * grow && d >= R - th - 2 * grow) return 1;                                   /* the outline */
+      if (style == 8 && d <= cr + grow) return 1;                                           /* the middle */
+      if (adx <= tw + grow && ady >= t0 - grow && ady <= t1 + grow) return 1;              /* the ticks (top, bottom) */
+      if (ady <= tw + grow && adx >= t0 - grow && adx <= t1 + grow) return 1;             /* (left, right) */
+      return 0;
+    }
+    default: return 0;
+  }
+  if (ring && d2 >= lo * lo && d2 <= hi * hi) return 1;
+  if (dot && d2 <= (dotr + grow) * (dotr + grow)) return 1;
+  if (ticks)                                             /* short marks across the circle at the four sides */
+  {
+    int tl = size / 5 < 3 ? 3 : size / 5;
+    if (adx <= ht && ady >= rr - tl && ady <= rr + tl + grow) return 1;
+    if (ady <= ht && adx >= rr - tl && adx <= rr + tl + grow) return 1;
+  }
+  if (arms == 2)                                         /* lines from the middle gap to the edge of the picture */
+  {
+    if (ady <= ht && adx >= gap - grow && adx <= c - 1 + grow) return 1;
+    if (adx <= ht && ady >= gap - grow && ady <= c - 1 + grow) return 1;
+  }
+  return 0;
+}
+
+/* The color of entry i of the Crosshair Color list (the square shown beside its name). */
+COLORREF gui_xh_color_of(int i)
+{
+  static const COLORREF c[6] = { RGB(255, 255, 255), RGB(255, 32, 32), RGB(32, 255, 32), RGB(255, 255, 32), RGB(32, 255, 255), RGB(0, 0, 0) };
+
+  return c[i >= 0 && i < 6 ? i : 0];
+}
+
+/* The picture of crosshair shape `style` (in the chosen color, with its outline) in a square of `size` pixels at x, y of dc: the Settings list shows it beside the name. */
+void gui_xh_preview(HDC dc, int x, int y, int size, int style)
+{
+  static HBITMAP cache[9];
+  static unsigned cache_key[9];
+  COLORREF fill = gui_xh_color_of(gui.xh_color), edge = fill == RGB(0, 0, 0) ? RGB(255, 255, 255) : RGB(0, 0, 0);
+  unsigned key = (unsigned)(fill & 0xFFFFFF) | ((unsigned)size << 24);
+
+  if (style == 0)                                        /* the cross Windows has: a thin plus in the window text color, in its own look */
+  {
+    HPEN pen = CreatePen(PS_SOLID, 1, theme_is_dark() ? RGB(255, 255, 255) : RGB(0, 0, 0));
+    HGDIOBJ old = SelectObject(dc, pen);
+
+    MoveToEx(dc, x, y + size / 2, NULL); LineTo(dc, x + size, y + size / 2);
+    MoveToEx(dc, x + size / 2, y, NULL); LineTo(dc, x + size / 2, y + size);
+    SelectObject(dc, old); DeleteObject(pen);
+    return;
+  }
+  if (style < 0 || style >= 9) return;
+  if (!cache[style] || cache_key[style] != key)           /* the shape is drawn once for each color and size, then only copied */
+  {
+    BITMAPINFO bi;
+    unsigned *px = NULL;
+    HBITMAP bmp;
+
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader); bi.bmiHeader.biWidth = size; bi.bmiHeader.biHeight = -size;
+    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
+    bmp = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, (void **)&px, NULL, 0);
+    if (!bmp || !px) { if (bmp) DeleteObject(bmp); return; }
+    {
+      int px_x, px_y;
+      unsigned f = 0xFF000000u | ((unsigned)GetRValue(fill) << 16) | ((unsigned)GetGValue(fill) << 8) | GetBValue(fill);
+      unsigned e = 0xFF000000u | ((unsigned)GetRValue(edge) << 16) | ((unsigned)GetGValue(edge) << 8) | GetBValue(edge);
+
+      for (px_y = 0; px_y < size; px_y++)
+        for (px_x = 0; px_x < size; px_x++)
+          px[px_y * size + px_x] = xh_hit(style, px_x, px_y, size, 0) ? f : (xh_hit(style, px_x, px_y, size, 1) ? e : 0u);
+    }
+    if (cache[style]) DeleteObject(cache[style]);
+    cache[style] = bmp;
+    cache_key[style] = key;
+  }
+  {
+    HDC mem = CreateCompatibleDC(dc);
+    HGDIOBJ old = mem ? SelectObject(mem, cache[style]) : NULL;
+    BLENDFUNCTION bf;
+
+    bf.BlendOp = AC_SRC_OVER; bf.BlendFlags = 0; bf.SourceConstantAlpha = 255; bf.AlphaFormat = AC_SRC_ALPHA;
+    if (mem) { AlphaBlend(dc, x, y, size, size, mem, 0, 0, size, size, bf); SelectObject(mem, old); DeleteDC(mem); }
+  }
+}
+
+static HCURSOR gun_cursor(void)
+{
+  static HCURSOR cur;
+  static int cur_key = -1;
+  static const int sizes[4] = { 16, 24, 32, 48 };
+  int size = DPIS(sizes[gui.xh_size >= 0 && gui.xh_size < 4 ? gui.xh_size : 1]), key;
+  BITMAPINFO bi;
+  HDC dc;
+  HBITMAP color, mask;
+  unsigned *px = NULL;
+  ICONINFO ii;
+  unsigned fill, edge;
+  int x, y;
+
+  if (size < 12) size = 12;
+  if (size > 96) size = 96;
+  key = gui.xh_style | (gui.xh_color << 4) | (gui.xh_size << 8) | (size << 12);
+  if (cur && key == cur_key) return cur;
+
+  memset(&bi, 0, sizeof(bi));
+  bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+  bi.bmiHeader.biWidth = size;
+  bi.bmiHeader.biHeight = -size;
+  bi.bmiHeader.biPlanes = 1;
+  bi.bmiHeader.biBitCount = 32;
+  bi.bmiHeader.biCompression = BI_RGB;
+  dc = GetDC(NULL);
+  color = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void **)&px, NULL, 0);
+  ReleaseDC(NULL, dc);
+  mask = CreateBitmap(size, size, 1, 1, NULL);
+  if (!color || !px || !mask)
+  {
+    if (color) DeleteObject(color);
+    if (mask) DeleteObject(mask);
+    return LoadCursor(NULL, IDC_CROSS);
+  }
+  { COLORREF cc = gui_xh_color_of(gui.xh_color); fill = 0xFF000000u | ((unsigned)GetRValue(cc) << 16) | ((unsigned)GetGValue(cc) << 8) | GetBValue(cc); }
+  edge = (fill & 0xFFFFFF) == 0 ? 0xFFFFFFFFu : 0xFF000000u;                 /* (an outline of the opposite brightness) */
+  for (y = 0; y < size; y++)
+    for (x = 0; x < size; x++)
+      px[y * size + x] = xh_hit(gui.xh_style, x, y, size, 0) ? fill : (xh_hit(gui.xh_style, x, y, size, 1) ? edge : 0u);
+  ii.fIcon = FALSE;
+  ii.xHotspot = (DWORD)(size / 2);
+  ii.yHotspot = (DWORD)(size / 2);
+  ii.hbmMask = mask;
+  ii.hbmColor = color;
+  {
+    HCURSOR made = (HCURSOR)CreateIconIndirect(&ii), old = cur;
+
+    DeleteObject(color);
+    DeleteObject(mask);
+    if (!made) return LoadCursor(NULL, IDC_CROSS);
+    cur = made;
+    cur_key = key;
+    SetCursor(cur);                                      /* (the old one may be the one in use: it goes after) */
+    if (old) DestroyCursor(old);
+  }
+  return cur;
+}
+
+/* ---- Hide All Bars: a window with the game only (not saved; the game list keeps its bars) ---- */
+
+static int clean_window;         /* asked for with View > Toolbars > Hide All Bars or its hotkey */
+static int clean_applied;        /* what the window shows now */
+
+int gui_clean_window_on(void) { return clean_window && emu_running; }
+
+static void apply_clean_window(void)
+{
+  static int busy;
+  int on = gui_clean_window_on();
+  RECT rc;
+
+  if (busy || !g_hwnd) return;
+  if (gui.fullscreen) { clean_applied = 0; return; }              /* (fullscreen shows the bars at the top edge: tick_fullscreen_menu_hover keeps them away while this is on) */
+  if (on == clean_applied && ((GetMenu(g_hwnd) == NULL) == (on != 0))) return;
+  busy = 1;
+  clean_applied = on;
+  SetMenu(g_hwnd, on ? NULL : g_menu);
+  if (!on) theme_paint_menubar(g_hwnd, 1);
+  if (g_status) ShowWindow(g_status, (on || gui.hide_statusbar) ? SW_HIDE : SW_SHOW);
+  browser_bars_changed();
+  GetClientRect(g_hwnd, &rc);
+  SendMessage(g_hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));       /* the picture takes the room */
+  RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+  busy = 0;
+}
+
+/* ---- Follow Windows high-contrast mode: the Light theme and the Classic style while it is on (Windows draws the controls then, in its colors) ---- */
+
+static int hc_applied, hc_prev_theme, hc_prev_style, hc_prev_accent;
+
+int gui_theme_for_ini(void) { return hc_applied ? hc_prev_theme : gui.theme_mode; }
+int gui_style_for_ini(void) { return hc_applied ? hc_prev_style : gui.ui_style; }
+int gui_accent_for_ini(void) { return hc_applied ? hc_prev_accent : gui.accent; }
+int gui_hc_applied(void) { return hc_applied; }
+
+static void follow_high_contrast(void)
+{
+  HIGHCONTRASTA hc;
+  int on = 0;
+
+  memset(&hc, 0, sizeof(hc));
+  hc.cbSize = sizeof(hc);
+  if (SystemParametersInfoA(SPI_GETHIGHCONTRAST, sizeof(hc), &hc, 0)) on = (hc.dwFlags & HCF_HIGHCONTRASTON) != 0;
+  on = on && gui.follow_hc;
+  if (on == hc_applied) return;
+  if (on)
+  {
+    hc_prev_theme = gui.theme_mode;
+    hc_prev_style = gui.ui_style;
+    hc_prev_accent = gui.accent;
+    hc_applied = 1;
+    theme_set_hc(1);
+    theme_set_mode(THEME_LIGHT);
+    gui.ui_style = 0;
+    gui.accent = 0;
+  }
+  else
+  {
+    hc_applied = 0;
+    theme_set_hc(0);
+    theme_set_mode(hc_prev_theme);
+    gui.ui_style = hc_prev_style;
+    gui.accent = hc_prev_accent;
+  }
+  EnumThreadWindows(GetCurrentThreadId(), redraw_all_cb, 0);
+  theme_apply_to_window(g_hwnd);
+  picobook_retheme();
+  if (menu_loop_active) menu_rebuild_pending = 1;
+  else apply_menu_font();
+  theme_menu_icons(g_menu);
+  RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+  gui_update_menu();
+}
+
 /* Starts the program again (with the game that is running, if one is) and closes this copy. */
 static void restart_program(void)
 {
   char exe_path[GUI_PATH_LEN];
-  char cmdline[GUI_PATH_LEN * 2 + 16];
+  char cmdline[GUI_PATH_LEN * 3 + 80];                    /* (the program, the settings file and the game, each a path) */
   STARTUPINFOA si;
   PROCESS_INFORMATION pi;
 
@@ -5978,10 +6444,13 @@ static void restart_program(void)
   /* Only hand the new instance a ROM if one is actually running. rom_path
      is also set by ROM Information / Edit Cheats on a game that was only
      inspected (emu_peek_rom), and that must not launch it. */
+  /* The new copy waits for this one to be gone (--after-pid) before it reads the settings file, which this one writes while it closes, and keeps using
+     the same settings file (--config), also when it was not the usual one. */
   if (emu_running && rom_path[0])
-    wsprintfA(cmdline, "\"%s\" --restarted \"%s\"", exe_path, rom_path);
+    _snprintf(cmdline, sizeof(cmdline) - 1, "\"%s\" --restarted --after-pid %lu --config \"%s\" \"%s\"", exe_path, (unsigned long)GetCurrentProcessId(), config_ini_path(), rom_path);
   else
-    wsprintfA(cmdline, "\"%s\" --restarted", exe_path);
+    _snprintf(cmdline, sizeof(cmdline) - 1, "\"%s\" --restarted --after-pid %lu --config \"%s\"", exe_path, (unsigned long)GetCurrentProcessId(), config_ini_path());
+  cmdline[sizeof(cmdline) - 1] = '\0';
 
   ZeroMemory(&si, sizeof(si));
   si.cb = sizeof(si);
@@ -6015,6 +6484,67 @@ static void on_command_inner(int id)
         restart_program();
       return;
     }
+  }
+  if (gui.follow_hc && ((id >= IDM_SET_STYLE_BASE && id < IDM_SET_STYLE_BASE + 2) || (id >= IDM_VIDEO_THEME_BASE && id < IDM_VIDEO_THEME_BASE + THEME_COUNT) || (id >= IDM_SET_ACCENT_BASE && id <= IDM_SET_ACCENT_BASE + GUI_ACCENT_HIDDEN)))
+  {
+    gui_notify("Turn off High Contrast Mode (Settings > General) to change this");        /* (the style, theme and accent color wait while Windows' colors are followed) */
+    gui_update_menu();
+    return;
+  }
+  if (id == IDM_VIEW_CLEANWINDOW)
+  {
+    if (!clean_window)
+    {
+      char keys[64] = "";
+
+      hotkey_menu_keys(IDM_VIEW_CLEANWINDOW, keys, sizeof(keys));
+      if (!keys[0]) { gui_notify("Set a hotkey for Hide / Show All Bars first (Options > Hotkeys): it is the way back"); return; }
+    }
+    clean_window = !clean_window;
+    apply_clean_window();
+    if (gui.fullscreen && clean_window && GetMenu(g_hwnd)) { browser_fullscreen_toolbar(0); set_fullscreen_menu(0); }       /* (the bars that showed at the top edge go at once) */
+    gui_update_menu();
+    return;
+  }
+  if (id == IDM_OPT_KEEPASPECT)
+  {
+    gui.keep_aspect = !gui.keep_aspect;
+    gui_update_menu();
+    config_save();
+    return;
+  }
+  if (id == IDM_OPT_FACTORYRESET)
+  {
+    if (MessageBoxA(g_hwnd, "Put EVERYTHING back as a new copy of the program starts?\n\n"
+                            "This deletes the settings file and restarts the program. All settings, the controls, the hotkeys, the picture adjustments, "
+                            "the audio levels, the folders and ROM directories, the favorites and the lists of recent and played games are forgotten.\n\n"
+                            "Your games, saves, save states, covers, cheat files and saved controller profiles are not touched.\n\nContinue?",
+                    "Factory Reset", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+      return;
+    config_save_wait();
+    config_no_save = 1;                                   /* (this copy writes nothing while it closes) */
+    if (!gui_delete_settings_files())
+    {
+      config_no_save = 0;
+      gui_notify("The settings file could not be deleted (is it read-only?)");
+      return;
+    }
+    restart_program();
+    if (!restart_closing)                                 /* the new copy did not start: nothing was lost, the settings are written again */
+    {
+      config_no_save = 0;
+      config_save();
+      gui_notify("The program could not be restarted");
+    }
+    return;
+  }
+  if (id == IDM_OPT_FOLLOWHC)
+  {
+    gui.follow_hc = !gui.follow_hc;
+    follow_high_contrast();
+    gui_update_menu();
+    config_save();
+    return;
   }
   if (gui_pico_unsupported(id))
   {
@@ -6167,7 +6697,7 @@ static void on_command_inner(int id)
   {
     gui.aspect = id - IDM_VIDEO_ASPECT_BASE;
     video_viewport_changed();
-    if (!IsZoomed(g_hwnd)) gui_resize_to_scale(gui.scale);   /* a maximized window stays maximized */
+    if (!IsZoomed(g_hwnd)) gui_resize_to_player_size();      /* a maximized window stays maximized; a size the player dragged to is kept */
     gui_update_menu();
     config_save();
     return;
@@ -6361,12 +6891,13 @@ static void on_command_inner(int id)
     return;
   }
 
-  if (id == IDM_VIEW_GROUPCONSOLE || id == IDM_VIEW_AZSTRIP || id == IDM_OPT_COVERROUND || id == IDM_OPT_COVERCAP || id == IDM_OPT_COVERCARD || id == IDM_OPT_CONSOLEBADGE)
+  if (id == IDM_VIEW_GROUPCONSOLE || id == IDM_VIEW_AZSTRIP || id == IDM_OPT_COVERROUND || id == IDM_OPT_COVERCAP || id == IDM_OPT_COVERCARD || id == IDM_OPT_CONSOLEBADGE || id == IDM_OPT_REGIONFLAGS)
   {
     if (id == IDM_VIEW_GROUPCONSOLE) { gui.group_console = !gui.group_console; browser_refilter(); }
     else if (id == IDM_VIEW_AZSTRIP) { gui.az_strip = !gui.az_strip; browser_layout_changed(); }
     else if (id == IDM_OPT_COVERCAP) { gui.cover_caption = !gui.cover_caption; browser_cover_style_changed(); }
     else if (id == IDM_OPT_CONSOLEBADGE) { gui.console_badge = !gui.console_badge; browser_redraw_covers(); }
+    else if (id == IDM_OPT_REGIONFLAGS) { gui.region_flags = !gui.region_flags; browser_redraw_covers(); }
     else if (id == IDM_OPT_COVERCARD) { gui.cover_card = !gui.cover_card; browser_cover_style_changed(); }
     else { gui.cover_round = !gui.cover_round; browser_cover_style_changed(); }
     gui_update_menu();
@@ -7056,6 +7587,13 @@ static void on_command_inner(int id)
       config_save();
       break;
 
+    case IDM_AUDIO_MUTE_DAC:
+      gui.mute_dac = !gui.mute_dac;
+      gui_notify(gui.mute_dac ? "DAC sound muted" : "DAC sound unmuted");
+      gui_update_menu();
+      config_save();
+      break;
+
     case IDM_AUDIO_MUTE_PSG:
       gui.mute_psg = !gui.mute_psg;
       gui_notify(gui.mute_psg ? "PSG sound muted" : "PSG sound unmuted");
@@ -7196,6 +7734,20 @@ static void on_command_inner(int id)
       config_save();
       break;
 
+    case IDM_EMU_VSCROLL:
+      config.enhanced_vscroll = (uint8)(!config.enhanced_vscroll);
+      if (render_bg == render_bg_m5_vs || render_bg == render_bg_m5_vs_enhanced)     /* (the drawing function is chosen again at once, not only when the game next writes the scroll mode) */
+        render_bg = config.enhanced_vscroll ? render_bg_m5_vs_enhanced : render_bg_m5_vs;
+      gui_update_menu();
+      config_save();
+      break;
+
+    case IDM_EMU_LOCKUPS:
+      config.force_dtack = (uint8)(!config.force_dtack);
+      gui_update_menu();
+      config_save();
+      break;
+
     case IDM_EMU_CDLATENCY:
       config.cd_latency = (uint8)(!config.cd_latency);
       gui_update_menu();
@@ -7293,13 +7845,6 @@ static void on_command_inner(int id)
       config_save();
       break;
 
-    case IDM_VIDEO_SMOOTH:
-      gui.smooth = !gui.smooth;
-      video_viewport_changed();
-      gui_update_menu();
-      config_save();
-      break;
-
     case IDM_INPUT_BACKGROUND:
       gui.background_input = !gui.background_input;
       gui_update_menu();
@@ -7337,6 +7882,18 @@ static void on_command_inner(int id)
 
     case IDM_VIDEO_VSYNC:
       gui.vsync = !gui.vsync;
+      gui_update_menu();
+      config_save();
+      break;
+
+    case IDM_VIDEO_VRR:
+      gui.vrr = !gui.vrr;
+      if (gui.renderer == RENDERER_D3D11)
+      {
+        video_set_renderer(gui.renderer);                  /* the swap chain is made again, the other kind */
+        video_viewport_changed();
+        if (gui.vrr && !d3d11_vrr_active()) gui_notify("Variable refresh is not available here (it needs Windows 10 and a driver that supports it)");
+      }
       gui_update_menu();
       config_save();
       break;
@@ -7521,8 +8078,8 @@ static int menu_stays_open(int id)
          (id >= IDM_SET_STYLE_BASE && id < IDM_SET_STYLE_BASE + 2) || (id >= IDM_VIDEO_THEME_BASE && id < IDM_VIDEO_THEME_BASE + THEME_COUNT) ||
          /* the Video menu: Render Filter, Visual Effects, Scanlines, NTSC Filter, Aspect Ratio, Rotation and Borders */
          id == IDM_VIDEO_FILTER_NONE || (id >= IDM_VIDEO_FILTER_BASE && id < IDM_VIDEO_FILTER_BASE + FILTER_MENU_MAX) ||
-         id == IDM_VIDEO_SMOOTH || id == IDM_VIDEO_DEINTERLACE || id == IDM_VIDEO_DITHER || id == IDM_VIDEO_INTSCALE || id == IDM_VIDEO_FLICKER ||
-         id == IDM_VIDEO_BRIGHTEN || (id >= IDM_VIDEO_LCD_BASE && id < IDM_VIDEO_LCD_BASE + 4) ||
+         (id >= IDM_VIDEO_FILTER_MODE_BASE && id < IDM_VIDEO_FILTER_MODE_BASE + 5) || id == IDM_VIDEO_DEINTERLACE || id == IDM_VIDEO_DITHER || id == IDM_VIDEO_INTSCALE || id == IDM_VIDEO_FLICKER ||
+         id == IDM_VIDEO_BRIGHTEN || (id >= IDM_VIDEO_LCD_BASE && id < IDM_VIDEO_LCD_BASE + 4) || (id >= IDM_VIDEO_LCDCOLOR_BASE && id < IDM_VIDEO_LCDCOLOR_BASE + 3) ||
          (id >= IDM_VIDEO_SCANLINE_BASE && id < IDM_VIDEO_SCANLINE_BASE + 5) || (id >= IDM_VIDEO_NTSC_BASE && id < IDM_VIDEO_NTSC_BASE + 4) ||
          (id >= IDM_VIDEO_ASPECT_BASE && id < IDM_VIDEO_ASPECT_BASE + 4) || (id >= IDM_VIDEO_ROTATE_BASE && id < IDM_VIDEO_ROTATE_BASE + 4) ||
          (id >= IDM_VIDEO_OVERSCAN_BASE && id < IDM_VIDEO_OVERSCAN_BASE + 4);
@@ -7535,7 +8092,7 @@ static void menu_flip_mark(int id)
   {
     { IDM_VIEW_LIST, 2 }, { IDM_SET_COVERSIZE_BASE, 7 }, { IDM_VIEW_DENSITY_BASE, 3 }, { IDM_SET_TBSIZE_BASE, 3 },
     { IDM_SET_STYLE_BASE, 2 }, { IDM_VIDEO_THEME_BASE, THEME_COUNT },
-    { IDM_VIDEO_LCD_BASE, 4 }, { IDM_VIDEO_SCANLINE_BASE, 5 }, { IDM_VIDEO_NTSC_BASE, 4 }, { IDM_VIDEO_ASPECT_BASE, 4 },
+    { IDM_VIDEO_LCD_BASE, 4 }, { IDM_VIDEO_LCDCOLOR_BASE, 3 }, { IDM_VIDEO_FILTER_MODE_BASE, 5 }, { IDM_VIDEO_SCANLINE_BASE, 5 }, { IDM_VIDEO_NTSC_BASE, 4 }, { IDM_VIDEO_ASPECT_BASE, 4 },
     { IDM_VIDEO_ROTATE_BASE, 4 }, { IDM_VIDEO_OVERSCAN_BASE, 4 }
   };
   int i;
@@ -7653,7 +8210,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       if (LOWORD(lp) == HTCLIENT)
       {
         int gc = gui_input_gun_cursor();
-        if (gc) { SetCursor(gc == 1 ? LoadCursor(NULL, IDC_CROSS) : NULL); return TRUE; }
+        if (gc) { SetCursor(gc == 1 ? (gui.xh_style ? gun_cursor() : LoadCursor(NULL, IDC_CROSS)) : NULL); return TRUE; }
       }
       break;
 
@@ -7670,9 +8227,22 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (menu_loop_active && emu_running && !emu_paused &&
             (!gui.pause_on_focus_loss || (menu_keyboard_mode && menu_popups_open == 0)))
         {
+          /* The game is paced by the clock here too: the timer ticks every 8 to 16 ms and the sound does not hold it back while the menu is
+             open, so two steps for every tick ran a 60 Hz game at 120% or more (the frame rate went up when the empty part of the menu bar was clicked). */
+          double now = now_seconds();
+          double period = (1.0 / emu_frame_rate()) * 100.0 / (netplay_active() ? 100 : speed_pct);
           int rep;
+
+          if (menu_next_step == 0.0 || now - menu_next_step > 0.1) menu_next_step = now;
           in_modal_loop = 0;
-          for (rep = 0; rep < 2; rep++) gui_run_step();      /* (a timer tick comes about every 16 ms: two steps keep a 60 Hz game at speed) */
+          for (rep = 0; rep < 2 && now >= menu_next_step; rep++)      /* (two at most: a tick that came late catches up) */
+          {
+            unsigned long before = session_frames;
+
+            gui_run_step();
+            if (session_frames == before) break;                       /* (no frame ran: the sound has enough for now) */
+            menu_next_step += period;
+          }
           in_modal_loop = 1;
         }
         return 0;
@@ -7840,6 +8410,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       break;
 
     case WM_SIZE:
+      if (wp == SIZE_RESTORED || wp == SIZE_MAXIMIZED) log_window_size(hwnd, LOWORD(lp), HIWORD(lp), 0);       /* (for the log: a window that shrinks by itself) */
       if (wp == SIZE_MINIMIZED || wp == SIZE_RESTORED || wp == SIZE_MAXIMIZED) picobook_main_minimized(wp == SIZE_MINIMIZED);
       if (wp == SIZE_MINIMIZED)
       {
@@ -7928,6 +8499,14 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       int active = (LOWORD(wp) != WA_INACTIVE);
 
       gui_input_set_focus(active);
+      if (gui.log_on)                                                    /* for the log: who has the focus (a game that pauses or a gun that does not answer) */
+      {
+        char other[80] = "";
+
+        if (!active && (HWND)lp) GetWindowTextA((HWND)lp, other, sizeof(other));
+        gui_log("Window %s%s%s%s (game %s%s)", active ? (LOWORD(wp) == WA_CLICKACTIVE ? "activated by a click" : "activated") : "deactivated",
+                other[0] ? ", the focus goes to \"" : "", other, other[0] ? "\"" : "", emu_running ? "running" : "none", emu_paused ? ", paused" : "");
+      }
 
       /* Clicking into the Cheat Search window is not leaving the program: the game keeps running. */
       if (!active && (HWND)lp != NULL && ((HWND)lp == cheat_search_hwnd() || (HWND)lp == memview_hwnd() || debugwin_owns((HWND)lp) || picobook_owns((HWND)lp))) { next_frame_time = 0.0; return 0; }
@@ -7989,8 +8568,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_ENTERSIZEMOVE:
       if (msg == WM_ENTERSIZEMOVE) { RECT er; GetWindowRect(hwnd, &er); drag_w0 = er.right - er.left; drag_h0 = er.bottom - er.top; }
       in_modal_loop = 1;
-      waveout_flush();
-      if (msg == WM_ENTERMENULOOP) { menu_popups_open = 0; menu_loop_active = 1; SetTimer(hwnd, 9100, 8, NULL); }
+      /* The sound queue is emptied when the game stops for a drag or a dialog. A menu leaves the game running (the timer below), and emptying
+         the queue at every click on the menu bar made the game run extra frames to fill it again: click after click it ran faster than normal. */
+      if (msg != WM_ENTERMENULOOP || gui.pause_on_focus_loss) waveout_flush();
+      if (msg == WM_ENTERMENULOOP) { menu_popups_open = 0; menu_loop_active = 1; menu_next_step = 0.0; SetTimer(hwnd, 9100, 8, NULL); }
       if (msg == WM_ENTERMENULOOP && !menu_hook)
       {
         menu_sel_id = -1;
@@ -8015,6 +8596,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
           if (emu_running && emu_paused) { emu_paused = 0; gui_update_menu(); }
         }
       }
+      if (msg == WM_EXITSIZEMOVE) { RECT cr; GetClientRect(hwnd, &cr); log_window_size(hwnd, cr.right, cr.bottom, 1); }          /* (the size a drag ended with) */
       if (msg == WM_EXITSIZEMOVE && !IsZoomed(hwnd) && !gui.fullscreen)
       {
         RECT er;
@@ -8120,6 +8702,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_SETTINGCHANGE:
       theme_handle_settingchange(hwnd);
+      follow_high_contrast();
       return 0;
 
     default:
@@ -8151,7 +8734,7 @@ static int create_main_window(void)
   wc.hIconSm       = wc.hIcon;
   wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
   wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-  wc.lpszClassName = APP_CLASS;
+  wc.lpszClassName = APP_CLASS; i18n_keep_ltr(APP_CLASS);
 
   if (!RegisterClassExA(&wc)) return 0;
 
@@ -8205,7 +8788,7 @@ static int create_main_window(void)
                            NULL, g_menu, g_inst, NULL);
   if (!g_hwnd) return 0;
 
-  g_status = CreateWindowExA(WS_EX_COMPOSITED, STATUSCLASSNAMEA, NULL,
+  g_status = CreateWindowExA(WS_EX_COMPOSITED | (i18n_rtl ? WS_EX_LAYOUTRTL | WS_EX_RTLREADING : 0), STATUSCLASSNAMEA, NULL,
                              WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                              0, 0, 0, 0, g_hwnd, NULL, g_inst, NULL);
   SendMessage(g_status, WM_SETFONT, (WPARAM)gui_get_ui_font(), TRUE);
@@ -8320,6 +8903,7 @@ static void parse_command_line(char *rom, int rom_len)
         if (cli_scale < 1 || cli_scale > 10) cli_scale = -1;
       }
       else if (!lstrcmpiW(o, L"config") && i + 1 < argc) i++;                   /* (read by the settings code: config.c) */
+      else if (!lstrcmpiW(o, L"after-pid") && i + 1 < argc) i++;                /* (used by wait_for_closing_copy) */
       else if (!lstrcmpiW(o, L"profile") && i + 1 < argc)
         WideCharToMultiByte(CP_ACP, 0, argv[++i], -1, cli_profile, (int)sizeof(cli_profile), NULL, NULL);
       else if (!lstrcmpiW(o, L"state-file") && i + 1 < argc)
@@ -8530,6 +9114,30 @@ static int hand_over_to_running_copy(void)
 
 static int folder_readonly;   /* the program's own folder cannot be written to (settings, saves and covers would be lost) */
 
+/* A copy started by a restart (a language, the interface size) waits for the copy that is closing to be gone, so it reads the settings file after that copy
+   has written it, not while it does (a half-written file read as empty gave an empty list of recently played games). */
+static void wait_for_closing_copy(void)
+{
+  int argc = 0, i;
+  LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+
+  if (!argv) return;
+  for (i = 1; i + 1 < argc; i++)
+  {
+    if (argv[i][0] == L'-' && !lstrcmpiW(argv[i] + (argv[i][1] == L'-' ? 2 : 1), L"after-pid"))
+    {
+      HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)_wtoi(argv[i + 1]));
+
+      if (h)
+      {
+        WaitForSingleObject(h, 8000);               /* (not for ever: a copy that does not close is left) */
+        CloseHandle(h);
+      }
+    }
+  }
+  LocalFree(argv);
+}
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 {
   INITCOMMONCONTROLSEX icc;
@@ -8550,6 +9158,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
   icc.dwICC  = ICC_BAR_CLASSES | ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES | ICC_LISTVIEW_CLASSES | ICC_LINK_CLASS;
   InitCommonControlsEx(&icc);
 
+  wait_for_closing_copy();
   error_init();
   config_load();
   i18n_init(gui.language);                   /* the language of the menus, windows and messages (Languages folder) */
@@ -8584,8 +9193,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
   ensure_dir("Shaders");
 #endif
   {
-    /* The console folders of the cheats and the covers (files you put there yourself), made at once (not when a game of that console is first opened). */
-    static const char *const per_console[] = { "Cheats", "Images\\Covers" };
+    /* The console folders of the ROMs, the cheats and the covers (files you put there yourself), made at once (not when a game of that console is first opened). */
+    static const char *const per_console[] = { "ROMs", "Cheats", "Images\\Covers" };
     size_t k, c;
 
     for (k = 0; k < sizeof(per_console) / sizeof(per_console[0]); k++)
@@ -8612,6 +9221,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
   }
 
   theme_apply_to_window(g_hwnd);
+  follow_high_contrast();                    /* (Windows may be in a high-contrast mode already) */
 
   if (!video_init())
   {
@@ -8628,7 +9238,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
   {
     char saved[64];
     lstrcpynA(saved, gui.render_filter, sizeof(saved));
-    video_set_filter_by_name(saved);
+    if (!video_set_filter_by_name(saved))
+    {
+      gui_log("The render filter \"%s\" of the settings file is not in this version (removed or renamed): no filter is used", saved);
+      gui_status("The render filter \"%s\" is not in this version: no filter is used", saved);
+    }
   }
 
   gui_input_init();

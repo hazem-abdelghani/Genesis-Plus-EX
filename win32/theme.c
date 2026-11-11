@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  theme.c -- see theme.h for the overall approach and the caveats
  *  around the undocumented uxtheme.dll entry points this leans on.
@@ -95,8 +96,13 @@ int theme_get_mode(void)
   return gui.theme_mode;
 }
 
+static int hc_mode;                  /* Windows is in a high-contrast mode and the program follows it: the system draws, in the system's colors */
+void theme_set_hc(int on) { hc_mode = on; }
+int theme_hc(void) { return hc_mode; }
+
 int theme_is_dark(void)
 {
+  if (hc_mode) return 0;
   if (gui.theme_mode == THEME_LIGHT) return 0;
   if (gui.theme_mode >= THEME_DARK)  return 1;
   return system_dark;
@@ -116,7 +122,7 @@ static const struct { COLORREF base, accent, edge, modern; } pal[THEME_COUNT - T
 };
 
 static int colored_theme(void);
-static int mod_look(void) { return gui.ui_style || colored_theme() >= 0; }       /* the program draws the buttons and drop-downs itself: Modern, or a colored theme (the system's cannot take a tint) */
+static int mod_look(void) { return !hc_mode && (gui.ui_style || colored_theme() >= 0); }       /* the program draws the buttons and drop-downs itself: Modern, or a colored theme (the system's cannot take a tint) */
 
 static int colored_theme(void)       /* index in pal, or -1 */
 {
@@ -553,9 +559,9 @@ static BOOL CALLBACK apply_to_child(HWND hwnd, LPARAM lparam)
     if (GetDlgCtrlID(hwnd) != IDC_BROWSER_LIST) SetWindowSubclass(hwnd, listview_grid_subclass_proc, 6, 0);
     COLORREF bg_color = GetDlgCtrlID(hwnd) == IDC_BROWSER_LIST ? theme_dk(RGB(0x24, 0x24, 0x24))   /* the ROM browser: darker, #242424 */
                                                                 : theme_dk(RGB(0x2D, 0x2D, 0x2D));  /* every other list: #2D2D2D */
-    ListView_SetBkColor(hwnd, dark ? bg_color : RGB(255, 255, 255));
-    ListView_SetTextColor(hwnd, dark ? THEME_DARK_TEXT : RGB(0, 0, 0));
-    ListView_SetTextBkColor(hwnd, dark ? bg_color : RGB(255, 255, 255));
+    ListView_SetBkColor(hwnd, dark ? bg_color : (hc_mode ? GetSysColor(COLOR_WINDOW) : RGB(255, 255, 255)));
+    ListView_SetTextColor(hwnd, dark ? THEME_DARK_TEXT : (hc_mode ? GetSysColor(COLOR_WINDOWTEXT) : RGB(0, 0, 0)));
+    ListView_SetTextBkColor(hwnd, dark ? bg_color : (hc_mode ? GetSysColor(COLOR_WINDOW) : RGB(255, 255, 255)));
 
     /* So this list's header text can be recolored; see the note above. */
     SetWindowSubclass(hwnd, listview_header_subclass_proc, 2, 0);
@@ -1151,7 +1157,7 @@ static void modern_button_hook(HWND hwnd)
 {
   LONG st = GetWindowLong(hwnd, GWL_STYLE);
   int type = st & BS_TYPEMASK;
-  int ours = (type == BS_PUSHBUTTON || type == BS_DEFPUSHBUTTON || type == BS_CHECKBOX || type == BS_AUTOCHECKBOX ||
+  int ours = !hc_mode && (type == BS_PUSHBUTTON || type == BS_DEFPUSHBUTTON || type == BS_CHECKBOX || type == BS_AUTOCHECKBOX ||
               type == BS_RADIOBUTTON || type == BS_AUTORADIOBUTTON || type == BS_3STATE || type == BS_AUTO3STATE) &&
              !(st & (BS_PUSHLIKE | BS_BITMAP | BS_ICON | BS_LEFTTEXT));      /* (text on the left of the box: left to the system) */
   DWORD_PTR dummy;
@@ -2820,6 +2826,12 @@ void theme_unconvert_menu(HMENU menu)
   }
 }
 
+/* The room of an owner-drawn menu item, written once for measuring and drawing: the gutter on the side of the picture and the check mark, the margin on
+   the other side (the shortcut ends there), and the gap between a name and its shortcut. */
+#define MENU_GUTTER  24
+#define MENU_PAD_R    8
+#define MENU_TAB_GAP 24
+
 int theme_measure_menu_ownerdraw(LPARAM lp)
 {
   MEASUREITEMSTRUCT *mis = (MEASUREITEMSTRUCT *)lp;
@@ -2855,7 +2867,22 @@ int theme_measure_menu_ownerdraw(LPARAM lp)
       *o++ = *p;
     }
     *o = '\0';
-    GetTextExtentPoint32A(hdc, plain, lstrlenA(plain), &sz);
+    {
+      char *tb = strchr(plain, '\t');
+
+      if (tb)                                            /* "Name<TAB>Shortcut": the name, a fixed gap and the shortcut (a tab character has no width of its own to rely on) */
+      {
+        SIZE s1, s2;
+
+        *tb = '\0';
+        GetTextExtentPoint32A(hdc, plain, lstrlenA(plain), &s1);
+        GetTextExtentPoint32A(hdc, tb + 1, lstrlenA(tb + 1), &s2);
+        *tb = '\t';
+        sz.cx = s1.cx + s2.cx + MENU_TAB_GAP * gui_dpi / 96;
+        sz.cy = s1.cy > s2.cy ? s1.cy : s2.cy;
+      }
+      else GetTextExtentPoint32A(hdc, plain, lstrlenA(plain), &sz);
+    }
     char slotword[64];                                  /* "Slot " in the language of the menu ("Emplacement " in French) */
     {
       int sl;
@@ -2900,7 +2927,7 @@ int theme_measure_menu_ownerdraw(LPARAM lp)
          bar, and a dropdown row about as high as its text plus 5. */
       /* (On the bar Windows adds about 15 pixels of its own to an owner-drawn title -- seen in Windows 11 at 100 % -- so the title is
          made narrower by 2, which leaves the 13 pixels between two titles that the system menu has.) */
-      mis->itemWidth  = on_bar ? (UINT)(sz.cx - 2 * dpi / 96 > 4 ? sz.cx - 2 * dpi / 96 : 4) : (UINT)sz.cx + 32;
+      mis->itemWidth  = on_bar ? (UINT)(sz.cx - 2 * dpi / 96 > 4 ? sz.cx - 2 * dpi / 96 : 4) : (UINT)sz.cx + MENU_GUTTER + MENU_PAD_R;
       mis->itemHeight = (UINT)(sz.cy + 5);
     }
   }
@@ -3154,7 +3181,15 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
       GetWindowRect(g_hwnd, &rc_window);
       {
         int full_width = rc_window.right - rc_window.left;
-        if (r.right < full_width)
+        if (i18n_rtl && r.left > 0)                              /* (the items start at the right: what is left over is on the left) */
+        {
+          RECT trailing = r;
+          trailing.left = 0;
+          trailing.right = r.left;
+          trailing.top = (r.top > 2) ? (r.top - 2) : 0;
+          FillRect(dis->hDC, &trailing, bg_br);
+        }
+        else if (r.right < full_width)
         {
           RECT trailing = r;
           trailing.left = r.right;
@@ -3189,6 +3224,8 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
     HFONT font = theme_menu_font();
     HFONT old_font = (HFONT)SelectObject(dis->hDC, font);
     RECT text_rect = r;
+    int rtl_dc = i18n_rtl && (GetLayout(dis->hDC) & LAYOUT_RTL) != 0;          /* a right-to-left language: the system gave a mirrored DC, everything drawn from the left lands on the right */
+    int mir = i18n_rtl && !rtl_dc;                                             /* ... or it did not: the drawing is mirrored here */
     UINT hide_prefix = (dis->itemState & ODS_NOACCEL) ? DT_HIDEPREFIX : 0;      /* the mnemonic underlines show only when the system asks (Alt pressed) */
 
     SetBkMode(dis->hDC, TRANSPARENT);
@@ -3210,11 +3247,12 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
         text_rect.top -= 2;
         text_rect.bottom -= 2;
       }
-      DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | DT_CENTER | DT_NOCLIP | hide_prefix);
+      DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | DT_CENTER | DT_NOCLIP | hide_prefix | (i18n_rtl ? DT_RTLREADING : 0));
       SelectClipRgn(dis->hDC, NULL);
     }
+    else if (mir) text_rect.right -= MENU_GUTTER;
     else
-      text_rect.left += 24;
+      text_rect.left += MENU_GUTTER;
 
     if ((HMENU)dis->hwndItem != GetMenu(g_hwnd))
     {
@@ -3223,8 +3261,8 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
       {
         RECT shortcut_rect = text_rect;
         *tab = '\0';
-        DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | DT_LEFT | hide_prefix);
-        shortcut_rect.right -= 8;
+        DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | (mir ? DT_RIGHT : DT_LEFT) | hide_prefix | (i18n_rtl ? DT_RTLREADING : 0));
+        if (mir) shortcut_rect.left += MENU_PAD_R; else shortcut_rect.right -= MENU_PAD_R;
         /* A shortcut hint reads as a secondary detail next to the item's own
            label, not something that should compete with it for attention --
            confirmed by direct testing, drawing it in the same bright color as
@@ -3233,12 +3271,12 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
            their single, already-dim color throughout; this only affects
            enabled ones. */
         if (!disabled && !selected) SetTextColor(dis->hDC, dark ? theme_dk(RGB(150, 150, 150)) : GetSysColor(COLOR_GRAYTEXT));       /* (the chosen item's own text color reads on its highlight: the dim one did not) */
-        DrawTextA(dis->hDC, tab + 1, -1, &shortcut_rect, DT_VCENTER | DT_SINGLELINE | DT_RIGHT);
+        DrawTextA(dis->hDC, tab + 1, -1, &shortcut_rect, DT_VCENTER | DT_SINGLELINE | (mir ? DT_LEFT : DT_RIGHT) | (i18n_rtl ? DT_RTLREADING : 0));
         *tab = '\t';   /* restore -- this string is reused every time the item repaints */
       }
       else
       {
-        DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | DT_LEFT | hide_prefix);
+        DrawTextA(dis->hDC, text, -1, &text_rect, DT_VCENTER | DT_SINGLELINE | (mir ? DT_RIGHT : DT_LEFT) | hide_prefix | (i18n_rtl ? DT_RTLREADING : 0));
       }
     }
 
@@ -3257,13 +3295,36 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
             HDC mem = CreateCompatibleDC(dis->hDC);
             HGDIOBJ oldb = SelectObject(mem, pic);
             BLENDFUNCTION bf;
-            int x = r.left + (24 - bm.bmWidth) / 2, y = r.top + ((r.bottom - r.top) - bm.bmHeight) / 2;
+            int x = r.left + (MENU_GUTTER - bm.bmWidth) / 2, y = r.top + ((r.bottom - r.top) - bm.bmHeight) / 2;
+            HBITMAP flip = NULL;
 
             if (x < r.left + 1) x = r.left + 1;
+            if (mir) x = r.right - MENU_GUTTER + (MENU_GUTTER - bm.bmWidth) / 2;
+            if (rtl_dc && bm.bmBits && bm.bmBitsPixel == 32)                 /* (a mirrored DC mirrors the picture too: it is turned over first, so that it ends up as it is) */
+            {
+              BITMAPINFO bi;
+              unsigned *dst = NULL;
+
+              memset(&bi, 0, sizeof(bi));
+              bi.bmiHeader.biSize = sizeof(bi.bmiHeader); bi.bmiHeader.biWidth = bm.bmWidth; bi.bmiHeader.biHeight = -bm.bmHeight;
+              bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
+              flip = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, (void **)&dst, NULL, 0);
+              if (flip && dst)
+              {
+                int fx, fy;
+                const unsigned *src = (const unsigned *)bm.bmBits;
+
+                for (fy = 0; fy < bm.bmHeight; fy++)
+                  for (fx = 0; fx < bm.bmWidth; fx++)
+                    dst[fy * bm.bmWidth + fx] = src[fy * (bm.bmWidthBytes / 4) + (bm.bmWidth - 1 - fx)];
+                SelectObject(mem, flip);
+              }
+            }
             bf.BlendOp = AC_SRC_OVER; bf.BlendFlags = 0; bf.SourceConstantAlpha = disabled ? 110 : 255; bf.AlphaFormat = AC_SRC_ALPHA;
             AlphaBlend(dis->hDC, x, y, bm.bmWidth, bm.bmHeight, mem, 0, 0, bm.bmWidth, bm.bmHeight, bf);
             SelectObject(mem, oldb);
             DeleteDC(mem);
+            if (flip) DeleteObject(flip);
             checked = 0;
           }
         }
@@ -3292,7 +3353,7 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
       if (radio)
       {
         /* One choice of several (a radio item): a dot, not a check mark. */
-        int rad = (r.bottom - r.top) / 7 + 1, cx = r.left + 12, cy = (r.top + r.bottom) / 2;
+        int rad = (r.bottom - r.top) / 7 + 1, cx = mir ? r.right - 12 : r.left + 12, cy = (r.top + r.bottom) / 2;
         HBRUSH dot = CreateSolidBrush(tick);
         HPEN dpen = CreatePen(PS_SOLID, 1, tick);
         HGDIOBJ ob = SelectObject(dis->hDC, dot), op = SelectObject(dis->hDC, dpen);
@@ -3307,7 +3368,7 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
         RECT box = r;
         HGDIOBJ of = SelectObject(dis->hDC, icons);
 
-        box.right = box.left + 24;
+        if (mir) box.left = box.right - MENU_GUTTER; else box.right = box.left + MENU_GUTTER;
         SetTextColor(dis->hDC, tick);
         DrawTextW(dis->hDC, L"\x2714", 1, &box, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         SelectObject(dis->hDC, of);
@@ -3316,7 +3377,7 @@ int theme_draw_menu_ownerdraw(LPARAM lp)
       {
         HPEN pen = CreatePen(PS_SOLID, 2, tick);
         HPEN old_pen = (HPEN)SelectObject(dis->hDC, pen);
-        int cx = r.left + 12;
+        int cx = mir ? r.right - 12 : r.left + 12;
         int cy = (r.top + r.bottom) / 2;
 
         MoveToEx(dis->hDC, cx - 5, cy, NULL);
@@ -3378,7 +3439,7 @@ static const menu_icon_id menu_icon_ids[] =
   { IDM_TOOLS_MOVIE_REC, 0xE7FC }, { IDM_TOOLS_MOVIE_PLAY, 0xE768 }, { IDM_TOOLS_MOVIE_STOP, 0xE71A },
   { IDM_FILE_SCREENSHOT, 0xE722 },
   { IDM_OPTIONS_SETTINGS, 0xE713 },
-  { IDM_VIDEO_FULLSCREEN_START, 0xE92D }, { IDM_VIDEO_PICTUREADJ, 0xE790 }, { IDM_INPUT_BACKGROUND, 0xE80C }, { IDM_EMU_PAUSE_UNFOCUSED, 0xF2D9 }, { IDM_EMU_AUTOSAVE, 0xF470 }, { IDM_VIDEO_ALWAYS_ON_TOP, 0xE718 }, { IDM_VIDEO_VSYNC, 0xEABB },
+  { IDM_VIDEO_FULLSCREEN_START, 0xE92D }, { IDM_VIDEO_PICTUREADJ, 0xE790 }, { IDM_INPUT_BACKGROUND, 0xE80C }, { IDM_EMU_PAUSE_UNFOCUSED, 0xF2D9 }, { IDM_EMU_AUTOSAVE, 0xF470 }, { IDM_VIDEO_ALWAYS_ON_TOP, 0xE718 }, { IDM_VIDEO_VSYNC, 0xEABB }, { IDM_VIDEO_VRR, 0xEC4A },
   { IDM_HELP_SHORTCUTS, 0xE765 }, { IDM_HELP_USERGUIDE, 0xE897 }, { IDM_HELP_ABOUT, 0xE946 },
 };
 
@@ -3389,7 +3450,7 @@ static const menu_icon_title menu_icon_titles[] =
   { "Rewind", 0xEB9E }, { "Game Speed", 0xE916 },
   { "View Mode", 0xE8A9 }, { "Theme", 0xE790 }, { "Style", 0xE771 }, { "Toolbars", 0xE737 }, { "Game List", 0xE8FD },
   { "List Spacing", 0xE8CB }, { "List Columns", 0xE8FD },
-  { "Window Size", 0xE73F }, { "Render Filter", 0xE71C }, { "Shaders", 0xEA99 }, { "Visual Effects", 0xE794 },
+  { "Window Size", 0xE73F }, { "Render Filter", 0xE71C }, { "Scaling Filter", 0xE8A3 }, { "Shaders", 0xEA99 }, { "Visual Effects", 0xE794 },
   { "Scanlines", 0xE700 }, { "NTSC Filter", 0xE7F4 }, { "Aspect Ratio", 0xE799 }, { "Rotation", 0xE7AD }, { "Run Mega CD BIOS", MENU_ICON_DISC },
   { "Borders", 0xE739 }, { "Interlaced Mode", 0xE8CB }, { "Frameskip", 0xE84F }, { "Renderer", 0xF1BA },
   { "Mute", 0xE74F }, { "Console Model", 0xE967 }, { "Tone and Effects", 0xE767 }, 
@@ -3854,6 +3915,7 @@ void theme_menu_icons(HMENU menu)
   HFONT font;
 
   if (!menu) return;
+  i18n_mirror_menu(menu);
   dpi = gui_dpi;
   sz = MulDiv(16, dpi, 96);
   if (sz < 16) sz = 16;
@@ -3946,8 +4008,14 @@ void theme_draw_dropdown_button(const DRAWITEMSTRUCT *di)
   face = dark ? (down ? theme_dk(RGB(0x55, 0x55, 0x55)) : (hot ? theme_dk(RGB(0x4A, 0x4A, 0x4A)) : theme_dk(RGB(0x38, 0x38, 0x38))))
               : (down ? RGB(0xCC, 0xE4, 0xF7) : (hot ? RGB(0xE5, 0xF1, 0xFB) : RGB(0xE1, 0xE1, 0xE1)));
   edge = dark ? theme_dk(RGB(0x6B, 0x6B, 0x6B)) : (hot ? RGB(0x00, 0x78, 0xD7) : theme_dk(RGB(0xAD, 0xAD, 0xAD)));
-  fg = dis ? (dark ? theme_dk(RGB(0x80, 0x80, 0x80)) : theme_dk(RGB(0x80, 0x80, 0x80))) : (dark ? RGB(0xF0, 0xF0, 0xF0) : RGB(0, 0, 0));
+  fg = dis ? (dark ? theme_dk(RGB(0x80, 0x80, 0x80)) : theme_dk(RGB(0x80, 0x80, 0x80))) : (dark ? RGB(0xF0, 0xF0, 0xF0) : (hc_mode ? GetSysColor(COLOR_WINDOWTEXT) : RGB(0, 0, 0)));
 
+  if (hc_mode)
+  {
+    face = GetSysColor(down ? COLOR_BTNSHADOW : COLOR_BTNFACE);
+    edge = GetSysColor(COLOR_BTNTEXT);
+    fg = GetSysColor(dis ? COLOR_GRAYTEXT : COLOR_BTNTEXT);
+  }
   if (mod_look())
   {
     /* Modern (or a colored theme): the same flat rounded look as the other buttons. */
@@ -4020,6 +4088,7 @@ void theme_draw_dropdown_button(const DRAWITEMSTRUCT *di)
 COLORREF theme_accent_bg(void)
 {
   int a = gui.accent < 0 || gui.accent > GUI_ACCENT_HIDDEN ? 0 : gui.accent;
+  if (hc_mode) return GetSysColor(COLOR_HIGHLIGHT);
   if (a) return accent_bg[a];
   if (gui.ui_style) return modern_blue();          /* every chosen row of every list: the same color as the Modern style's other highlights */
   if (colored_theme() >= 0) return pal[colored_theme()].accent;
@@ -4036,6 +4105,7 @@ COLORREF theme_accent_swatch(int i)
 COLORREF theme_accent_edge(void)
 {
   int a = gui.accent < 0 || gui.accent > GUI_ACCENT_HIDDEN ? 0 : gui.accent;
+  if (hc_mode) return GetSysColor(COLOR_HIGHLIGHT);
   if (a) return accent_edge[a];
   if (gui.ui_style) return modern_blue();
   if (colored_theme() >= 0) return pal[colored_theme()].edge;

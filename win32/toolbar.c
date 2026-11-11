@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  toolbar.c -- flat icon buttons for the ROM browser's toolbar.
  *
@@ -591,6 +592,7 @@ static void tb_plate(HDC dc, int x0, int y0, int x1, int y1, int rad, COLORREF a
 int tb_draw(const DRAWITEMSTRUCT *di)
 {
   if (!di) return 0;
+  if (GetLayout(di->hDC) & LAYOUT_RTL) SetLayout(di->hDC, 0);       /* (a mirrored toolbar: its pictures are drawn as they are) */
 
   if (di->CtlType == ODT_STATIC && GetPropA(di->hwndItem, "tbsep"))
   {

@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  i18n.h -- translations. The program's own text is English; a language is a
  *  UTF-8 file in the Languages folder (name.po, the gettext format that Poedit
@@ -16,18 +17,23 @@
 
 #include <windows.h>
 
+extern int i18n_rtl;                               /* the language is written right to left (its file says Language-Direction: rtl): the dialogs are mirrored */
 extern int i18n_on;                                /* a language other than English is loaded */
 
 const char *tr(const char *s);                     /* the translation of s, or s */
 const char *i18n_menu_title(HMENU sub);            /* the English title a translated submenu had (NULL: none was kept) */
 const char *i18n_untr(const char *s);              /* the English text a translation was made from (or s) */
+void i18n_filter(const char *in, char *out, size_t cap);   /* a file window's list of kinds of file ("text\0pattern\0...\0\0") with the texts translated */
 char *i18n_block(const char *text);                /* a long text (many lines) translated line by line: malloc'd, free() it */
+int  i18n_find_windows_language(char *out, int len);   /* the .po file in the Languages folder that is for the language of Windows (its name without .po), 1 when there is one */
 void i18n_init(const char *language);              /* loads Languages\<language>.po ("" or "English": none) and starts the dialog hook */
 int  i18n_list(char names[][48], int max);         /* the languages found in the Languages folder */
 void i18n_language_name(const char *file, char *out, int len);   /* the name a language gives itself (for example Francais), for the menu: never translated */
 int  i18n_text_ratio(HWND w);                      /* percent: how much wider the text of its controls would need the window's layout to be (100: fits) */
 void i18n_menu(HMENU menu);                        /* translates a menu and its submenus */
 void i18n_language_menu(HMENU menu, const char *current);   /* fills the Options > Language submenu (the one holding IDM_OPT_LANGUAGE_BASE) */
+void i18n_keep_ltr(const char *cls);              /* a window class that is never mirrored in a right-to-left language (call it where the class is registered) */
+void i18n_mirror_menu(HMENU menu);                  /* a right-to-left language: the items of the menu (and its submenus) run from the right */
 int  i18n_language_from_command(int cmd, char *name, int len);   /* the language a Language menu command picks (0: not one) */
 
 #ifndef IDM_OPT_LANGUAGE_BASE

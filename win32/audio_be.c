@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  audio_be.c -- the two modern sound outputs: XAudio2 and WASAPI (shared).
  *

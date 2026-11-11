@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  picobook.c -- the "Storyware" window: the picture of the page of a Sega Pico storybook that is open.
  *
@@ -314,7 +315,7 @@ void picobook_show(int page)
       wc.hInstance = GetModuleHandle(NULL);
       wc.hCursor = LoadCursor(NULL, IDC_CROSS);          /* the pen */
       wc.hIcon = LoadIconA(GetModuleHandle(NULL), MAKEINTRESOURCEA(IDI_APPICON));
-      wc.lpszClassName = PB_CLASS;
+      wc.lpszClassName = PB_CLASS; i18n_keep_ltr(PB_CLASS);
       if (!RegisterClassA(&wc)) return;
       pb_class_done = 1;
     }

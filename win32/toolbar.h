@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  toolbar.h -- the flat, icon-only buttons of the ROM browser's toolbar.
  *  The icons are drawn in code (no picture files), in the theme's text

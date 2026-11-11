@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  config.c -- default settings and INI persistence.
  *
@@ -16,6 +17,8 @@
 #include "gui.h"
 #include "netplay.h"
 #include "theme.h"
+
+#undef wsprintfA        /* (gui.h makes it look its format up in the language file: what this file writes to the settings file must never be translated) */
 
 uint8 gui_user_ports[2] = { SYSTEM_GAMEPAD, SYSTEM_GAMEPAD };       /* the devices of the two ports as the user chose them (input.system may differ for the running game) */
 
@@ -192,6 +195,7 @@ void set_config_defaults(void)
   gui.crash_report        = 0;
   gui.cover_card          = 0;
   gui.console_badge        = 1;
+  gui.region_flags         = 1;
   gui.color_icons         = 0;
   gui.cover_cache         = 1;
   gui.toolbar_size        = 1;
@@ -204,8 +208,9 @@ void set_config_defaults(void)
   gui.row_density         = 1;
   gui.browser_col_order[0] = -1;
   gui.bezel_path[0] = '\0';
-  gui.stereo_idx = 1; gui.mouse_sens = 2; gui.gun_ox = gui.gun_oy = 3;
+  gui.vs_limit = 3; gui.cpu_speed = 2; gui.stereo_idx = 1; gui.mouse_sens = 2; gui.gun_ox = gui.gun_oy = 3;
   gui.adj_contrast = gui.adj_sat = gui.adj_gamma = 100; gui.adj_hue = 0; gui.adj_bright = 0;
+  gui.lcd_color = 0;
   gui.bar_color = 0; gui.fs_exclusive = 0; gui.fs_res_w = gui.fs_res_h = 0; gui.confine_mouse = 0;
   gui.audio_device[0] = '\0';
   gui.scan_subfolders     = 1;
@@ -217,6 +222,12 @@ void set_config_defaults(void)
   gui.browser_col_pct[1] = 36;
   gui.renderer            = RENDERER_D3D11;
   gui.vsync               = 0;
+  gui.vrr                 = 0;
+  gui.stick_shape         = 0;
+  gui.crossfeed           = 0;
+  gui.xh_style = 0; gui.xh_color = 0; gui.xh_size = 1;
+  gui.follow_hc           = 0;
+  gui.gun_border          = 0;
   gui.theme_mode          = 0;   /* THEME_AUTO */
   gui.ui_style            = 0;   /* Classic */
   gui.large_ui            = 0;
@@ -247,6 +258,8 @@ void set_config_defaults(void)
   }
   gui.mute_fm             = 0;
   gui.mute_psg            = 0;
+  gui.mute_dac            = 0;
+  gui.dac_level           = 100;
   gui.mute_pwm            = 0;
   gui.pwm_level           = 100;
   gui.autosave            = 1;
@@ -447,9 +460,29 @@ static int ini_put_banner(FILE *fp, const char *title)
    first appeared. On any failure the old file is left as it was. */
 static void ini_write(const ini_item *q, int n)
 {
+  if (config_no_save) return;
   char tmp[GUI_PATH_LEN + 8];
   FILE *fp;
   int i, j, ok = 1;
+
+  if (gui.log_on)                                        /* for the log: what changed since the file was last written (the play history, recent files and favorites are left out) */
+  {
+    int shown = 0;
+
+    for (i = 0; i < n; i++)
+    {
+      char old[600];
+
+      if (!lstrcmpiA(q[i].section, "history") || !lstrcmpiA(q[i].section, "recent") || !lstrcmpiA(q[i].section, "favorites")) continue;
+      GetPrivateProfileStringA(q[i].section, q[i].key, "\x01", old, sizeof(old), ini_path);
+      if (lstrlenA(old) >= (int)sizeof(old) - 1) continue;               /* (too long to compare: it would always look changed) */
+      if (lstrcmpA(old, q[i].value))
+      {
+        if (++shown <= 80) gui_log("Setting changed: [%s] %s: %s -> %s", q[i].section, q[i].key, old[0] == '\x01' ? "(not there)" : old, q[i].value);
+      }
+    }
+    if (shown > 80) gui_log("Setting changed: and %d more", shown - 80);
+  }
 
   wsprintfA(tmp, "%s.tmp", ini_path);
   fp = fopen(tmp, "wb");
@@ -606,7 +639,13 @@ void config_load(void)
   gui.scale      = clampi(ini_get("video", "scale", gui.scale), 1, 10);
   gui.aspect     = clampi(ini_get("video", "aspect", gui.aspect), 0, 3);
   gui.rotation   = clampi(ini_get("video", "rotation", gui.rotation), 0, 3);
-  gui.smooth     = ini_get("video", "smooth", gui.smooth) ? 1 : 0;
+  gui.smooth     = clampi(ini_get("video", "scaling_filter", -1), -1, 4);
+  if (gui.smooth < 0)                                    /* a file of an earlier build: "smooth" 0 nearest, 1 bilinear, 2 sharp bilinear (now Sharp Nearest), 3 and up bicubic ... */
+  {
+    int old = clampi(ini_get("video", "smooth", 0), 0, 8);
+
+    gui.smooth = old == 0 ? 0 : (old == 1 ? 2 : (old == 2 ? 1 : 4));
+  }
   gui.scanline_pct = clampi(ini_get("video", "scanline_pct", gui.scanline_pct), 0, 100);
   gui.brighten   = ini_get("video", "brighten", gui.brighten) ? 1 : 0;
   deint_ini = ini_get("video", "deinterlacing", -1);                       /* -1: a settings file from before Deinterlacing existed */
@@ -672,6 +711,7 @@ void config_load(void)
     gui.cover_round    = ini_get("general", "cover_round", 0) ? 1 : 0;
     gui.cover_card     = ini_get("general", "cover_card", 0) ? 1 : 0;
     gui.console_badge   = ini_get("general", "console_badge", 1) ? 1 : 0;
+    gui.region_flags    = ini_get("general", "region_flags", 1) ? 1 : 0;
     gui.color_icons    = ini_get("general", "color_icons", 0) ? 1 : 0;
     gui.cover_caption  = clampi(ini_get("general", "cover_caption", 0), 0, 1);
     for (k = 0; k < GUI_DIR_N; k++) ini_get_str("directories", gui_dir_names[k], gui.dir_path[k], GUI_PATH_LEN);
@@ -735,6 +775,14 @@ void config_load(void)
     gui.renderer = clampi(ini_get("video", "renderer", legacy_default), RENDERER_GDI, RENDERER_D3D11);
   }
   gui.vsync = ini_get("video", "vsync", gui.vsync) ? 1 : 0;
+  gui.vrr   = ini_get("video", "vrr", gui.vrr) ? 1 : 0;
+  gui.stick_shape = clampi(ini_get("input", "stick_shape", gui.stick_shape), 0, 3);
+  gui.crossfeed   = clampi(ini_get("audio", "crossfeed", gui.crossfeed), 0, 3);
+  gui.xh_style    = clampi(ini_get("input", "crosshair_shape", gui.xh_style), 0, 8);
+  gui.xh_color    = clampi(ini_get("input", "crosshair_color", gui.xh_color), 0, 5);
+  gui.xh_size     = clampi(ini_get("input", "crosshair_size", gui.xh_size), 0, 3);
+  gui.follow_hc   = ini_get("general", "follow_high_contrast", gui.follow_hc) ? 1 : 0;
+  gui.gun_border = clampi(ini_get("video", "gun_border", gui.gun_border), 0, 4);
   gui.theme_mode = clampi(ini_get("video", "theme_mode", gui.theme_mode), 0, THEME_COUNT - 1);
   gui.ui_style   = clampi(ini_get("video", "ui_style", gui.ui_style), 0, 1);
   gui.large_ui = ini_get("video", "large_ui", gui.large_ui) ? 1 : 0;
@@ -826,6 +874,8 @@ void config_load(void)
   }
   gui.mute_fm  = ini_get("audio", "mute_fm", gui.mute_fm) ? 1 : 0;
   gui.mute_psg = ini_get("audio", "mute_psg", gui.mute_psg) ? 1 : 0;
+  gui.mute_dac = ini_get("audio", "mute_dac", gui.mute_dac) ? 1 : 0;
+  gui.dac_level = clampi(ini_get("audio", "dac_level", gui.dac_level), 0, 150);
   gui.mute_pwm = ini_get("audio", "mute_pwm", gui.mute_pwm) ? 1 : 0;
   gui.pwm_level = clampi(ini_get("audio", "pwm_level", gui.pwm_level), 0, 200);
   gui.autosave = ini_get("general", "autosave", gui.autosave) ? 1 : 0;
@@ -941,6 +991,11 @@ void config_load(void)
   config.lock_on       = (uint8)clampi(ini_get("system", "lock_on", config.lock_on), 0, 3);
   config.addr_error    = (uint8)(ini_get("system", "address_error", config.addr_error) ? 1 : 0);
   config.cd_latency    = (uint8)(ini_get("system", "cd_latency", config.cd_latency) ? 1 : 0);
+  config.enhanced_vscroll = (uint8)(ini_get("video", "enhanced_vscroll", config.enhanced_vscroll) ? 1 : 0);
+  gui.vs_limit         = clampi(ini_get("video", "enhanced_vscroll_limit", gui.vs_limit), 0, 7);
+  config.enhanced_vscroll_limit = (uint8)(2 * (gui.vs_limit + 1));
+  config.force_dtack   = (uint8)(ini_get("system", "lock_ups", config.force_dtack ? 0 : 1) ? 0 : 1);
+  gui.cpu_speed        = clampi(ini_get("system", "cpu_speed", gui.cpu_speed), 0, 7);
   if (ini_get("system", "options_rev", 0) < 1)   /* the light gun cursors were switched on before they became off by default */
   {
     config.gun_cursor[0] = config.gun_cursor[1] = 0;
@@ -1000,6 +1055,7 @@ void config_load(void)
   gui.bass             = clampi(ini_get("audio", "bass_boost", gui.bass), 0, 3);
   gui.log_on           = ini_get("general", "log", gui.log_on) ? 1 : 0;
   gui.pause_pad        = ini_get("input", "pause_on_pad_disconnect", gui.pause_pad) ? 1 : 0;
+  gui.keep_aspect      = ini_get("video", "keep_aspect", gui.keep_aspect) ? 1 : 0;
   gui.normalize        = ini_get("audio", "normalize", gui.normalize) ? 1 : 0;
   gui.autosave_min     = clampi(ini_get("general", "state_backup", gui.autosave_min), 0, 4);
   gui.skip_len         = clampi(ini_get("general", "skip_intro_choice", gui.skip_len), 0, 6);
@@ -1025,6 +1081,7 @@ void config_load(void)
   gui.adj_bright   = clampi(ini_get("video", "brightness_pct", gui.adj_bright), -50, 50);
   gui.adj_contrast = clampi(ini_get("video", "contrast_pct", gui.adj_contrast), 50, 150);
   gui.adj_sat      = clampi(ini_get("video", "saturation_pct", gui.adj_sat), 0, 200);
+  gui.lcd_color    = clampi(ini_get("video", "lcd_color", gui.lcd_color), 0, 2);
   gui.adj_gamma    = clampi(ini_get("video", "gamma_pct", gui.adj_gamma), 50, 150);
   gui.adj_hue      = clampi(ini_get("video", "hue_degrees", gui.adj_hue), -30, 30);
   gui.bar_color    = clampi(ini_get("video", "border_color", gui.bar_color), 0, 6);
@@ -1123,8 +1180,11 @@ void config_load(void)
 }
 
 
+int config_no_save;                          /* (see config.h) */
+
 void config_save(void)
 {
+  if (config_no_save) return;
   browser_capture_columns();
   char key[64];
   int player, i;
@@ -1135,7 +1195,7 @@ void config_save(void)
   ini_put("video", "scale", gui.scale);
   ini_put("video", "aspect", gui.aspect);
   ini_put("video", "rotation", gui.rotation);
-  ini_put("video", "smooth", gui.smooth);
+  ini_put("video", "scaling_filter", gui.smooth);
   ini_put("video", "scanline_pct", gui.scanline_pct);
   ini_put("video", "brighten", gui.brighten);
   ini_put("video", "deinterlacing", gui.deinterlace);
@@ -1172,8 +1232,16 @@ void config_save(void)
   ini_put("video", "browser_col1_pct", gui.browser_col_pct[1]);
   ini_put("video", "renderer", gui.renderer);
   ini_put("video", "vsync", gui.vsync);
-  ini_put("video", "theme_mode", gui.theme_mode);
-  ini_put("video", "ui_style", gui.ui_style);
+  ini_put("video", "vrr", gui.vrr);
+  ini_put("input", "stick_shape", gui.stick_shape);
+  ini_put("audio", "crossfeed", gui.crossfeed);
+  ini_put("input", "crosshair_shape", gui.xh_style);
+  ini_put("input", "crosshair_color", gui.xh_color);
+  ini_put("input", "crosshair_size", gui.xh_size);
+  ini_put("general", "follow_high_contrast", gui.follow_hc);
+  ini_put("video", "gun_border", gui.gun_border);
+  ini_put("video", "theme_mode", gui_theme_for_ini());          /* (not the light theme that high-contrast mode puts on for a while) */
+  ini_put("video", "ui_style", gui_style_for_ini());
   ini_put("video", "large_ui", gui.large_ui);
   ini_put("general", "cheats_enabled", gui.cheats_enabled);
   ini_put("general", "browser_grid_view", gui.browser_grid_view);
@@ -1212,6 +1280,8 @@ void config_save(void)
   }
   ini_put("audio", "mute_fm", gui.mute_fm);
   ini_put("audio", "mute_psg", gui.mute_psg);
+  ini_put("audio", "mute_dac", gui.mute_dac);
+  ini_put("audio", "dac_level", gui.dac_level);
   ini_put("audio", "mute_pwm", gui.mute_pwm);
   ini_put("audio", "pwm_level", gui.pwm_level);
   ini_put("general", "autosave", gui.autosave);
@@ -1265,6 +1335,10 @@ void config_save(void)
   ini_put("system", "lock_on", config.lock_on);
   ini_put("system", "address_error", config.addr_error);
   ini_put("system", "cd_latency", config.cd_latency);
+  ini_put("video", "enhanced_vscroll", config.enhanced_vscroll);
+  ini_put("video", "enhanced_vscroll_limit", gui.vs_limit);
+  ini_put("system", "lock_ups", config.force_dtack ? 0 : 1);
+  ini_put("system", "cpu_speed", gui.cpu_speed);
   ini_put("system", "options_rev", 1);
   ini_put("input", "invert_mouse", config.invert_mouse);
   ini_put("input", "gun_cursor", config.gun_cursor[0]);
@@ -1285,7 +1359,7 @@ void config_save(void)
   ini_put("general", "confirm_exit", gui.confirm_exit);
   ini_put("general", "keep_awake", gui.keep_awake);
   ini_put("general", "single_instance", gui.single_instance);
-  ini_put("general", "accent", gui.accent);
+  ini_put("general", "accent", gui_accent_for_ini());
   ini_put("general", "accent_rev", 4);
   ini_put("general", "crash_report", gui.crash_report);
   ini_put("general", "cover_cache", gui.cover_cache);
@@ -1297,6 +1371,7 @@ void config_save(void)
   ini_put("audio", "bass_boost", gui.bass);
   ini_put("general", "log", gui.log_on);
   ini_put("input", "pause_on_pad_disconnect", gui.pause_pad);
+  ini_put("video", "keep_aspect", gui.keep_aspect);
   ini_put("audio", "normalize", gui.normalize);
   ini_put("general", "state_backup", gui.autosave_min);
   ini_put("general", "skip_intro_choice", gui.skip_len);
@@ -1345,6 +1420,7 @@ void config_save(void)
     ini_put("general", "cover_round", gui.cover_round);
     ini_put("general", "cover_card", gui.cover_card);
     ini_put("general", "console_badge", gui.console_badge);
+    ini_put("general", "region_flags", gui.region_flags);
     ini_put("general", "color_icons", gui.color_icons);
     ini_put("general", "cover_caption", gui.cover_caption);
     for (k = 0; k < GUI_DIR_N; k++) ini_put_str("directories", gui_dir_names[k], gui.dir_path[k]);
@@ -1371,6 +1447,7 @@ void config_save(void)
   ini_put("video", "brightness_pct", gui.adj_bright);
   ini_put("video", "contrast_pct", gui.adj_contrast);
   ini_put("video", "saturation_pct", gui.adj_sat);
+  ini_put("video", "lcd_color", gui.lcd_color);
   ini_put("video", "gamma_pct", gui.adj_gamma);
   ini_put("video", "hue_degrees", gui.adj_hue);
   ini_put("video", "border_color", gui.bar_color);
@@ -1438,7 +1515,7 @@ void config_history_load(void)
 
   ini_init_path();
   n = ini_get("history", "count", 0);
-  for (i = 0; i < n && i < 1000; i++)
+  for (i = 0; i < n && i < 1000; i++)      /* (an older version kept 1000: all are read, history.c keeps the newest) */
   {
     char *bar;
     wsprintfA(key, "game%d", i);
@@ -1446,7 +1523,11 @@ void config_history_load(void)
     bar = strchr(val, '|');
     if (!bar || !bar[1]) continue;
     *bar = '\0';
-    history_restore(bar + 1, strtoull(val, NULL, 10));
+    {
+      unsigned long long when = strtoull(val, NULL, 10);
+
+      if (when) history_restore(bar + 1, when);            /* (a line that is not "time|path" is left out) */
+    }
   }
 }
 
