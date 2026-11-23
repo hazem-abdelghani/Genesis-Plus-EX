@@ -241,11 +241,11 @@ msgstr "%d+ 个游戏（已达上限）"
 
 #: browser.c:1203
 msgid "%d of %d game%s"
-msgstr "%d / %d 个游戏"
+msgstr "%d / %d 款游戏%.0s"
 
 #: browser.c:1208
 msgid "%d game%s found"
-msgstr "找到 %d 个游戏"
+msgstr "找到 %d 款游戏%.0s"
 
 #: browser.c:2205
 msgid "%lu.%lu GB"
@@ -817,7 +817,7 @@ msgstr "该文件中未找到金手指。"
 
 #: cheats.c:2418
 msgid "Loaded %d code%s from %s."
-msgstr "已从 %s 载入 %d 个代码。"
+msgstr "已载入 %d 个代码%.0s，来自 %s。"
 
 #: cheats.c:2445
 msgid "Select a code to remove it."
@@ -841,7 +841,7 @@ msgstr "未找到金手指 —— 需要 RetroArch 的 cheatN_code 格式。"
 
 #: cheats.c:2490
 msgid "Loaded %d code%s from file."
-msgstr "已从文件载入 %d 个代码。"
+msgstr "已从文件载入 %d 个代码%.0s。"
 
 #: cheats.c:2501
 msgid "Nothing to save: the list is empty."
@@ -857,11 +857,11 @@ msgstr "无法写入该文件。"
 
 #: cheats.c:2508
 msgid "Saved %d code%s."
-msgstr "已保存 %d 个代码。"
+msgstr "已保存 %d 个代码%.0s。"
 
 #: cheats.c:2544
 msgid "%d cheat%s active"
-msgstr "%d 条金手指启用"
+msgstr "%d 个金手指%.0s 已启用"
 
 #: cheats.c:2548
 msgid "No cheats active"
@@ -877,7 +877,7 @@ msgstr "未找到。点击“首次扫描”重新开始。"
 
 #: cheats.c:2665
 msgid "%d address%s left."
-msgstr "剩余 %d 个地址。"
+msgstr "剩余 %d 个地址%.0s。"
 
 #: cheats.c:2666
 msgid "%d addresses: click Next Scan to narrow it down."
@@ -1465,7 +1465,7 @@ msgstr "断点位于 $%X"
 
 #: dbgcpu.c:616
 msgid "%s of $%X (%d byte%s) at $%X"
-msgstr "%s $%X（%d 字节），地址 $%X"
+msgstr "%s 从 $%X 起（%d 字节%.0s），位于 $%X"
 
 #: dbgcpu.c:616
 msgid "Read"
@@ -5509,7 +5509,7 @@ msgstr ""
 
 #: dialogs.c:6197
 msgid "%d frame%s"
-msgstr "%d 帧"
+msgstr "%d 帧%.0s"
 
 #: dialogs.c:6203
 msgid "Your address on this network: %s"
@@ -6989,7 +6989,7 @@ msgstr "Lock-On 卡带将在下次载入 ROM 时生效"
 
 #: main.c:6881
 msgid "Removed %d saved cover%s."
-msgstr "已移除 %d 个已保存的封面。"
+msgstr "已删除 %d 个已保存封面%.0s。"
 
 #: main.c:6881
 msgid "There were no saved covers."
@@ -7241,7 +7241,7 @@ msgstr "请先打开游戏，然后将文件拖到游戏上"
 
 #: main.c:8150
 msgid "%d cheat%s added"
-msgstr "已添加 %d 条金手指"
+msgstr "已添加 %d 个金手指%.0s"
 
 #: main.c:8151
 msgid "Could not read that cheat file"
@@ -7389,7 +7389,7 @@ msgstr "现在无法更改此内存"
 
 #: memview.c:910
 msgid "%d byte%s pasted"
-msgstr "已粘贴 %d 个字节"
+msgstr "已粘贴 %d 字节%.0s"
 
 #: memview.c:930
 msgid "Dump to File"
@@ -7533,7 +7533,7 @@ msgstr "两个游戏的起始状态不同，因此会话已结束。\n\n请在�
 
 #: netplay.c:466
 msgid "Netplay started: you are Player %d (input delay %d frame%s)"
-msgstr "联机已开始：你是玩家 %d（输入延迟 %d 帧）"
+msgstr "联机已开始：你是玩家 %d（输入延迟 %d 帧%.0s）"
 
 #: netplay.c:607
 msgid "Bad handshake data from the other player."
@@ -7881,7 +7881,7 @@ msgstr "32X 事件"
 
 #: ramsearch.c:142
 msgid "%d result%s"
-msgstr "%d 个结果"
+msgstr "%d 个结果%.0s"
 
 #: ramsearch.c:270
 msgid "Pick results in the list first"
