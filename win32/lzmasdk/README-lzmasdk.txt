@@ -18,14 +18,10 @@ the same LzmaDec_*/CpuArch_* symbols. Makefile.win32 points this directory's
 instead. This is also why 7z archive support only builds with CHD=1 (the
 Makefile default).
 
-Nothing needed to *create* a .7z archive is included, and no compression
-filters beyond what a plain LZMA/LZMA2/BCJ2-compressed archive needs (built
-with -DZ7_NO_METHODS_FILTERS, which this port's Makefile passes, to leave out
-the Delta/BCJ(x86)/ARM/PPC/IA64/SPARC/RISCV branch filters entirely -- 7-Zip
-does not select any of those for generic files like ROMs unless a user
-explicitly opts into them in the advanced compression settings, which no
-ROM-archiving tool does). PPMd support is left off the same way upstream
-already supports turning it off: Z7_PPMD_SUPPORT is simply never defined,
+Nothing needed to *create* a .7z archive is included. The Delta and branch (BCJ x86, ARM, ARM64, PPC, IA64, SPARC, RISC-V) filters are decoded
+too: their code comes from the same 24.05 SDK that CHD support builds (Bra.c, Bra86.c, BraIA64.c, Delta.c in
+core/cd_hw/libchdr/deps/lzma-24.05/src). 7-Zip chooses the Delta filter by itself for WAV files, so an archive of audio (an MD+ game)
+needs it. PPMd support is left off the way upstream already supports turning it off: Z7_PPMD_SUPPORT is simply never defined,
 so Ppmd7.h is never included and no PPMd code is compiled in.
 
 See win32/sevenzip.c for the small wrapper this port actually calls, and its

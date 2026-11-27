@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  audio.c -- sound output through waveOut.
  *
@@ -329,11 +330,52 @@ static void enhance(short *d, int frames)
   }
 }
 
+/* Headphone crossfeed: a little of each ear's sound, low-passed (the head hides the highs of the far ear), goes into the other ear, which
+   softens the hard left and right of the Mega Drive's stereo on headphones. */
+static volatile int xf_k;                 /* how much, in 256ths: 0 = off */
+static volatile int xf_reset;             /* the filter starts again at the next block (the audio code does it: the filter is its own) */
+static int xf_lp_l, xf_lp_r;              /* the low-passed sound of each ear, 16 bits fixed point */
+
+void waveout_set_crossfeed(int strength)
+{
+  static const int k[4] = { 0, 40, 80, 120 };
+
+  xf_k = k[strength < 0 ? 0 : (strength > 3 ? 3 : strength)];
+  xf_reset = 1;
+}
+
+static void crossfeed_in_place(short *s, int frames)
+{
+  int i;
+
+  for (i = 0; i < frames; i++)
+  {
+    int l = s[2 * i], r = s[2 * i + 1];
+
+    xf_lp_l += (int)((((long long)(l << 8) - xf_lp_l) * 3200) >> 15);          /* (a one-pole low-pass at about 700 Hz at 44.1 kHz) */
+    xf_lp_r += (int)((((long long)(r << 8) - xf_lp_r) * 3200) >> 15);
+    l = ((l << 8) + (xf_k * (xf_lp_r >> 8))) / (256 + xf_k);
+    r = ((r << 8) + (xf_k * (xf_lp_l >> 8))) / (256 + xf_k);
+    s[2 * i]     = (short)(l > 32767 ? 32767 : (l < -32768 ? -32768 : l));
+    s[2 * i + 1] = (short)(r > 32767 ? 32767 : (r < -32768 ? -32768 : r));
+  }
+}
+
 /* Applies stereo width and the master volume to `frames` frames of samples. */
-static void scale_into(const short *samples, short *dst, int frames)
+static void scale_into(const short *samples_in, short *dst, int frames)
 {
   int scale = (wav.volume * 256) / 100;
   int i;
+  const short *samples = samples_in;
+  short xf_buf[WAVE_FRAMES_MAX * 2];
+
+  if (xf_reset) { xf_lp_l = xf_lp_r = 0; xf_reset = 0; }
+  if (xf_k && frames > 0 && frames <= WAVE_FRAMES_MAX)             /* (a block is never longer than the buffer) */
+  {
+    memcpy(xf_buf, samples_in, (size_t)frames * 2 * sizeof(short));
+    crossfeed_in_place(xf_buf, frames);
+    samples = xf_buf;
+  }
 
   if (stereo_pct != 100)
   {

@@ -182,6 +182,9 @@ LDFLAGS += $(DASMLIBS)
 endif
 endif # use_sh2drc
 SRCS_COMMON += $(R)cpu/sh2/mame/sh2pico.c
+ifndef drc_debug
+SRCS_COMMON += $(R)cpu/sh2/mame/sh2dasm.c
+endif
 endif # !no_32x
 
 OBJS_COMMON := $(SRCS_COMMON:.c=.o)

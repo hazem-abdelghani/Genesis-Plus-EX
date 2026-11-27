@@ -28,6 +28,21 @@ static void SekExecM68k(int cyc_do)
 #elif defined(EMU_M68K)
   Pico.t.m68c_cnt += m68k_execute(cyc_do) - cyc_do;
 #elif defined(EMU_F68K)
+  if (gpex_cpu_hook)	/* Genesis Plus EX: the program's CPU Debugger looks at every instruction, so the 68000 runs one at a time */
+  {
+    int done = 0;
+
+    while (done < cyc_do) {
+      int c;
+
+      gpex_cpu_hook(0, SekPc);
+      c = fm68k_emulate(&PicoCpuFM68k, 1, 0);
+      if (c <= 0) { done = cyc_do; break; }
+      done += c;
+    }
+    Pico.t.m68c_cnt += done - cyc_do;
+  }
+  else
   Pico.t.m68c_cnt += fm68k_emulate(&PicoCpuFM68k, cyc_do, 0) - cyc_do;
 #endif
   SekCyclesLeft = 0;

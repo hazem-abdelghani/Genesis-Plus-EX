@@ -22,6 +22,20 @@ static struct {
 
 enum { PWM_IRQ_LOCKED, PWM_IRQ_STOPPED, PWM_IRQ_LOW, PWM_IRQ_HIGH };
 
+/* Genesis Plus EX: the PWM chip as it is now, for the program's Sound Viewer: the control and cycle registers, the last sample of each
+ * channel (as played, signed), how many samples wait in each FIFO, and the interrupt interval the chip works with and the one programmed. */
+void gpex_pwm_state_get(int out[8])
+{
+  out[0] = Pico32x.regs[0x30 / 2];
+  out[1] = Pico32x.regs[0x32 / 2] & 0x0fff;
+  out[2] = pwm.current[0];
+  out[3] = pwm.current[1];
+  out[4] = Pico32x.pwm_p[0];
+  out[5] = Pico32x.pwm_p[1];
+  out[6] = pwm.irq_reload;
+  out[7] = pwm.irq_timer;
+}
+
 /* Genesis Plus EX: where in the frame (0..65535) a moment of the 68000 clock is, for the VGM recording. The clock counts on from
  * frame to frame; the frame began at m68c_frame_start. */
 static inline unsigned gpex_pwm_frac(int m68k_cycles)

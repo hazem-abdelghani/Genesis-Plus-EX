@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  resource.h -- identifiers shared between gpex.rc and the C sources.
  ****************************************************************************/
@@ -47,7 +48,15 @@
 #define IDM_EMU_BIOS              240
 #define IDM_EMU_ADDRERROR         241
 #define IDM_EMU_CHEATSEARCH       249   /* Tools > Cheat Search... */
+#define IDM_TOOLS_DEBUGGER        2802  /* Tools > Debugger... (the Debugger window, debugger.c) */
+#define IDM_EMU_PICO_PAGEPREV     2804  /* Sega Pico: the book's previous page (hotkey) */
+#define IDM_EMU_PICO_PAGENEXT     2805  /* Sega Pico: the book's next page (hotkey) */
+#define IDM_TOOLS_FIXCHECKSUM     2803  /* Tools > Fix Checksum...: a copy of the game with the checksum of its header made right */
 #define IDM_EMU_CDLATENCY         244   /* Mega CD disc access delay */
+#define IDM_EMU_VSCROLL           3925  /* enhanced per-tile vertical scroll (Settings > Options > Accuracy) */
+#define IDM_EMU_LOCKUPS           3926  /* system lock-ups on illegal address access (Settings > Options > Accuracy) */
+#define IDM_SET_VSLIMIT_BASE      3930  /* 8: enhanced vertical scroll limit, 2 to 16 */
+#define IDM_SET_CPUSPEED_BASE     3940  /* 8: CPU speed 50% to 400% */
 #define IDM_INPUT_INVERTMOUSE     245   /* Mega Mouse vertical axis */
 #define IDM_INPUT_GUNCURSOR       246   /* crosshair over the picture for light guns */
 #define IDM_EMU_PAUSE_UNFOCUSED   242
@@ -70,17 +79,19 @@
 #define IDM_OPTIONS_SETTINGS_AUDIO 281  /* toolbar: Settings, on the Audio tab */
 
 /* --- Video ------------------------------------------------------------ */
-#define IDM_VIDEO_SCALE_BASE      300   /* .. 305 == 1x .. 6x */
+#define IDM_VIDEO_SCALE_BASE      300   /* .. 309 == 1x .. 10x */
 #define IDM_VIDEO_FULLSCREEN      310
 #define IDM_VIDEO_FULLSCREEN_START 311
 #define IDM_VIDEO_ALWAYS_ON_TOP   312
 #define IDM_VIDEO_RENDERER_BASE   313   /* .. 315: GDI, Direct3D 9, Direct3D 11 */
 #define IDM_VIDEO_ASPECT_BASE     320   /* 4: original console pixels, square, 4:3, 16:9 */
-#define IDM_VIDEO_SMOOTH          330
+#define IDM_VIDEO_FILTER_MODE_BASE 3915   /* 5: scaling filter: Nearest, Sharp Nearest, Bilinear, Sharp Bilinear, Bicubic (Video menu, Settings > Video) */
 #define IDM_VIDEO_SCANLINE_BASE   331   /* .. 335, 0/25/50/75/100% */
 #define IDM_VIDEO_BRIGHTEN        336
+#define IDM_VIDEO_DEINTERLACE     337   /* Video > Visual Effects > Deinterlacing */
 #define IDM_VIDEO_NTSC_BASE       340   /* off, composite, s-video, rgb */
 #define IDM_VIDEO_OVERSCAN_BASE   350   /* none, vertical, horizontal, all */
+#define IDM_SET_GUNBORDER_BASE    365   /* .. 369: Light Gun Border: off, thin, medium, thick, extra thick (Settings > Input only) */
 #define IDM_VIDEO_SHOWFPS         360
 #define IDM_VIDEO_INTERLACE_BASE  440   /* single field, double field */
 #define IDM_VIDEO_LCD_BASE        445   /* .. 448: off, light, medium, heavy */
@@ -98,9 +109,13 @@
                                         /* 364 .. 369 were the .rpi rescan and
                                            filter-scale items; left unused so
                                            the numbers below do not move */
-#define IDM_VIDEO_FILTER_BASE     3800  /* .. 3847, one per built-in filter */
+#define IDM_OPT_LANGUAGE_BASE     4000  /* .. 4031: the Options > Language list (also in i18n.h) */
+#define IDM_VIDEO_FILTER_BASE     3800  /* .. 3895, one per built-in filter */
 #define IDM_VIDEO_VSYNC           395
-#define IDM_VIDEO_THEME_BASE      396   /* .. 398: Auto/Light/Dark */
+#define IDM_VIDEO_VRR             396   /* Video > Variable Refresh Rate */
+#define IDM_VIDEO_ROTATE_BASE     4104  /* .. 4107: 0, 90, 180, 270 degrees clockwise */
+#define IDM_FILE_RUNBIOS_BASE     4100  /* .. 4102: File > Run Mega CD BIOS: USA, Europe, Japan */
+#define IDM_VIDEO_THEME_BASE      4040  /* .. 4049: System, Light, Dark, Sapphire, Ruby, Emerald, Amethyst, Amber, Aquamarine, Diamond (THEME_COUNT in theme.h) */
 #define IDM_VIDEO_LARGE_UI        399
 
 /* --- Audio ------------------------------------------------------------ */
@@ -138,6 +153,12 @@
 #define IDM_BROWSER_CHEATS         833
 #define IDM_BROWSER_SET_COVER      834
 #define IDM_BROWSER_REMOVE_COVER   835
+#define IDM_BROWSER_STATE_MENU     862   /* context menu: the Play Game with State submenu (a number only so it can have a picture) */
+#define IDM_BROWSER_SAVES_MENU     863   /* context menu: the Open Saves and States submenu */
+#define IDM_BROWSER_OPEN_ROMLOC    864   /* ... > ROM Location: the game's file shown and picked in Explorer */
+#define IDM_BROWSER_OPEN_CHEATS    865   /* ... > Cheats: the game's cheat file (or the folder of its console) */
+#define IDM_BROWSER_OPEN_SAVES     860   /* context menu: Open Saves > Saves folder of the game */
+#define IDM_BROWSER_OPEN_STATES    861   /* ... > States folder of the game */
 #define IDM_BROWSER_OPENDIR        840   /* context menu: Open ROM Directory */
 #define IDM_BROWSER_OPENDIR_BASE   850   /* .. 856: with more than one ROM folder, the submenu of Open ROM Directory has one entry for each (the ROM directory and the 6 more) */
 #define IDM_BROWSER_CLEAR_RECENT   841   /* context menu: Clear Recently Played */
@@ -160,8 +181,24 @@
 #define IDR_RINGBLINK            7005
 #define IDR_LOGO                 7006
 #define IDR_GENRES               7002
+#define IDR_CONTROLLERDB         7003   /* controllerdb.bin: pad layouts from SDL's game controller database */
 #define IDR_SEGA_SFX             7007
 #define IDR_RING_SFX             7008
+/* The flag pictures (images\flags\Flag_*.png), in the order of the FLG_ numbers of browser.c (checked there): */
+#define IDR_FLAG_BASE            7020
+#define IDR_FLAG_USA                7020
+#define IDR_FLAG_EUROPE             7021
+#define IDR_FLAG_JAPAN              7022
+#define IDR_FLAG_WORLD              7023
+#define IDR_FLAG_KOREA              7024
+#define IDR_FLAG_BRAZIL             7025
+#define IDR_FLAG_UNKNOWN            7026
+#define IDR_FLAG_AUSTRALIA          7027
+#define IDR_FLAG_CANADA             7028
+#define IDR_FLAG_CHINA              7029
+#define IDR_FLAG_HONGKONG           7030
+#define IDR_FLAG_RUSSIA             7031
+#define IDR_FLAG_TAIWAN             7032
 #define IDD_AUDIO                 902
 #define IDD_SHORTCUTS             903
 #define IDD_CHEATS                904
@@ -261,10 +298,12 @@
 #define IDC_BROWSER_FILTER_REGION  1206
 #define IDC_BROWSER_FILTER_FOLDER  1207
 #define IDC_BROWSER_FILTER_RESET   1208
+#define IDC_BROWSER_FILTER_LABEL   1213   /* "Filters:" before the drop-downs of the filter bar */
 #define IDC_BROWSER_SEARCH_CLEAR   1212   /* the small x inside the search box */
 #define IDC_INPUT_TURBORATE        1086   /* Controls: Turbo Rate drop-down */
 #define IDC_INPUT_TURBORATE_LABEL  1087
 #define IDC_INPUT_TURBO_BASE      1500   /* .. 1511: the Turbo tick beside A B C X Y Z (one id per pad button) */
+#define IDC_INPUT_OPPOSING         1089   /* Controls: Allow Opposing Directions, under the deadzone */
 #define IDC_INPUT_REFRESH          1088   /* Controls: Refresh the device list */
 
 #define IDD_STATEMGR              908
@@ -299,6 +338,9 @@
 #define IDC_ADV_HIGHF            1310
 #define IDC_ADV_PCM              1314
 #define IDC_ADV_PCM_TEXT         1315
+#define IDC_ADV_DAC              1316   /* the level of the DAC (the sample channel of the Genesis FM chip) */
+#define IDC_ADV_DAC_TEXT         1904
+#define IDC_ADV_DAC_LABEL        1908
 #define IDC_ADV_LABEL_LP         1317
 #define IDC_ADV_LABEL_LG         1318
 #define IDC_ADV_LABEL_MG         1319
@@ -312,6 +354,7 @@
 #define IDM_VIDEO_INTSCALE         2502   /* Video > Visual Effects > Integer Scaling */
 #define IDM_AUDIO_MUTE_FM          2503   /* Audio > Mute > FM Sound */
 #define IDM_AUDIO_MUTE_PSG         2504   /* Audio > Mute > PSG Sound */
+#define IDM_AUDIO_MUTE_DAC         2515   /* Audio > Mute > DAC Sound (the YM2612's sample channel: drums and voices) */
 #define IDM_AUDIO_MUTE_PWM         2509   /* Audio > Mute > PWM Sound (32X games) */
 #define IDM_EMU_AUTOSAVE           2505   /* Emulation > Auto Resume */
 #define IDM_OPTIONS_OSD            2506   /* Options > Show On-Screen Display */
@@ -371,6 +414,8 @@
 #define IDC_PADJ_HUE               1806
 #define IDC_PADJ_HUE_TEXT          1807
 #define IDC_PADJ_DEFAULTS          1808
+#define IDC_PADJ_BRIGHT            1809   /* the Brightness slider and its readout, at the top */
+#define IDC_PADJ_BRIGHT_TEXT       1810
 #define IDD_ROMFOLDERS             966
 #define IDD_ROMFOLDERS_LARGE       967
 #define IDC_RF_LIST                1750
@@ -380,6 +425,13 @@
 #define IDC_RF_EXADD               1754
 #define IDC_RF_EXREMOVE            1755
 #define IDC_RF_HELP                1756
+#define IDD_DIRECTORIES            976   /* Settings > General > Data Folders... */
+#define IDD_DIRECTORIES_LARGE      977
+#define IDC_DIR_HELP               1760
+#define IDC_DIR_DEFAULT            1761
+#define IDC_RF_SCANSUB             1762
+#define IDC_DIR_EDIT_BASE          1770   /* .. 1781: the path boxes of the Directories window */
+#define IDC_DIR_BROWSE_BASE        1790   /* .. 1801: their ... buttons */
 #define IDD_SHADERPARAMS           972
 #define IDD_SHADERPARAMS_LARGE     973
 #define IDC_SP_LIST                1780
@@ -406,16 +458,17 @@
 #define IDM_OPT_CRASHREPORT        3671   /* Settings: write genesis-plus-ex-crash.txt / .dmp after a crash (no menu item) */
 #define IDM_OPT_COVERCACHE         3676   /* Settings: keep cover thumbnails on disk (no menu item) */
 #define IDM_OPT_COVERCACHE_CLEAR   3677   /* Settings: delete them */
+#define IDM_OPT_CONSOLEBADGE        3678   /* grid covers: a small tag naming the console in a corner */
 #define IDM_OPT_COVERCARD          3675   /* grid covers: a frame around the cover and its name */
 #define IDM_SET_COVERSIZE_BASE     3680   /* 7: grid cover size, 48 to 256 pixels (View > View Mode > Grid Size) */
 #define IDM_SET_TBSIZE_BASE        3690   /* 3: toolbar icon size (small, normal, large) */
 #define IDM_OPT_TBLABELS           3693   /* View > Toolbars > Show Toolbar Labels: names under the toolbar icons */
-#define IDM_OPT_COLORICONS         3720   /* color in the menu icons, the toolbar and the star of the game list */
-#define IDM_SET_ACCENT_BASE        3700   /* 20: accent color of the selection in the program's own lists and buttons */
+#define IDM_OPT_COLORICONS         3724   /* color in the menu icons, the toolbar and the star of the game list */
+#define IDM_SET_ACCENT_BASE        3700   /* 21 (up to 3720, the hidden one): accent color of the selection in the program's own lists and buttons */
 #define IDM_OPT_SINGLEINSTANCE     3670   /* Settings: only one copy of the program at a time (no menu item) */
 #define IDM_OPT_MUTEUNFOCUSED      2604   /* Settings: mute while another window has focus (no menu item) */
 #define IDM_VIEW_DENSITY_BASE      2605   /* .. 2607: compact, normal, roomy list rows */
-#define IDM_EMU_INSERTDISC         2608   /* File > Insert Disc... (Mega CD) */
+#define IDM_EMU_INSERTDISC         2608   /* File > Change Disc... (Mega CD) */
 #define IDM_EMU_SPEEDUP            2611   /* Emulation > Game Speed > Faster */
 #define IDM_EMU_SPEEDDOWN          2612   /* Emulation > Game Speed > Slower */
 #define IDM_EMU_SPEEDRESET         2613   /* Emulation > Game Speed > Normal */
@@ -434,6 +487,7 @@
 #define IDM_VIEW_GROUPCONSOLE      2631   /* View > Game List > Group by Console */
 #define IDM_VIEW_AZSTRIP           2632   /* View > Game List > Show A-Z Strip */
 #define IDM_FILE_ROMFOLDERS        2633   /* File > ROM Directory... */
+#define IDM_FILE_DIRECTORIES       2634   /* Settings > General > Data Folders... (the folders beside the program) */
 #define IDM_SET_COVERSHAPE_BASE    2840   /* 3: grid cover frame shape */
 #define IDM_VIEW_STATUSBAR         2829   /* View > Toolbars > Show Status Bar */
 #define IDM_OPT_COVERCAP           2828   /* grid covers: show the game name under each cover */
@@ -447,6 +501,7 @@
 #define IDM_SET_CONTRAST_BASE      2750   /* 7 */
 #define IDM_SET_SATUR_BASE         2760   /* 7 */
 #define IDM_SET_GAMMA_BASE         2770   /* 7 */
+#define IDM_SET_BRIGHT_BASE        2850   /* the Brightness slider of Picture Adjustments */
 #define IDM_SET_HUE_BASE           2780   /* 7 */
 #define IDM_SET_BARCOLOR_BASE      2790   /* 7: color of the bars around the picture */
 #define IDM_SET_FSMODE_BASE        2810   /* 2: borderless window / exclusive */
@@ -457,7 +512,7 @@
 #define IDM_EMU_FASTFWD            2598   /* Emulation > Fast Forward (Tab) */
 
 /* new settings (no menu items) */
-#define IDM_SET_CURSORIDLE_BASE    3500   /* 5: hide the mouse pointer after: never, 2, 3, 5, 10 s */
+#define IDM_SET_CURSORIDLE_BASE    3500   /* 6: hide the mouse pointer: never, always, after 2, 3, 5, 10 s */
 #define IDM_SET_FRAMECAP_BASE      3510   /* 5: limit how often the picture is redrawn: off, 30, 40, 50, 60 */
 #define IDM_SET_BASS_BASE          3520   /* 4: bass boost: off, light, medium, strong */
 #define IDM_OPT_LOG                3530   /* write genesis-plus-ex.log */
@@ -478,6 +533,17 @@
 #define IDM_AUDIO_EQ               3655   /* 3-Band EQ on / off (Settings only; the bands are in Levels and Latency) */
 #define IDM_SET_STYLE_BASE         3662   /* 2: look of the windows: Classic, Modern */
 #define IDM_SET_REWINDSPEED_BASE   3760   /* 4: how fast a rewind runs backwards (Settings only): slow, normal, fast, very fast */
+#define IDM_SET_STICKSHAPE_BASE    3765   /* 4: how the left stick makes diagonals (Settings > Input only): classic, wide straight, even 8 ways, wide diagonal */
+#define IDM_SET_CROSSFEED_BASE     3770   /* 4: headphone crossfeed: off, light, medium, strong (Settings > Audio only) */
+#define IDM_SET_XHSTYLE_BASE       3900   /* 9: light gun crosshair shape (Settings > Input only) */
+#define IDM_SET_XHCOLOR_BASE       3781   /* 6: light gun crosshair color */
+#define IDM_VIDEO_LCDCOLOR_BASE    3912   /* 3: LCD color correction: off, light, full (Video > Visual Effects, Settings > Video) */
+#define IDM_OPT_REGIONFLAGS        3796   /* small flags for the region in the game list and on the grid covers (Settings > General) */
+#define IDM_SET_XHSIZE_BASE        3790   /* 4: light gun crosshair size */
+#define IDM_OPT_FOLLOWHC           3794   /* follow Windows high-contrast mode (Settings > General) */
+#define IDM_OPT_KEEPASPECT         3797   /* the window keeps the picture's shape while its edge is dragged (Settings > Video) */
+#define IDM_OPT_FACTORYRESET       3798   /* delete the settings file and start again with the factory defaults (Settings > Options > Troubleshooting) */
+#define IDM_VIEW_CLEANWINDOW       3795   /* View > Toolbars > Hide All Bars (a window with the game only; hotkey) */
 #define IDM_SET_UISIZE_BASE        3660   /* 2: interface size (Settings only): Normal, Large */
 #define IDM_AUDIO_HQFM             3640   /* High-Quality FM Synthesis (Settings only) */
 #define IDM_SET_FMUNIT_BASE        3645   /* 3: Master System FM unit: auto, off, on */

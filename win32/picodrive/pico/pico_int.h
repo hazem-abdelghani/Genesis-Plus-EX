@@ -931,11 +931,15 @@ static inline int gpex_fm_level(int v)
 }
 #define GPEX_FM(v) gpex_fm_level((int)(v))
 extern void (*gpex_snd_log)(int kind, unsigned a, unsigned d, unsigned frac);
+extern void (*gpex_cpu_hook)(int cpu, unsigned pc);       /* Genesis Plus EX: called before every instruction of the 68000 (cpu 0) and the SH-2s (1: master, 2: slave) when set (the CPU Debugger) */
 void gpex_ym_shadow(unsigned a, unsigned d);
 void gpex_ym_shadow_clear(void);
 void gpex_ym_from_chip(void);
 extern unsigned char gpex_ym_reg[2][256], gpex_ym_set[2][256], gpex_ym_keyon[8];
 void gpex_sound_dump(void (*cb)(int, unsigned, unsigned, unsigned));
+void gpex_pwm_state_get(int out[8]);
+void gpex_vdp_poke_do(int kind, unsigned off, unsigned value);
+void gpex_sound_state_get(unsigned char ym[2][256], unsigned char keyon[8], unsigned tone[3], unsigned char vol[4], unsigned char *noise);
 static inline unsigned gpex_frac(int cycles, unsigned per_frame)
 {
   unsigned long long f = cycles < 0 ? 0ull : (unsigned long long)cycles * 65536ull / per_frame;

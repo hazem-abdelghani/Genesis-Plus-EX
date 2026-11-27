@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  netplay.c -- two-player LAN netplay (lockstep). See netplay.h.
  *
@@ -34,6 +35,8 @@
 
 #include "netplay.h"
 #include "upnp.h"
+
+extern void gui_utf8_trim(char *s);        /* (main.c) takes off a last character (UTF-8) that a cut left half there */
 
 #define NP_PROTO          1
 #define NP_DISC_PORT      55456
@@ -1221,6 +1224,7 @@ static void answer_discovery(void)
 
       GetComputerNameA(name, &nl);
       lstrcpynA(game, title ? title : "", sizeof(game));
+      gui_utf8_trim(game);
 
       memcpy(reply, "GPNP!", 5); k = 5;
       reply[k++] = NP_PROTO;

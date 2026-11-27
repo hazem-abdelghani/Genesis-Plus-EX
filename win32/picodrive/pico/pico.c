@@ -14,6 +14,7 @@
 
 struct Pico Pico;
 struct PicoMem PicoMem;
+void (*gpex_cpu_hook)(int cpu, unsigned pc);       /* Genesis Plus EX, see pico_int.h */
 PicoInterface PicoIn;
 
 void (*PicoResetHook)(void) = NULL;

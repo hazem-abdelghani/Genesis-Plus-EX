@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  toolbar.h -- the flat, icon-only buttons of the ROM browser's toolbar.
  *  The icons are drawn in code (no picture files), in the theme's text
@@ -10,7 +11,7 @@
 #define _TOOLBAR_H_
 
 enum { TI_OPEN, TI_REFRESH, TI_PLAY, TI_STOP, TI_RESET, TI_PAUSE, TI_FULLSCREEN,
-       TI_SCREENSHOT, TI_SETTINGS, TI_VIDEO, TI_AUDIO, TI_CONTROLS, TI_FAV, TI_FAVON, TI_SEARCH, TI_N };
+       TI_SCREENSHOT, TI_SETTINGS, TI_VIDEO, TI_AUDIO, TI_CONTROLS, TI_FAV, TI_FAVON, TI_SEARCH, TI_DISC, TI_N };       /* (TI_DISC is only used by a menu: File > Run Mega CD BIOS) */
 
 /* The display scale of the window the program is on (96 = 100%), kept up to date when the window moves to another monitor. */
 extern int gui_dpi;

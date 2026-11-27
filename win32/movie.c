@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  movie.c -- input recording and playback (.gpm). A recording holds the
  *  state of the game at the moment it started and every frame's controller

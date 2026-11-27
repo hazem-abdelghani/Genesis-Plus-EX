@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  main.h -- declarations the emulator core expects from the OS layer.
  *
@@ -30,5 +31,6 @@ extern int win32_input_update(void);
  * it stays valid across a handful of calls. Copy it if you need to keep it.
  */
 extern char *osd_path(const char *filename);
+extern void gui_make_dirs(const char *path);                  /* a folder and the missing ones above it */
 
 #endif /* _MAIN_H_ */

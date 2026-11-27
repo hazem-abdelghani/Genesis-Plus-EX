@@ -11,6 +11,7 @@
 
 #define _GNU_SOURCE 1 // mremap
 #include <stdio.h>
+#include "../../cpu/sh2/mame/sh2dasm.h"
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
@@ -913,6 +914,13 @@ RETRO_API void gpex_set_mute(int fm, int psg);
 RETRO_API void gpex_set_levels(int fm_pct, int psg_pct);
 RETRO_API void gpex_set_pwm(int pct);
 RETRO_API void *gpex_memory(int what, size_t *size);
+RETRO_API int gpex_regs(int which, unsigned *out, int max);
+RETRO_API int gpex_pwm_state(int out[8]);
+RETRO_API void gpex_vdp_poke(int kind, unsigned off, unsigned value);
+RETRO_API void gpex_vdp_reg(int reg, int value);
+RETRO_API int gpex_set_cpu_hook(void (*cb)(int cpu, unsigned pc));
+RETRO_API void gpex_dasm_sh2(char *out, unsigned pc, unsigned opcode);
+RETRO_API void gpex_sound_state(unsigned char ym[2][256], unsigned char keyon[8], unsigned tone[3], unsigned char vol[4], unsigned char *noise);
 /* Genesis Plus EX: the program asks for the writes to the sound chips (for its VGM recording); NULL stops it. */
 void gpex_set_sound_log(void (*cb)(int, unsigned, unsigned, unsigned))
 {
@@ -970,8 +978,92 @@ void *gpex_memory(int what, size_t *size)
       if (size) *size = sizeof(Pico32xMem->sdram);
       return Pico32xMem->sdram;
    }
+   if (what == 3) { if (size) *size = sizeof(PicoMem.vram); return PicoMem.vram; }          /* the video chip's memories (the program's VDP Viewer): VRAM and CRAM, */
+   if (what == 4) { if (size) *size = sizeof(PicoMem.cram); return PicoMem.cram; }          /* VSRAM (words, as the chip holds them) */
+   if (what == 5) { if (size) *size = sizeof(PicoMem.vsram); return PicoMem.vsram; }
+   if (what == 6) { if (size) *size = sizeof(Pico.video.reg); return Pico.video.reg; }     /* and its 32 registers (bytes) */
    if (size) *size = 0;
    return NULL;
+}
+
+/* Genesis Plus EX: the processors' registers for the program's CPU Viewer. which 0: the 68000 (D0-D7, A0-A7, PC, SR: 18 values),
+ * 1: the Z80 (PC, SP, AF, BC, DE, HL, IX, IY, AF', BC', DE', HL', R, I, IM, IFF1, IFF2, HALT: 18), 2 and 3: the master and slave SH-2
+ * (R0-R15, PC, PR, SR, GBR, VBR, MACH, MACL: 23). Returns the number of values, or -1 when there are none. */
+int gpex_regs(int which, unsigned *out, int max)
+{
+   int i;
+
+   if (which == 0 && max >= 18)
+   {
+      for (i = 0; i < 16; i++) out[i] = (unsigned)SekDar(i);
+      out[16] = (unsigned)SekPc;
+      out[17] = (unsigned)SekSr;
+      return 18;
+   }
+#ifdef _USE_CZ80
+   if (which == 1 && max >= 18)
+   {
+      for (i = 0; i < 18; i++) out[i] = (unsigned)Cz80_Get_Reg(&CZ80, CZ80_PC + i);
+      return 18;
+   }
+#endif
+   if (which == 4 && max >= 1 && (PicoIn.AHW & PAHW_32X))      /* the 68000's ROM bank at 900000 (a megabyte of the cartridge) */
+   {
+      out[0] = (unsigned)(Pico32x.regs[4 / 2] & 3);
+      return 1;
+   }
+   if ((which == 2 || which == 3) && max >= 23 && (PicoIn.AHW & PAHW_32X))
+   {
+      SH2 *s = &sh2s[which - 2];
+
+      for (i = 0; i < 16; i++) out[i] = s->r[i];
+      out[16] = s->pc; out[17] = s->pr; out[18] = s->sr; out[19] = s->gbr; out[20] = s->vbr; out[21] = s->mach; out[22] = s->macl;
+      return 23;
+   }
+   return -1;
+}
+
+/* Genesis Plus EX: the 32X PWM chip as it is now (see gpex_pwm_state_get); 0 when the game is not a 32X game. */
+int gpex_pwm_state(int out[8])
+{
+   if (!(PicoIn.AHW & PAHW_32X) || !Pico32xMem) return 0;
+   gpex_pwm_state_get(out);
+   return 1;
+}
+
+/* Genesis Plus EX: the program's CPU Debugger asks to be called before every instruction of the 68000 and the two SH-2s (NULL: no more). */
+int gpex_set_cpu_hook(void (*cb)(int cpu, unsigned pc))
+{
+   gpex_cpu_hook = cb;
+#ifdef DRC_SH2
+   return 0;      /* built with the SH-2 recompiler: its code never passes the hook, so the SH-2s cannot be debugged (build with PICODRC=0) */
+#else
+   return 1;
+#endif
+}
+
+/* Genesis Plus EX: an SH-2 instruction as text (out holds at least 64 characters). */
+void gpex_dasm_sh2(char *out, unsigned pc, unsigned opcode)
+{
+   DasmSH2(out, pc, (unsigned short)opcode);
+}
+
+/* Genesis Plus EX: sets a register of the video chip the way a game does (a write to its control port). */
+void gpex_vdp_reg(int reg, int value)
+{
+   PicoVideoWrite(4, (unsigned short)(0x8000 | ((reg & 0x1F) << 8) | (value & 0xFF)));
+}
+
+/* Genesis Plus EX: changes one byte of VRAM (kind 3), CRAM (4) or VSRAM (5), the way the video chip would (see gpex_vdp_poke_do). */
+void gpex_vdp_poke(int kind, unsigned off, unsigned value)
+{
+   gpex_vdp_poke_do(kind, off, value);
+}
+
+/* Genesis Plus EX: the FM chip and the PSG as they are now, for the program's Sound Viewer (see gpex_sound_dump). */
+void gpex_sound_state(unsigned char ym[2][256], unsigned char keyon[8], unsigned tone[3], unsigned char vol[4], unsigned char *noise)
+{
+   gpex_sound_state_get(ym, keyon, tone, vol, noise);
 }
 
 void retro_cheat_reset(void)

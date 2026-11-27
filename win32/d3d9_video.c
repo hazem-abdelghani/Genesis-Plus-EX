@@ -1,5 +1,6 @@
 /****************************************************************************
  *  Genesis Plus EX -- Win32 GUI frontend
+ *  Copyright (c) 2026 Hazem Abdelghani
  *
  *  d3d9_video.c -- see d3d9_video.h for the rationale.
  *
@@ -37,8 +38,12 @@
  ****************************************************************************/
 
 #include <string.h>
+#define COBJMACROS                  /* (for the ID3D10Blob_ calls on the shader code below; d3d9.h has its own) */
 #include <d3d9.h>
+#include <d3dcompiler.h>
 #include "d3d9_video.h"
+
+extern void gui_log(const char *fmt, ...);   /* gui.h: one line in genesis-plus-ex.log, when logging is on */
 
 extern unsigned video_bar_color(void);   /* video.c: 0xRRGGBB of the bars around the picture */
 
@@ -70,8 +75,89 @@ static HWND               d3d_hwnd;
 static int                device_ok;
 static D3DPRESENT_PARAMETERS pp;
 
+/* ---- Scaling Filter > Sharp Bilinear and Bicubic: pixel shaders (shader model 2, which needs no vertex shader beside the fixed pipeline this file draws with).
+   The same maths as the Direct3D 11 shaders; the size of the picture comes in constant register c0 (width, height). ---- */
+
+static const char *ps9_src =
+  "sampler2D s0 : register(s0);\n"
+  "float4 dims : register(c0);\n"
+  "float4 main_catmull(float2 uv : TEXCOORD0) : COLOR\n"
+  "{\n"
+  "  float2 sp = uv * dims.xy;\n"
+  "  float2 t1 = floor(sp - 0.5) + 0.5;\n"
+  "  float2 f = sp - t1;\n"
+  "  float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));\n"
+  "  float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);\n"
+  "  float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));\n"
+  "  float2 w3 = f * f * (-0.5 + 0.5 * f);\n"
+  "  float2 w12 = w1 + w2;\n"
+  "  float2 o12 = w2 / w12;\n"
+  "  float2 t0 = (t1 - 1.0) * dims.zw;\n"
+  "  float2 t3 = (t1 + 2.0) * dims.zw;\n"
+  "  float2 t12 = (t1 + o12) * dims.zw;\n"
+  "  float4 r = tex2D(s0, float2(t0.x, t0.y)) * (w0.x * w0.y)\n"
+  "           + tex2D(s0, float2(t12.x, t0.y)) * (w12.x * w0.y)\n"
+  "           + tex2D(s0, float2(t3.x, t0.y)) * (w3.x * w0.y)\n"
+  "           + tex2D(s0, float2(t0.x, t12.y)) * (w0.x * w12.y)\n"
+  "           + tex2D(s0, float2(t12.x, t12.y)) * (w12.x * w12.y)\n"
+  "           + tex2D(s0, float2(t3.x, t12.y)) * (w3.x * w12.y)\n"
+  "           + tex2D(s0, float2(t0.x, t3.y)) * (w0.x * w3.y)\n"
+  "           + tex2D(s0, float2(t12.x, t3.y)) * (w12.x * w3.y)\n"
+  "           + tex2D(s0, float2(t3.x, t3.y)) * (w3.x * w3.y);\n"
+  "  return r;\n"
+  "}\n"
+  "float4 main_sharpbil(float2 uv : TEXCOORD0) : COLOR\n"
+  "{\n"
+  "  float2 p = uv * dims.xy + 0.5;\n"
+  "  float2 fl = floor(p);\n"
+  "  float2 f = p - fl;\n"
+  "  f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);\n"
+  "  return tex2D(s0, (fl + f - 0.5) * dims.zw);\n"
+  "}\n";
+
+static HMODULE   d3dcompiler9_dll;
+static pD3DCompile d3dcompile9_fn;
+static IDirect3DPixelShader9 *ps9[2];     /* [0] Bicubic, [1] Sharp Bilinear */
+static int ps9_state[2];                  /* 0 not tried, 1 made, -1 did not compile (not tried again until the device is made again) */
+
+static IDirect3DPixelShader9 *resample9_shader(int mode)
+{
+  static const char *const entries[2] = { "main_catmull", "main_sharpbil" };
+  static const char *const targets[2] = { "ps_2_b", "ps_2_0" };
+  int r = mode == 4 ? 0 : (mode == 3 ? 1 : -1), t;
+
+  if (r < 0 || !device) return NULL;
+  if (ps9_state[r]) return ps9[r];
+  ps9_state[r] = -1;
+  if (!d3dcompile9_fn)
+  {
+    d3dcompiler9_dll = LoadLibraryA("d3dcompiler_47.dll");
+    if (d3dcompiler9_dll) d3dcompile9_fn = (pD3DCompile)(void *)GetProcAddress(d3dcompiler9_dll, "D3DCompile");
+    if (!d3dcompile9_fn) { gui_log("Direct3D 9: d3dcompiler_47.dll is not available, the Scaling Filter shaders are not used"); return NULL; }
+  }
+  for (t = 0; t < 2 && ps9_state[r] < 0; t++)             /* (ps_2_b has room for the nine reads; ps_2_0 is the try after it) */
+  {
+    ID3DBlob *code = NULL, *errors = NULL;
+    HRESULT hr = d3dcompile9_fn(ps9_src, strlen(ps9_src), NULL, NULL, NULL, entries[r], targets[t], 0, 0, &code, &errors);
+
+    if (SUCCEEDED(hr) && code)
+    {
+      if (SUCCEEDED(IDirect3DDevice9_CreatePixelShader(device, (const DWORD *)ID3D10Blob_GetBufferPointer(code), &ps9[r]))) ps9_state[r] = 1;
+      else gui_log("Direct3D 9: the shader %s (%s) was not accepted by the graphics driver", entries[r], targets[t]);
+    }
+    else if (errors) gui_log("Direct3D 9: the shader %s (%s) did not compile: %.300s", entries[r], targets[t], (const char *)ID3D10Blob_GetBufferPointer(errors));
+    else gui_log("Direct3D 9: the shader %s (%s) did not compile (0x%08lX)", entries[r], targets[t], (unsigned long)hr);
+    if (code) ID3D10Blob_Release(code);
+    if (errors) ID3D10Blob_Release(errors);
+  }
+  return ps9_state[r] > 0 ? ps9[r] : NULL;
+}
+
+int d3d9_resample_available(int mode) { return device_ok && resample9_shader(mode) != NULL; }
+
 static void release_device(void)
 {
+  { int s; for (s = 0; s < 2; s++) { if (ps9[s]) { IDirect3DPixelShader9_Release(ps9[s]); ps9[s] = NULL; } ps9_state[s] = 0; } }
   if (tex)         { IDirect3DTexture9_Release(tex);         tex = NULL;         tex_w = 0;         tex_h = 0; }
   { int s; for (s = 0; s < 2; s++) if (overlay_tex_a[s]) { IDirect3DTexture9_Release(overlay_tex_a[s]); overlay_tex_a[s] = NULL; overlay_tex_wa[s] = 0; overlay_tex_ha[s] = 0; } }
   if (device)      { IDirect3DDevice9_Release(device);       device = NULL; }
@@ -292,6 +378,7 @@ int d3d9_render_frame(const uint16 *src_pixels, int src_pitch,
 
   {
     D3DTEXTUREFILTERTYPE filter = smooth ? D3DTEXF_LINEAR : D3DTEXF_POINT;
+    IDirect3DPixelShader9 *ps = (smooth == 3 || smooth == 4) ? resample9_shader(smooth) : NULL;     /* (NULL: the bilinear filter of the hardware) */
 
     IDirect3DDevice9_SetTexture(device, 0, (IDirect3DBaseTexture9 *)tex);
     IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MINFILTER, filter);
@@ -299,7 +386,16 @@ int d3d9_render_frame(const uint16 *src_pixels, int src_pitch,
     IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
     IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 
+    if (ps)
+    {
+      float dims[4];
+
+      dims[0] = (float)src_w; dims[1] = (float)src_h; dims[2] = 1.0f / (float)src_w; dims[3] = 1.0f / (float)src_h;
+      IDirect3DDevice9_SetPixelShaderConstantF(device, 0, dims, 1);
+      IDirect3DDevice9_SetPixelShader(device, ps);
+    }
     draw_quad(dest);
+    if (ps) IDirect3DDevice9_SetPixelShader(device, NULL);
   }
 
   IDirect3DDevice9_EndScene(device);

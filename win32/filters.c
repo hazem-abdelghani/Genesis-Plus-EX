@@ -15,7 +15,7 @@
  *  before distributing a binary that contains it; build with XBRZ=0 to leave
  *  it out).
  *
- *    Scale2x / Scale3x  AdvMAME's pixel-art scalers (Andrea Mazzoleni)
+ *    Scale2x / Scale3x  AdvMAME's pixel-art scalers (Andrea Mazzoleni); Scale4x is Scale2x run twice
  *    Eagle 2x           the classic Eagle rules
  *    Smooth 2x / 4x     an edge-directed corner smoother in the spirit of
  *                       xBR (which is what it is *not*: it is a compact,
@@ -23,15 +23,14 @@
  *                       idea, so its output resembles xBR/hq2x but is not
  *                       identical to either)
  *    Scanlines / CRT / LCD Grid / Glow Scanlines   plain arithmetic, nothing borrowed
- *    Sharp Bilinear     nearest pixels with a short blend along each seam
- *    Lanczos, Catmull-Rom, B-Spline, Mitchell 3x / 4x   separable resampling, from the textbook formulas
  *    HQ2x - HQ4x, xBR 2x - 4x   the real hqx (Maxim Stepin) and xBR (Hyllian), from the
  *                       libxbr-standalone library in xbr/ (LGPL)
  *    LQ2x               the rules of RetroArch's lq2x filter
  *    ScaleFX 3x         Sp00kyFox's ScaleFX (MIT), ported from its five shader passes
- *    CRT Geom 3x / 4x  cgwg's and DOLLS' CRT-Geom (GPL 2 or later), ported from its shader
+ *    CRT Geom 3x  cgwg's and DOLLS' CRT-Geom (GPL 2 or later), ported from its shader
  *    2xSaI              Kreed's published rules for "Scale and Interpolate"
  *    Super Eagle, Super 2xSaI   Kreed's published rules, written from their descriptions
+ *    Eagle 4x, 4xSaI, Super 4xSaI, Super Eagle 4x   the 2x filter run twice
  *    xBRZ 2x - 6x       the real xBRZ by Zenju (xbrz/), optional (GPEX_XBRZ)
  *
  *  Design notes
@@ -85,6 +84,7 @@ static scratch_t sc_pad1, sc_ycc1, sc_pad2, sc_ycc2;
 static scratch_t sc_xin, sc_xout;                  /* the 32-bit frames of the xBR and HQx filters */
 static xbr_data *xbr_table;                        /* ... and their color table */
 static scratch_t sc_sfx0, sc_sfx1, sc_sfx2, sc_sfx3;   /* the passes of ScaleFX */
+static scratch_t sc_twice;                           /* the 2x picture between the two passes of a 2x filter run for 4x */
 
 /* Set when a filter could not get its scratch memory and so wrote nothing;
    filter_apply() then reports that instead of claiming success. */
@@ -112,6 +112,7 @@ static void libxbr_release(void)
   free(sc_sfx1.p); sc_sfx1.p = NULL; sc_sfx1.cap = 0;
   free(sc_sfx2.p); sc_sfx2.p = NULL; sc_sfx2.cap = 0;
   free(sc_sfx3.p); sc_sfx3.p = NULL; sc_sfx3.cap = 0;
+  free(sc_twice.p);  sc_twice.p = NULL;  sc_twice.cap = 0;
   free(sc_xin.p);  sc_xin.p = NULL;  sc_xin.cap = 0;
   free(sc_xout.p); sc_xout.p = NULL; sc_xout.cap = 0;
   free(xbr_table); xbr_table = NULL;
@@ -323,6 +324,123 @@ static inline int cdist(const ycc_t *a, const ycc_t *b)
 }
 
 #define EQ_T 24   /* at or below this, two colors count as "the same" */
+
+/****************************************************************************
+ * MMPX
+ *
+ * The MMPX pixel art magnification filter, 2x, by Morgan McGuire and Mara Gagiu ("Pixel Art Scaling
+ * with MMPX", 2021; MIT license, Copyright 2020 Morgan McGuire & Mara Gagiu,
+ * https://casual-effects.com/research/McGuire2021PixelArt/index.html). The rules follow their GLSL and
+ * their shader; pixels are compared as RGB565 values.
+ ****************************************************************************/
+
+static inline px_t mm_at(const px_t *src, int sp, int w, int h, int x, int y)
+{
+  if (x < 0) x = 0; else if (x >= w) x = w - 1;
+  if (y < 0) y = 0; else if (y >= h) y = h - 1;
+  return *(const px_t *)((const uint8_t *)src + (size_t)y * (size_t)sp + (size_t)x * sizeof(px_t));
+}
+
+/* The luma of a pixel (BT.601 weights, in 0..255 steps: only compared with other pixels' luma). */
+static inline int mm_luma(px_t p)
+{
+  int r = ((p >> 11) & 31) * 255 / 31, g = ((p >> 5) & 63) * 255 / 63, b = (p & 31) * 255 / 31;
+
+  return 299 * r + 587 * g + 114 * b;
+}
+
+#define MM_ANY3(B, A0, A1, A2)        ((B) == (A0) || (B) == (A1) || (B) == (A2))
+#define MM_ALL2(B, A0, A1)            ((B) == (A0) && (B) == (A1))
+#define MM_ALL3(B, A0, A1, A2)        ((B) == (A0) && (B) == (A1) && (B) == (A2))
+#define MM_ALL4(B, A0, A1, A2, A3)    ((B) == (A0) && (B) == (A1) && (B) == (A2) && (B) == (A3))
+#define MM_NONE2(B, A0, A1)           ((B) != (A0) && (B) != (A1))
+#define MM_NONE4(B, A0, A1, A2, A3)   ((B) != (A0) && (B) != (A1) && (B) != (A2) && (B) != (A3))
+
+static void f_mmpx(const px_t *src, int sp, int w, int h, px_t *dst, int dp)
+{
+  int x, y;
+
+#define SRC(dx, dy) mm_at(src, sp, w, h, x + (dx), y + (dy))
+
+  for (y = 0; y < h; y++)
+  {
+    px_t *o0 = ROW(dst, dp, 2 * y);
+    px_t *o1 = ROW(dst, dp, 2 * y + 1);
+
+    for (x = 0; x < w; x++)
+    {
+      px_t A = SRC(-1, -1), B = SRC(0, -1), C = SRC(1, -1);
+      px_t D = SRC(-1,  0), E = SRC(0,  0), F = SRC(1,  0);
+      px_t G = SRC(-1,  1), H = SRC(0,  1), I = SRC(1,  1);
+      px_t J = E, K = E, L = E, M = E;
+
+      if (A != E || B != E || C != E || D != E || F != E || G != E || H != E || I != E)
+      {
+        px_t P = SRC(0, -2), S = SRC(0, 2), Q = SRC(-2, 0), R = SRC(2, 0);
+        int Bl = mm_luma(B), Dl = mm_luma(D), El = mm_luma(E), Fl = mm_luma(F), Hl = mm_luma(H);
+
+        /* 1:1 slope rules */
+        if (D == B && D != H && D != F && (El >= Dl || E == A) && MM_ANY3(E, A, C, G) && (El < Dl || A != D || E != P || E != Q)) J = D;
+        if (B == F && B != D && B != H && (El >= Bl || E == C) && MM_ANY3(E, A, C, I) && (El < Bl || C != B || E != P || E != R)) K = B;
+        if (H == D && H != F && H != B && (El >= Hl || E == G) && MM_ANY3(E, A, G, I) && (El < Hl || G != H || E != S || E != Q)) L = H;
+        if (F == H && F != B && F != D && (El >= Fl || E == I) && MM_ANY3(E, C, G, I) && (El < Fl || I != H || E != R || E != S)) M = F;
+
+        /* Intersection rules */
+        if (E != F && MM_ALL4(E, C, I, D, Q) && MM_ALL2(F, B, H) && F != SRC(3, 0))  { M = F; K = F; }
+        if (E != D && MM_ALL4(E, A, G, F, R) && MM_ALL2(D, B, H) && D != SRC(-3, 0)) { L = D; J = D; }
+        if (E != H && MM_ALL4(E, G, I, B, P) && MM_ALL2(H, D, F) && H != SRC(0, 3))  { M = H; L = H; }
+        if (E != B && MM_ALL4(E, A, C, H, S) && MM_ALL2(B, D, F) && B != SRC(0, -3)) { K = B; J = B; }
+        if (Bl < El && MM_ALL4(E, G, H, I, S) && MM_NONE4(E, A, D, C, F)) { K = B; J = B; }
+        if (Hl < El && MM_ALL4(E, A, B, C, P) && MM_NONE4(E, D, G, I, F)) { M = H; L = H; }
+        if (Fl < El && MM_ALL4(E, A, D, G, Q) && MM_NONE4(E, B, C, I, H)) { M = F; K = F; }
+        if (Dl < El && MM_ALL4(E, C, F, I, R) && MM_NONE4(E, B, A, G, H)) { L = D; J = D; }
+
+        /* 2:1 slope rules */
+        if (H != B)
+        {
+          if (H != A && H != E && H != C)
+          {
+            if (MM_ALL3(H, G, F, R) && MM_NONE2(H, D, SRC(2, -1)))  L = M;
+            if (MM_ALL3(H, I, D, Q) && MM_NONE2(H, F, SRC(-2, -1))) M = L;
+          }
+          if (B != I && B != G && B != E)
+          {
+            if (MM_ALL3(B, A, F, R) && MM_NONE2(B, D, SRC(2, 1)))   J = K;
+            if (MM_ALL3(B, C, D, Q) && MM_NONE2(B, F, SRC(-2, 1)))  K = J;
+          }
+        }
+
+        if (F != D)
+        {
+          if (D != I && D != E && D != C)
+          {
+            if (MM_ALL3(D, A, H, S) && MM_NONE2(D, B, SRC(1, 2)))   J = L;
+            if (MM_ALL3(D, G, B, P) && MM_NONE2(D, H, SRC(1, -2)))  L = J;
+          }
+          if (F != E && F != A && F != G)
+          {
+            if (MM_ALL3(F, C, H, S) && MM_NONE2(F, B, SRC(-1, 2)))  K = M;
+            if (MM_ALL3(F, I, B, P) && MM_NONE2(F, H, SRC(-1, -2))) M = K;
+          }
+        }
+      }
+
+      o0[2 * x] = J; o0[2 * x + 1] = K;
+      o1[2 * x] = L; o1[2 * x + 1] = M;
+    }
+  }
+#undef SRC
+}
+
+#ifdef GPEX_XBRZ
+/* MMPX Enhanced (mmpx_ex.cpp, C++): the shader's rules for the CPU. */
+extern void mmpx_ex_scale(const uint16_t *src, int src_pitch, int w, int h, uint16_t *dst, int dst_pitch);
+
+static void f_mmpx_ex(const px_t *src, int sp, int w, int h, px_t *dst, int dp)
+{
+  mmpx_ex_scale(src, sp, w, h, dst, dp);
+}
+#endif
 
 /****************************************************************************
  * Scale2x / Scale3x  (AdvMAME)
@@ -733,37 +851,6 @@ static void f_crt_shadow3x(const px_t *src, int sp, int w, int h, px_t *dst, int
 }
 
 /****************************************************************************
- * Sharp 4x -- plain integer pixel replication
- *
- * Not a smoother at all: it hands the display stage a big, perfectly crisp
- * image so that the final (non-integer) resize to the window has 4x more
- * samples to work with. With Smooth Scaling on, that is the well-known
- * "sharp bilinear" look: crisp pixel edges without shimmering when the
- * window is not an exact multiple of the game's resolution.
- ****************************************************************************/
-
-static void f_sharp4x(const px_t *src, int sp, int w, int h, px_t *dst, int dp)
-{
-  int x, y;
-
-  for (y = 0; y < h; y++)
-  {
-    const px_t *r  = (const px_t *)((const uint8_t *)src + (size_t)y * (size_t)sp);
-    px_t       *o0 = ROW(dst, dp, 4 * y);
-
-    for (x = 0; x < w; x++)
-    {
-      px_t c = r[x];
-      o0[4 * x] = c; o0[4 * x + 1] = c; o0[4 * x + 2] = c; o0[4 * x + 3] = c;
-    }
-
-    memcpy(ROW(dst, dp, 4 * y + 1), o0, (size_t)w * 4 * sizeof(px_t));
-    memcpy(ROW(dst, dp, 4 * y + 2), o0, (size_t)w * 4 * sizeof(px_t));
-    memcpy(ROW(dst, dp, 4 * y + 3), o0, (size_t)w * 4 * sizeof(px_t));
-  }
-}
-
-/****************************************************************************
  * Scanlines 3x / 4x, Glow Scanlines 3x
  *
  * Every pixel becomes a block N wide and N tall. The rows follow a beam
@@ -834,7 +921,7 @@ static void f_glow3x(const px_t *src, int sp, int w, int h, px_t *dst, int dp)
 }
 
 /****************************************************************************
- * LCD Grid 3x / 4x
+ * LCD Grid 2x - 6x
  *
  * The pixel grid of a handheld screen: each pixel is a bright square with a
  * dark line between it and its neighbors (one output pixel wide, 2x2 body at
@@ -866,199 +953,13 @@ static void lcd_n(const px_t *src, int sp, int w, int h, px_t *dst, int dp, int 
   }
 }
 
+static void f_lcd2x(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { lcd_n(src, sp, w, h, dst, dp, 2); }
 static void f_lcd3x(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { lcd_n(src, sp, w, h, dst, dp, 3); }
 static void f_lcd4x(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { lcd_n(src, sp, w, h, dst, dp, 4); }
-
-/****************************************************************************
- * Sharp Bilinear 3x / 4x
- *
- * Like Sharp 4x, but the seam between two source pixels is a short blend
- * instead of a hard step, so edges look clean and not stair-stepped when the
- * result is shrunk to the window. Only the output pixels along a seam are
- * touched; the inside of a pixel keeps its exact color.
- ****************************************************************************/
-
-/* For each output position inside a source pixel: which neighbor it leans
-   toward (-1 before, 0 none, +1 after) and by how much (of 32). */
-typedef struct { int8_t side; uint8_t a; } sb_t;
-
-static const sb_t sb3[3] = { { -1, 10 }, { 0, 0 }, { 1, 10 } };
-static const sb_t sb4[4] = { { -1, 12 }, { 0, 0 }, { 0, 0 }, { 1, 12 } };
-
-static void sharpbil_n(const px_t *src, int sp, int w, int h, px_t *dst, int dp, int n, const sb_t *sb)
-{
-  int stride, x, y, k, i;
-  const px_t *P = plane_from_src(&sc_pad1, src, sp, w, h, &stride);
-
-  if (!P) return;
-
-  for (y = 0; y < h; y++)
-  for (k = 0; k < n; k++)
-  {
-    const px_t *r0 = P + (ptrdiff_t)y * stride;
-    const px_t *r1 = P + (ptrdiff_t)(y + sb[k].side) * stride;
-    px_t       *o  = ROW(dst, dp, n * y + k);
-
-    for (x = 0; x < w; x++)
-    for (i = 0; i < n; i++)
-    {
-      int sx = sb[i].side;
-      px_t top = sb[i].a ? mix(r0[x], r0[x + sx], sb[i].a) : r0[x];
-      px_t bot = sb[i].a ? mix(r1[x], r1[x + sx], sb[i].a) : r1[x];
-      o[n * x + i] = sb[k].a ? mix(top, bot, sb[k].a) : top;
-    }
-  }
-}
-
-static void f_sharpbil3x(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { sharpbil_n(src, sp, w, h, dst, dp, 3, sb3); }
-static void f_sharpbil4x(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { sharpbil_n(src, sp, w, h, dst, dp, 4, sb4); }
-
-/****************************************************************************
- * Lanczos, Catmull-Rom, B-Spline and Mitchell, 3x / 4x
- *
- * Real resampling filters (four taps each way) instead of copying pixels: a
- * smooth, non-pixelated picture with clean edges. Lanczos (two lobes) and
- * Catmull-Rom are sharp and can overshoot a little next to a hard edge; the
- * B-Spline is the softest and never overshoots; Mitchell is in between. The
- * result is clamped. Done in two passes, across and then down.
- ****************************************************************************/
-
-typedef struct { int off; int w[4]; } lz_t;       /* first tap is source pixel (x + off - 1); weights sum to 4096 */
-
-enum { LZ_LANCZOS, LZ_CATMULL, LZ_BSPLINE, LZ_MITCHELL, LZ_KINDS };
-
-static lz_t lz_tab[LZ_KINDS][2][4];                 /* [kind][3x or 4x][output pixel] */
-static int  lz_ready[LZ_KINDS];
-
-/* The Mitchell-Netravali family of cubics (B and C choose the one: Catmull-Rom 0 and 1/2, B-Spline 1 and 0, Mitchell 1/3 and 1/3). */
-static double lz_bc(double x, double B, double C)
-{
-  if (x < 0) x = -x;
-  if (x < 1.0) return ((12 - 9 * B - 6 * C) * x * x * x + (-18 + 12 * B + 6 * C) * x * x + (6 - 2 * B)) / 6.0;
-  if (x < 2.0) return ((-B - 6 * C) * x * x * x + (6 * B + 30 * C) * x * x + (-12 * B - 48 * C) * x + (8 * B + 24 * C)) / 6.0;
-  return 0.0;
-}
-
-static double lz_kernel(int kind, double x)
-{
-  const double pi = 3.14159265358979323846;
-
-  switch (kind)
-  {
-    case LZ_CATMULL:  return lz_bc(x, 0.0, 0.5);
-    case LZ_BSPLINE:  return lz_bc(x, 1.0, 0.0);
-    case LZ_MITCHELL: return lz_bc(x, 1.0 / 3.0, 1.0 / 3.0);
-    default: break;
-  }
-  if (x < 0) x = -x;
-  if (x < 1e-9) return 1.0;
-  if (x >= 2.0) return 0.0;
-  return (2.0 * sin(pi * x) * sin(pi * x / 2.0)) / (pi * pi * x * x);
-}
-
-static void lz_build_one(lz_t *t, int n, int kind)
-{
-  int k, j;
-
-  for (k = 0; k < n; k++)
-  {
-    double d = (k + 0.5) / n - 0.5;                   /* the output pixel's place relative to the source pixel's center */
-    double fr = d >= 0 ? d : d + 1.0, wt[4], sum = 0;
-    int    acc = 0, big = 0;
-
-    t[k].off = d >= 0 ? 0 : -1;
-    wt[0] = lz_kernel(kind, fr + 1.0); wt[1] = lz_kernel(kind, fr); wt[2] = lz_kernel(kind, 1.0 - fr); wt[3] = lz_kernel(kind, 2.0 - fr);
-    for (j = 0; j < 4; j++) sum += wt[j];
-    for (j = 0; j < 4; j++)
-    {
-      t[k].w[j] = (int)(wt[j] / sum * 4096.0 + (wt[j] >= 0 ? 0.5 : -0.5));
-      acc += t[k].w[j];
-      if (t[k].w[j] > t[k].w[big]) big = j;
-    }
-    t[k].w[big] += 4096 - acc;                        /* exactly 4096, so flat color stays flat */
-  }
-}
-
-static void lanczos_n(const px_t *src, int sp, int w, int h, px_t *dst, int dp, int n, const lz_t *tab)
-{
-  int stride, x, y, k, j;
-  const px_t *P = plane_from_src(&sc_pad1, src, sp, w, h, &stride);
-  int16_t *H;                                          /* rows -2 .. h+1, across done, 3 channels */
-  size_t   rowlen = (size_t)w * n * 3;
-  int16_t  chan[(FILTER_MAX_W + 2 * PAD) * 3];         /* one source row as 8-bit r, g, b */
-
-  if (!P) return;
-  H = (int16_t *)scratch_get(&sc_ycc2, (size_t)(h + 4) * rowlen * sizeof(int16_t));
-  if (!H) return;
-
-  for (y = -2; y <= h + 1; y++)
-  {
-    const px_t *r = P + (ptrdiff_t)y * stride;
-    int16_t    *o = H + (size_t)(y + 2) * rowlen;
-    int16_t    *cp = chan + PAD * 3;                    /* pixel 0 */
-
-    for (x = -PAD; x < w + PAD; x++)
-    {
-      px_t c = r[x];
-      int  r5 = (c >> 11) & 31, g6 = (c >> 5) & 63, b5 = c & 31;
-      cp[x * 3]     = (int16_t)((r5 << 3) | (r5 >> 2));
-      cp[x * 3 + 1] = (int16_t)((g6 << 2) | (g6 >> 4));
-      cp[x * 3 + 2] = (int16_t)((b5 << 3) | (b5 >> 2));
-    }
-
-    for (x = 0; x < w; x++)
-    for (k = 0; k < n; k++)
-    {
-      const int16_t *t = cp + (x + tab[k].off - 1) * 3;
-      int ch;
-
-      for (ch = 0; ch < 3; ch++)
-      {
-        int v = (tab[k].w[0] * t[ch] + tab[k].w[1] * t[3 + ch] + tab[k].w[2] * t[6 + ch] + tab[k].w[3] * t[9 + ch]) >> 12;
-        o[((size_t)x * n + k) * 3 + ch] = (int16_t)(v < -64 ? -64 : v > 320 ? 320 : v);
-      }
-    }
-  }
-
-  for (y = 0; y < h; y++)
-  for (k = 0; k < n; k++)
-  {
-    px_t *o = ROW(dst, dp, n * y + k);
-    const int16_t *t0 = H + (size_t)(y + tab[k].off + 1) * rowlen, *t1 = t0 + rowlen, *t2 = t1 + rowlen, *t3 = t2 + rowlen;
-    int w0 = tab[k].w[0], w1 = tab[k].w[1], w2 = tab[k].w[2], w3 = tab[k].w[3];
-    size_t i, m = (size_t)w * n;
-
-    for (i = 0; i < m; i++)
-    {
-      int rr = (w0 * t0[i * 3]     + w1 * t1[i * 3]     + w2 * t2[i * 3]     + w3 * t3[i * 3])     >> 12;
-      int gg = (w0 * t0[i * 3 + 1] + w1 * t1[i * 3 + 1] + w2 * t2[i * 3 + 1] + w3 * t3[i * 3 + 1]) >> 12;
-      int bb = (w0 * t0[i * 3 + 2] + w1 * t1[i * 3 + 2] + w2 * t2[i * 3 + 2] + w3 * t3[i * 3 + 2]) >> 12;
-      rr = rr < 0 ? 0 : rr > 255 ? 255 : rr;
-      gg = gg < 0 ? 0 : gg > 255 ? 255 : gg;
-      bb = bb < 0 ? 0 : bb > 255 ? 255 : bb;
-      o[i] = (px_t)(((rr >> 3) << 11) | ((gg >> 2) << 5) | (bb >> 3));
-    }
-  }
-  (void)j;
-}
-
-static const lz_t *lz_get(int kind, int n)
-{
-  if (!lz_ready[kind]) { lz_build_one(lz_tab[kind][0], 3, kind); lz_build_one(lz_tab[kind][1], 4, kind); lz_ready[kind] = 1; }
-  return lz_tab[kind][n - 3];
-}
-
-#define LZ_FILTER(NAME, KIND, N) \
-  static void NAME(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { lanczos_n(src, sp, w, h, dst, dp, N, lz_get(KIND, N)); }
-
-LZ_FILTER(f_lanczos3x, LZ_LANCZOS, 3)
-LZ_FILTER(f_lanczos4x, LZ_LANCZOS, 4)
-LZ_FILTER(f_catmull3x, LZ_CATMULL, 3)
-LZ_FILTER(f_catmull4x, LZ_CATMULL, 4)
-LZ_FILTER(f_bspline3x, LZ_BSPLINE, 3)
-LZ_FILTER(f_bspline4x, LZ_BSPLINE, 4)
-LZ_FILTER(f_mitchell3x, LZ_MITCHELL, 3)
-LZ_FILTER(f_mitchell4x, LZ_MITCHELL, 4)
+#if FILTER_MAX_SCALE >= 5
+static void f_lcd5x(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { lcd_n(src, sp, w, h, dst, dp, 5); }
+static void f_lcd6x(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { lcd_n(src, sp, w, h, dst, dp, 6); }
+#endif
 
 /****************************************************************************
  * xBR 2x / 3x / 4x and HQ2x / HQ3x / HQ4x
@@ -1447,7 +1348,7 @@ static void f_scalefx3x(const px_t *src, int sp, int w, int h, px_t *dst, int dp
 #endif
 
 /****************************************************************************
- * CRT Geom 3x / 4x
+ * CRT Geom 3x
  *
  * cgwg's and DOLLS' CRT-Geom (GPL 2 or later), ported from its RetroArch shader (libretro/glsl-shaders, crt/crt-geom.glsl) with
  * the shader's own default settings: a curved glass screen (distance 1.6, radius 2.0, rounded corners), Lanczos sampling along
@@ -1741,7 +1642,6 @@ static void crt_geom_n(const px_t *src, int sp, int w, int h, px_t *dst, int dp,
 }
 
 static void f_crtgeom3x(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { crt_geom_n(src, sp, w, h, dst, dp, 3); }
-static void f_crtgeom4x(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { crt_geom_n(src, sp, w, h, dst, dp, 4); }
 
 /****************************************************************************
  * LQ2x
@@ -2058,6 +1958,29 @@ static void f_super2xsai(const px_t *src, int sp, int w, int h, px_t *dst, int d
 
 
 /****************************************************************************
+ * 4x from a 2x filter
+ *
+ * The 2x filter run twice: on the picture, then on its own 2x result (what Scale4x and the 4x of
+ * the Eagle and SaI filters are).
+ ****************************************************************************/
+
+static void twice_2x(filter_fn f, const px_t *src, int sp, int w, int h, px_t *dst, int dp)
+{
+  int mp = 2 * w * (int)sizeof(px_t);
+  px_t *mid = (px_t *)scratch_get(&sc_twice, (size_t)mp * (size_t)(2 * h));
+
+  if (!mid) return;
+  f(src, sp, w, h, mid, mp);
+  f(mid, mp, 2 * w, 2 * h, dst, dp);
+}
+
+static void f_4xsai(const px_t *src, int sp, int w, int h, px_t *dst, int dp)       { twice_2x(f_2xsai, src, sp, w, h, dst, dp); }
+static void f_super4xsai(const px_t *src, int sp, int w, int h, px_t *dst, int dp)  { twice_2x(f_super2xsai, src, sp, w, h, dst, dp); }
+static void f_supereagle4x(const px_t *src, int sp, int w, int h, px_t *dst, int dp) { twice_2x(f_supereagle, src, sp, w, h, dst, dp); }
+static void f_eagle4x(const px_t *src, int sp, int w, int h, px_t *dst, int dp)      { twice_2x(f_eagle2x, src, sp, w, h, dst, dp); }
+static void f_scale4x(const px_t *src, int sp, int w, int h, px_t *dst, int dp)      { twice_2x(f_scale2x, src, sp, w, h, dst, dp); }
+
+/****************************************************************************
  * Table
  ****************************************************************************/
 
@@ -2066,41 +1989,43 @@ static const filter_def_t filters[] =
   /* The order here is the order in the menu. Names, not positions, are what the
      settings file stores. */
   /* Sorted by name (what the menu and the Settings list show); group is the sub-menu of the Render Filter menu. */
-  { "2xSaI",                 2, f_2xsai, 0, "SaI and Eagle" },
+  { "2xSaI",                 2, f_2xsai, 0, "Eagle and SaI" },
+  { "4xSaI",                 4, f_4xsai, 0, "Eagle and SaI" },
   { "CRT 3x (RGB Mask)",     3, f_crt3x, 0, "CRT" },
   { "CRT Aperture Grille 3x", 3, f_crt_grille3x, 0, "CRT" },
   { "CRT Geom 3x",           3, f_crtgeom3x, 0, "CRT" },
-  { "CRT Geom 4x",           4, f_crtgeom4x, 0, "CRT" },
   { "CRT Shadow Mask 3x",    3, f_crt_shadow3x, 0, "CRT" },
-  { "Eagle 2x",              2, f_eagle2x, 0, "SaI and Eagle" },
+  { "Eagle 2x",              2, f_eagle2x, 0, "Eagle and SaI" },
+  { "Eagle 4x",              4, f_eagle4x, 0, "Eagle and SaI" },
   { "Glow Scanlines 3x",     3, f_glow3x, 0, "Scanlines" },
   { "HQ2x",                  2, f_hq2x, 0, "HQ" },
   { "HQ3x",                  3, f_hq3x, 0, "HQ" },
   { "HQ4x",                  4, f_hq4x, 0, "HQ" },
-  { "B-Spline 3x",           3, f_bspline3x, 0, "Bicubic" },
-  { "B-Spline 4x",           4, f_bspline4x, 0, "Bicubic" },
-  { "Catmull-Rom 3x",        3, f_catmull3x, 0, "Bicubic" },
-  { "Catmull-Rom 4x",        4, f_catmull4x, 0, "Bicubic" },
-  { "Lanczos 3x",            3, f_lanczos3x, 0, "Lanczos" },
-  { "Lanczos 4x",            4, f_lanczos4x, 0, "Lanczos" },
   { "LQ2x",                  2, f_lq2x, 0, "HQ" },
-  { "Mitchell 3x",           3, f_mitchell3x, 0, "Bicubic" },
-  { "Mitchell 4x",           4, f_mitchell4x, 0, "Bicubic" },
+  { "LCD Grid 2x",           2, f_lcd2x, 0, "LCD Grid" },
   { "LCD Grid 3x",           3, f_lcd3x, 0, "LCD Grid" },
   { "LCD Grid 4x",           4, f_lcd4x, 0, "LCD Grid" },
+#if FILTER_MAX_SCALE >= 5
+  { "LCD Grid 5x",           5, f_lcd5x, 0, "LCD Grid" },
+  { "LCD Grid 6x",           6, f_lcd6x, 0, "LCD Grid" },
+#endif
+  { "MMPX 2x",               2, f_mmpx, 0, "MMPX" },
+#ifdef GPEX_XBRZ
+  { "MMPX Enhanced 2x",      2, f_mmpx_ex, 0, "MMPX" },
+#endif
   { "Scale2x",               2, f_scale2x, 0, "Scale" },
   { "Scale3x",               3, f_scale3x, 0, "Scale" },
+  { "Scale4x",               4, f_scale4x, 0, "Scale" },
   { "ScaleFX 3x",            3, f_scalefx3x, 0, "Scale" },
   { "Scanlines 2x",          2, f_scan2x, 0, "Scanlines" },
   { "Scanlines 3x",          3, f_scan3x, 0, "Scanlines" },
   { "Scanlines 4x",          4, f_scan4x, 0, "Scanlines" },
-  { "Sharp 4x",              4, f_sharp4x, 0, "Sharp" },
-  { "Sharp Bilinear 3x",     3, f_sharpbil3x, 0, "Sharp" },
-  { "Sharp Bilinear 4x",     4, f_sharpbil4x, 0, "Sharp" },
   { "Smooth 2x (xBR-Style)", 2, f_smooth2x, 0, "Smooth" },
   { "Smooth 4x (xBR-Style)", 4, f_smooth4x, 0, "Smooth" },
-  { "Super 2xSaI",           2, f_super2xsai, 0, "SaI and Eagle" },
-  { "Super Eagle",           2, f_supereagle, 0, "SaI and Eagle" },
+  { "Super 2xSaI",           2, f_super2xsai, 0, "Eagle and SaI" },
+  { "Super 4xSaI",           4, f_super4xsai, 0, "Eagle and SaI" },
+  { "Super Eagle",           2, f_supereagle, 0, "Eagle and SaI" },
+  { "Super Eagle 4x",        4, f_supereagle4x, 0, "Eagle and SaI" },
   { "xBR 2x",                2, f_xbr2x, 0, "xBR" },
   { "xBR 3x",                3, f_xbr3x, 0, "xBR" },
   { "xBR 4x",                4, f_xbr4x, 0, "xBR" },
