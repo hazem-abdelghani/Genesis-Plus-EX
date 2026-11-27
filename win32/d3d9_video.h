@@ -30,6 +30,7 @@
    any failure (missing d3d9.dll, no compatible adapter, device creation
    failed, etc.) -- 0 is a normal, expected outcome on some systems, not
    an error to surface loudly. */
+void d3d9_set_adapter(const char *name);   /* the card to make the device on ("" = Auto): used the next time the device is made */
 int  d3d9_init(HWND hwnd);
 
 void d3d9_shutdown(void);

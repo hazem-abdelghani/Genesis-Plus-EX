@@ -32,6 +32,7 @@ typedef struct
   uint8 ym2413;
   uint8 ym3438;
   uint8 opll;
+  uint8 cd_cache;                 /* 1 = a CHD disc image is read into memory when the disc is loaded (see main.c, __wrap_chd_open_file) */
   uint8 cd_latency;
   int16 psg_preamp;
   int16 fm_preamp;
@@ -46,6 +47,7 @@ typedef struct
   uint8 mono;
   uint8 system;
   uint8 region_detect;
+  uint8 region_order;             /* with Auto Detect: which region a Mega Drive game that supports several gets, 0..5 (USA > EUR > JAP, USA > JAP > EUR (the core's own), EUR > USA > JAP ...) */
   uint8 vdp_mode;
   uint8 master_clock;
   uint8 force_dtack;
@@ -63,6 +65,7 @@ typedef struct
   uint8 render;
   uint8 enhanced_vscroll;
   uint8 enhanced_vscroll_limit;
+  uint8 no_sprite_limit;          /* 1 = no limit on the sprites (and their pixels) of a scanline (see osd.h) */
   t_input_config input[MAX_INPUTS];
 } t_config;
 
@@ -71,6 +74,9 @@ typedef struct
  ****************************************************************************/
 
 #define GUI_PATH_LEN    512
+#define GUI_FF_RATIOS   { 2, 3, 4, 6, 8, 12, 16 }     /* the choices of Fast Forward Speed (Settings > Emulation) */
+#define GUI_FF_COUNT    7
+#define GUI_FF_DEFAULT  2                             /* 4x: how it was before the choice existed */
 #define GUI_DIR_N       10      /* the folders beside the program that Settings > General > Data Folders can move (not Plugins; Images holds Bezels, Covers and Pico-Storyware) */
 extern const char *const gui_dir_names[GUI_DIR_N];
 #define GUI_RECENT_MAX  10
@@ -107,6 +113,8 @@ typedef struct
   padmask_t button[PAD_KEYS]; /* button/POV/stick mask per button (namespace depends
                             on device: XInput below GUI_INPUT_XPAD_COUNT,
                             DirectInput at or above it), 0 = unassigned */
+  int key2[PAD_KEYS];   /* a second key for the same button (multi-mapping): either key presses it; 0 = none */
+  padmask_t button2[PAD_KEYS];  /* a second pad button for the same button (same device as button[]) */
   unsigned turbo;       /* bit per PAD_* index: that button fires on and off while held (A B C X Y Z) */
   int device;           /* -1 keyboard only, else an XInput slot or a
                             DirectInput joystick -- see GUI_INPUT_XPAD_COUNT
@@ -121,7 +129,8 @@ typedef struct
 enum { ASPECT_PAR = 0, ASPECT_SQUARE, ASPECT_43, ASPECT_STRETCH };   /* ASPECT_PAR: the real console's pixel shape */
 
 /* gui.renderer */
-enum { RENDERER_GDI = 0, RENDERER_D3D9 = 1, RENDERER_D3D11 = 2 };
+enum { RENDERER_GDI = 0, RENDERER_D3D9 = 1, RENDERER_D3D11 = 2, RENDERER_D3D12 = 3 };
+#define RENDERER_IS_DX(r) ((r) == RENDERER_D3D11 || (r) == RENDERER_D3D12)      /* the two modern ones: flip-model swap chain, Variable Refresh Rate, True Exclusive Fullscreen, shaders */
 
 typedef struct
 {
@@ -158,6 +167,8 @@ typedef struct
   int renderer;            /* which output path to use: RENDERER_GDI, RENDERER_D3D9 or
                                RENDERER_D3D11 -- always falls back to GDI automatically
                                if the chosen one is unavailable or fails */
+  int alt_timing;           /* 1 = the game is paced by the PC's precise clock (the sound follows), not by the sound card (main.c, emulation_step) */
+  int sync_display;         /* 1 = with VSync, the game runs at the screen's exact refresh rate when that is within 2% of its own (see main.c, display_sync_update) */
   int vsync;                /* wait for the compositor's refresh after each frame (Direct3D
                                or GDI). Off by default: the app is paced by audio, so this
                                only helps if the display refresh is close to the game's rate;
@@ -175,7 +186,7 @@ typedef struct
   int ui_style;            /* 0 = Classic, 1 = Modern (rounded window frame, Segoe UI Variable text; more of it in later versions) */
   int large_ui;            /* 0 = normal size, 1 = ~15-20% larger throughout */
   int cheats_enabled;      /* master toggle -- 0 disables every cheat regardless of each one's own checkbox */
-  int cursor_idle, frame_cap, bass, log_on, pause_pad, keep_aspect, normalize, autosave_min, skip_len, np_upnp, overdrive, osd_opts, osd_pos, osd_time, osd_size, fps_pos, osd_color, osd_lines, rewind_speed;   /* see settings.c (rewind_speed: 0 slow, 1 normal, 2 fast, 3 very fast) */
+  int cursor_idle, frame_cap, bass, log_on, pause_pad, keep_aspect, normalize, autosave_min, skip_len, run_ahead, np_upnp, overdrive, osd_opts, osd_pos, osd_time, osd_size, fps_pos, osd_color, osd_lines, rewind_speed;   /* see settings.c (rewind_speed: 0 slow, 1 normal, 2 fast, 3 very fast) */
   int hide_toolbar;        /* the ROM browser's toolbar / search bar / filter bar are hidden */
   int hide_searchbar;
   int hide_filterbar;
@@ -202,7 +213,7 @@ typedef struct
   int padhk_hold_on;       /* gamepad hotkeys only work while the Hold Button is held */
   padmask_t padhk_hold[2];       /* that button: [0] XInput pad, [1] DirectInput joystick */
   int group_console;       /* 1 = the list is grouped into collapsible sections, one per console */
-  int az_strip;            /* 1 = a letter strip beside the list jumps to games starting with that letter */
+  int letter_strip;            /* 1 = a Letter Strip beside the list jumps to games starting with that letter */
   int cover_shape;         /* grid covers: 0 square, 1 box (portrait), 2 wide */
   int toolbar_size;        /* toolbar icon size: 0 small, 1 normal (the default), 2 large */
   int toolbar_labels;      /* 1 = the name of each toolbar button is written under its icon */
@@ -224,13 +235,17 @@ typedef struct
   int mouse_sens;          /* mouse / light gun speed: 0..4 = 50, 75, 100, 150, 200 % */
   int vs_limit;            /* enhanced vertical scroll limit: 0..7 = 2, 4, ... 16 */
   int cpu_speed;           /* CPU speed: 0..7 = 50, 75, 100, 125, 150, 200, 300, 400 percent */
-  int gun_ox, gun_oy;      /* light gun aim offset, 0..6 = -12, -8, -4, 0, 4, 8, 12 pixels */
+  int gun_ox, gun_oy;      /* light gun aim offset, 0..12 = -12, -10 ... 0 ... +10, +12 pixels */
   int lcd_color;            /* LCD color correction (every console): 0 off, 1 light, 2 full */
   int adj_bright, adj_contrast, adj_sat, adj_gamma, adj_hue;   /* picture adjustments: brightness -50 to 50 %, contrast 50-150 %, saturation 0-200 %, gamma 50-150 (/100), hue -30 to 30 degrees; 100, 100, 100, 0 = unchanged */
   int bar_color;           /* color of the bars around the picture (index into video.c's list) */
   int fs_res_w, fs_res_h;  /* exclusive fullscreen resolution; 0 = the desktop's own */
+  char fs_monitor[32];     /* the Windows name of the monitor fullscreen goes to ("\\.\DISPLAY2"); empty = where the window is (video.c, fs_monitor) */
+  int fs_mode;             /* Fullscreen Mode: 0 Borderless Window, 1 Exclusive Fullscreen, 2 True Exclusive Fullscreen (fs_exclusive and fs_true follow it) */
+  int fs_true;             /* 1 = (experimental) real DXGI exclusive fullscreen on top of Exclusive Fullscreen, Direct3D 11 and 12 only (video.c, d3d11_exclusive_enter / d3d12_exclusive_enter) */
   int fs_exclusive;        /* 1 = fullscreen changes the display mode instead of a borderless window */
   int confine_mouse;       /* keep the pointer inside the picture while a mouse / light gun game runs */
+  char video_adapter[96];  /* name of the graphics card the Direct3D renderers use ("" = Auto: Windows picks) */
   char audio_device[96];   /* name of the sound output device ("" = the Windows default) */
   int row_density;         /* 0 compact, 1 normal, 2 roomy rows in the game list */
   int browser_gridlines;   /* lines between the columns of the game list */
@@ -243,6 +258,7 @@ typedef struct
   int clean_names;         /* the game list shows names without the (...) and [...] tags */
   int recent_mode;         /* the last few games are grouped at the top of the list */
   int favorites_only;      /* the game list shows only the favorites */
+  int hotkeys_off;         /* 1 = no keyboard shortcut works (the table in Hotkeys is kept); Hotkeys window > Disable Hotkeys */
   int hotkey[96];          /* the keyboard shortcuts: virtual key + 0x10000 Ctrl / 0x20000 Shift / 0x40000 Alt (hotkeys.c) */
   padmask_t padhk_di[24];        /* the same for a DirectInput pad as Player 1 (its own button numbers); 0 = none, nothing is set by default */
   padmask_t padhk[24];           /* the pad button (XInput mask) for each gamepad hotkey action, 0 = none; the first two are Fast Forward and Rewind (hotkeys.c) */
@@ -252,6 +268,7 @@ typedef struct
   int mute_dac;            /* silence the DAC (the sample channel of the Genesis FM chip) alone */
   int dac_level;           /* the level of the DAC in percent, 0 to 150 (100: as the game plays it) */
   int mute_pwm;            /* silence the 32X PWM sound alone */
+  int mute_cdda;           /* silence the CD audio (the music of the disc) of a Mega CD game alone */
   int pwm_level;           /* the level of the 32X PWM sound in percent (100: as the library makes it) */
   int resume_choice;       /* the Auto Resume question: 0 = ask, 1 = always resume, 2 = never (set by "Do not ask again") */
   int autosave;            /* save the game when it is closed and offer to resume it next time */
@@ -261,6 +278,7 @@ typedef struct
   /* window geometry, restored on the next launch */
   int window_x;            /* top-left of the window, INT_MIN = "not set" */
   int window_y;
+  int window_w, window_h;       /* the outer size of the window when it was closed (0: not saved yet: the size of the Window Size chosen) */
   int window_maximized;
 
   /* Built-in CPU render filter (filters.c). Stored by name rather than by
@@ -280,7 +298,7 @@ typedef struct
   int rewind;             /* 1 = keep the history Backspace rewinds through (uses ~200 MB) */
   int pause_on_focus_loss;
   int always_on_top;
-  int fast_forward_ratio; /* frames run per displayed frame in fast forward */
+  int fast_forward_idx;   /* Fast Forward Speed: an index into GUI_FF_RATIOS (frames run per displayed frame in fast forward) */
   int state_slot;         /* 0-9 */
 
   /* input */
@@ -295,8 +313,18 @@ typedef struct
   /* paths */
   char rom_dir[GUI_PATH_LEN];
   char recent[GUI_RECENT_MAX][GUI_PATH_LEN];
+  unsigned int cd32x[32];                  /* discs that were started as Mega CD + 32X discs (a hash of the path), so Recent Files starts them the same way */
+  int cd32x_n;
+  unsigned int cd32x_no[64];               /* discs checked and found to be plain Mega CD discs (so the check is not made again) */
+  int cd32x_no_n;
   char shader_preset_path[GUI_PATH_LEN];   /* .slangp shader (D3D11 only); "" = none */
 } t_gui_config;
+
+extern int config_cd32x_has(const char *path);   /* this disc was started as a Mega CD + 32X one before */
+extern void config_cd32x_add(const char *path);
+extern int config_cd32x_no_has(const char *path);   /* this disc was checked before and is a plain Mega CD one */
+extern void config_cd32x_no_add(const char *path);
+extern void config_cd32x_remove(const char *path);   /* forget it (the disc is started as a plain Mega CD one again) */
 
 /* Global variables */
 extern t_config config;

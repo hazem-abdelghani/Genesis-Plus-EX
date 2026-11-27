@@ -395,6 +395,7 @@ static LRESULT CALLBACK rs_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
       col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
       col.fmt = LVCFMT_LEFT; col.cx = S(100);
       for (i = 0; i < 4; i++) { col.pszText = (char *)heads[i]; SendMessageA(rs_list, LVM_INSERTCOLUMNA, (WPARAM)i, (LPARAM)&col); }
+      gui_list_header_menu(rs_list);
       rs_ctl("STATIC", "", SS_LEFT | SS_NOPREFIX, 0, IDC_COUNT);
       rs_ctl("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 0, IDC_MEM);
       rs_ctl("BUTTON", "1 Byte", WS_GROUP | WS_TABSTOP | BS_AUTORADIOBUTTON, 0, IDC_S1);

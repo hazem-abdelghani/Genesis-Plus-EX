@@ -679,13 +679,13 @@ void gui_input_fit_buttons(t_pad_map *m)
     gui_input_default_buttons(-1, xdef);
     /* A D-pad on the hat bits (DI_DPAD_*) is a DirectInput mapping: those bits are not an XInput button. */
     if (m->button[PAD_UP] == DI_DPAD_UP || m->button[PAD_DOWN] == DI_DPAD_DOWN || m->button[PAD_LEFT] == DI_DPAD_LEFT || m->button[PAD_RIGHT] == DI_DPAD_RIGHT)
-      memcpy(m->button, xdef, sizeof(xdef));
+      { memcpy(m->button, xdef, sizeof(xdef)); memset(m->button2, 0, sizeof(m->button2)); }      /* (the second buttons were for the other kind of pad) */
   }
   else if (is_di_device(m->device) && m->device - XPAD_MAX_DEVICES < joy_count)
   {
     gui_input_default_buttons(-1, xdef);
     gui_input_default_buttons(m->device, ddef);
-    if (!memcmp(m->button, xdef, sizeof(xdef))) memcpy(m->button, ddef, sizeof(ddef));
+    if (!memcmp(m->button, xdef, sizeof(xdef))) { memcpy(m->button, ddef, sizeof(ddef)); memset(m->button2, 0, sizeof(m->button2)); }
   }
 }
 
@@ -1000,7 +1000,7 @@ static DWORD last_modifier_seen;
    or clicking elsewhere must not trigger save slots or lightgun shots. */
 static int pad_input_allowed(void)
 {
-  return has_focus || gui.background_input || picobook_active();      /* (the Storyware window in front is the game's too) */
+  return has_focus || gui.background_input || storyware_active();      /* (the Storyware window in front is the game's too) */
 }
 
 /* Ctrl and Alt themselves. A pad button assigned to one of these has to work
@@ -1033,7 +1033,7 @@ static int key_down_any(int vk, int allowed)
   return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 
-static int key_down(int vk)      { return key_down_any(vk, has_focus || picobook_active()); }            /* hotkeys */
+static int key_down(int vk)      { return key_down_any(vk, has_focus || storyware_active()); }            /* hotkeys */
 static int pad_key_down(int vk)  { return key_down_any(vk, pad_input_allowed()); }  /* controller keys */
 
 /* Asking XInput about an empty controller slot can be slow (older XInput DLLs
@@ -1620,7 +1620,7 @@ static uint16 read_pad(int slot)
   buttons = gamepad_buttons(map.device, deadzone_raw(slot));
 
   #define PRESSED(idx) \
-    (pad_key_down(map.key[idx]) || (map.button[idx] && (buttons & map.button[idx])))
+    (pad_key_down(map.key[idx]) || pad_key_down(map.key2[idx]) || (map.button[idx] && (buttons & map.button[idx])) || (map.button2[idx] && (buttons & map.button2[idx])))
 
   if (PRESSED(PAD_A))     pad |= INPUT_A;
   if (PRESSED(PAD_B))     pad |= INPUT_B;
@@ -1793,14 +1793,14 @@ static int pointer_in_game_window(POINT *out)
 
   if (!GetCursorPos(&pt)) return 0;
   {
-    /* The program's window, or the picture of the Direct3D 11 renderer, which is a window of its own inside it. */
+    /* The program's window, or the picture of the Direct3D 11 or 12 renderer, which is a window of its own inside it. */
     HWND w = WindowFromPoint(pt);
     char cls[32] = "";
 
     if (w != g_hwnd)
     {
       if (w) GetClassNameA(w, cls, sizeof(cls));
-      if (lstrcmpA(cls, "GPEXD3D11Surface") != 0) return 0;
+      if (lstrcmpA(cls, "GPEXD3D11Surface") != 0 && lstrcmpA(cls, "GPEXD3D12Surface") != 0) return 0;
     }
   }
   if (!ScreenToClient(g_hwnd, &pt)) return 0;
@@ -1937,7 +1937,7 @@ int win32_input_update(void)
              whenever their device was a mouse, only Player 1's did. */
           t_pad_map map;
           resolve_map(slot, &map);
-          if (pad_key_down(map.key[PAD_START])) input.pad[slot] |= INPUT_START;
+          if (pad_key_down(map.key[PAD_START]) || pad_key_down(map.key2[PAD_START])) input.pad[slot] |= INPUT_START;
         }
         break;
       }
@@ -1953,8 +1953,9 @@ int win32_input_update(void)
         on_area = on_picture || cursor_over_game_area();       /* (the bars and the frame round the picture count: a shot there is a shot off the screen) */
         if (on_picture)
         {
-          x += (gui.gun_ox - 3) * 4;     /* aim offset (Settings > Input) */
-          y += (gui.gun_oy - 3) * 4;
+          if (system_hw == SYSTEM_SMS || system_hw == SYSTEM_SMS2) { x += 13; y += 1; }      /* the Master System's Light Phaser: the core's reading of it lands about this far up and to the left of the pointer (Wanted: 13 and 1 pixels put the hit under the pointer, as tried with the aim offset at -4 on top of 17 and 5) */
+          x += (gui.gun_ox - 6) * 2;     /* aim offset (Settings > Input) */
+          y += (gui.gun_oy - 6) * 2;
           if (x < 0) x = 0;
           if (y < 0) y = 0;
           if (sw > 0 && x >= sw) x = sw - 1;
@@ -1967,6 +1968,29 @@ int win32_input_update(void)
         }
         input.analog[slot][0] = x;
         input.analog[slot][1] = y;
+        if (input.system[1] == SYSTEM_JUSTIFIER && (slot == 4 || slot == 5))
+        {
+          /* Konami Justifiers: the first gun is Player 1's, the second Player 2's, and a gun has a trigger and a Start button (nothing else). Both
+             guns used to follow the mouse and the keys of no player at all, so a click was a shot of both guns and a Player 1 Start was not
+             heard (or, with a controller, came from the wrong one): Lethal Enforcers II joined the second player when the first one pressed
+             Start to go on. Now the mouse is the first gun (left button the trigger, right button Start, as in other emulators that have
+             the Justifier), the Start of Player 1 (key or pad) is its Start, and the second gun is Player 2's: the trigger and Start of Player 2's
+             own keys or pad (it aims with the same pointer). */
+          if (slot == 4)
+          {
+            if (on_area)
+            {
+              if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) input.pad[slot] |= INPUT_A;
+              if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) input.pad[slot] |= INPUT_START;
+            }
+            input.pad[slot] |= (uint16)(read_pad(0) & INPUT_START);
+          }
+          else
+          {
+            input.pad[slot] |= (uint16)(read_pad(1) & (INPUT_A | INPUT_START));
+          }
+          break;
+        }
         if (on_area)
         {
           if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) input.pad[slot] |= INPUT_A;
@@ -1977,7 +2001,7 @@ int win32_input_update(void)
           /* Same reasoning as the mouse case above. */
           t_pad_map map;
           resolve_map(slot, &map);
-          if (pad_key_down(map.key[PAD_START])) input.pad[slot] |= INPUT_START;
+          if (pad_key_down(map.key[PAD_START]) || pad_key_down(map.key2[PAD_START])) input.pad[slot] |= INPUT_START;
         }
         break;
       }
@@ -2018,7 +2042,7 @@ int win32_input_update(void)
         if (pp & (INPUT_A | INPUT_B | INPUT_C)) input.pad[slot] |= INPUT_PICO_RED;
         if (pp & INPUT_START) input.pad[slot] |= INPUT_PICO_PEN;
 
-        if (picobook_pen(&mx, &my, &mouse_pen, &mouse_red)) { have_mouse = 1; pen_on_book = 1; }       /* over the page picture: the pen is on the book */
+        if (storyware_pen(&mx, &my, &mouse_pen, &mouse_red)) { have_mouse = 1; pen_on_book = 1; }       /* over the page picture: the pen is on the book */
         else if (cursor_in_frame(&x, &y) && sw > 0 && sh > 0)
         {
           pen_on_book = 0;                                                                                /* over the game's picture: on the pad, where the game draws its own pointer */
@@ -2342,8 +2366,9 @@ int gui_input_menu_pad(void)
   dn = is_di_device(map.device) ? DI_DPAD_DOWN : XPAD_DPAD_DOWN;
   if (b & up) bits |= 1;
   if (b & dn) bits |= 2;
-  if ((map.button[PAD_A] && (b & map.button[PAD_A])) || (map.button[PAD_START] && (b & map.button[PAD_START]))) bits |= 4;
-  if (map.button[PAD_B] && (b & map.button[PAD_B])) bits |= 8;
+  if ((map.button[PAD_A] && (b & map.button[PAD_A])) || (map.button[PAD_START] && (b & map.button[PAD_START])) ||
+      (map.button2[PAD_A] && (b & map.button2[PAD_A])) || (map.button2[PAD_START] && (b & map.button2[PAD_START]))) bits |= 4;
+  if ((map.button[PAD_B] && (b & map.button[PAD_B])) || (map.button2[PAD_B] && (b & map.button2[PAD_B]))) bits |= 8;
   now = bits & ~prev;
   prev = bits;
   return now;

@@ -17,6 +17,8 @@
 
 #include <windows.h>
 #include <dwmapi.h>
+#define COBJMACROS
+#include <dxgi.h>
 #include <math.h>
 #include <zlib.h>
 
@@ -30,6 +32,7 @@
 #include "theme.h"
 #include "d3d9_video.h"
 #include "d3d11_video.h"
+#include "d3d12_video.h"
 #include "filters.h"
 #include "shader_chain.h"
 #include "picocore.h"
@@ -49,6 +52,7 @@ static struct
 
   RECT     last_dest;     /* where the frame landed, for border clearing */
   int      dest_valid;
+  int      have_frame;    /* the buffer holds a picture of the game (video_frame() ran since it was last cleared) */
 
   int      fps;
   struct { char text[128]; DWORD until; } msg[OSD_LINES];   /* the last messages, newest first; each fades out at its own time */
@@ -428,7 +432,7 @@ void video_set_filter(int index)
     gui.render_filter[0] = '\0';
     filter_prepare(-1);          /* give back anything the old filter held */
     filter_buffer_free();        /* and the ~30 MB output picture */
-    video_viewport_changed();
+    video_picture_refresh();
     return;
   }
 
@@ -451,7 +455,7 @@ void video_set_filter(int index)
     filter_prepare(-1);
     filter_buffer_free();        /* give back the ~30 MB output picture, same as the "no such filter" case above */
     gui_status("Not enough memory for the %s filter", f->name);
-    video_viewport_changed();
+    video_picture_refresh();
     return;
   }
 
@@ -466,7 +470,7 @@ void video_set_filter(int index)
     video_set_ntsc(0);
   }
 
-  video_viewport_changed();
+  video_picture_refresh();
 }
 
 /* For restoring the saved setting at startup. Returns 1 if the name matched
@@ -583,8 +587,10 @@ int video_init(void)
 
   video_set_ntsc(config.ntsc);
 
+  d3d9_set_adapter(gui.video_adapter); d3d11_set_adapter(gui.video_adapter); d3d12_set_adapter(gui.video_adapter);
   if (gui.renderer == RENDERER_D3D9)  d3d9_init(g_hwnd);
-  if (gui.renderer == RENDERER_D3D11) { d3d11_set_vrr(gui.vrr); d3d11_init(g_hwnd); video_reload_shader_preset(); }
+  if (gui.renderer == RENDERER_D3D11) { d3d11_set_vrr(video_vrr_wanted()); d3d11_init(g_hwnd); video_reload_shader_preset(); }
+  if (gui.renderer == RENDERER_D3D12) { d3d12_set_vrr(video_vrr_wanted()); d3d12_init(g_hwnd); video_reload_shader_preset(); }
 
   return 1;
 }
@@ -598,13 +604,71 @@ int video_init(void)
    then returns 0) -- this never itself tries to (re)create the device. */
 static void video_reload_shader_preset(void)
 {
+  if (!gui.shader_preset_path[0]) return;
+  video_dx_load_shader(gui.shader_preset_path);          /* (nothing happens when the device is not up) */
+}
+
+static int hw_renderer_active(void);
+
+/* The chosen renderer is up (the classic one always is). */
+int video_renderer_working(void) { return gui.renderer == RENDERER_GDI || hw_renderer_active(); }
+
+/* The two modern renderers behind one set of questions. */
+
+/* Variable Refresh Rate was switched (or True Exclusive Fullscreen was picked, which turns it off): the swap chain is made again. */
+void video_vrr_changed(void)
+{
+  if (gui.renderer == RENDERER_D3D12)
+  {
+    d3d12_set_vrr(video_vrr_wanted());
+    if (d3d12_apply_vrr()) return;
+  }
+  video_set_renderer(gui.renderer);
+}
+
+int video_dx_vrr_active(void)
+{
+  return gui.renderer == RENDERER_D3D12 ? d3d12_vrr_active() : (gui.renderer == RENDERER_D3D11 ? d3d11_vrr_active() : 0);
+}
+
+void video_dx_show_surface(int on)
+{
+  if (gui.renderer == RENDERER_D3D12) d3d12_show_surface(on);
+  else if (gui.renderer == RENDERER_D3D11) d3d11_show_surface(on);
+}
+
+int video_dx_shader_device(void **dev)
+{
+  if (gui.renderer == RENDERER_D3D12) return d3d12_get_shader_device(dev);
+  if (gui.renderer == RENDERER_D3D11) return d3d11_get_frame_resources(dev, NULL, NULL);
+  return 0;
+}
+
+int video_dx_load_shader(const char *path)
+{
   void *device;
 
-  if (!gui.shader_preset_path[0]) return;
-  if (!d3d11_get_frame_resources(&device, NULL, NULL)) return;
-
-  shader_chain_load(device, gui.shader_preset_path);
+  if (!video_dx_shader_device(&device)) return 0;
+  return gui.renderer == RENDERER_D3D12 ? shader_chain_load12(device, path) : shader_chain_load(device, path);
 }
+
+static int dx_available(void)
+{
+  return gui.renderer == RENDERER_D3D12 ? d3d12_available() : (gui.renderer == RENDERER_D3D11 ? d3d11_available() : 0);
+}
+
+static int dx_resample_available(int mode)
+{
+  return gui.renderer == RENDERER_D3D12 ? d3d12_resample_available(mode) : d3d11_resample_available(mode);
+}
+
+static int dx_exclusive_active(void) { return d3d11_exclusive_active() || d3d12_exclusive_active(); }
+
+static void dx_exclusive_leave(void) { d3d11_exclusive_leave(); d3d12_exclusive_leave(); }
+
+static int dx_exclusive_size(int *w, int *h) { return d3d11_exclusive_size(w, h) || d3d12_exclusive_size(w, h); }
+
+static void dx_set_sync(int on) { if (gui.renderer == RENDERER_D3D12) d3d12_set_sync(on); else d3d11_set_sync(on); }
 
 /* Whichever hardware-accelerated path (if any) is both selected and
    actually working right now -- either can fail to initialize or can
@@ -614,6 +678,7 @@ static int hw_renderer_active(void)
 {
   if (gui.renderer == RENDERER_D3D9)  return d3d9_available();
   if (gui.renderer == RENDERER_D3D11) return d3d11_available();
+  if (gui.renderer == RENDERER_D3D12) return d3d12_available();
   return 0;
 }
 
@@ -622,18 +687,22 @@ static int hw_renderer_active(void)
 const char *video_scaling_path(int *note)
 {
   if (note) *note = 0;
-  if (gui.renderer == RENDERER_D3D11 && d3d11_available())
+  if (RENDERER_IS_DX(gui.renderer) && dx_available())
   {
+    const char *api = gui.renderer == RENDERER_D3D12 ? "Direct3D 12" : "Direct3D 11";
+
     if (shader_chain_active()) { if (note) *note = 1; return "a shader preset scales the picture, the Scaling Filter is not used"; }
     if (gui.smooth == 1 || gui.smooth >= 3)
     {
-      if (d3d11_resample_available(gui.smooth)) return "Direct3D 11 pixel shader";
+      static char buf[96];
+      if (dx_resample_available(gui.smooth)) { wsprintfA(buf, "%s pixel shader", api); return buf; }
       if (note) *note = 1;
-      return gui.smooth == 1 ? "Direct3D 11, but its shader did not compile: the picture is enlarged on the processor" : "Direct3D 11, but its shader did not compile: Bilinear";
+      wsprintfA(buf, gui.smooth == 1 ? "%s, but its shader did not compile: the picture is enlarged on the processor" : "%s, but its shader did not compile: Bilinear", api);
+      return buf;
     }
-    return "Direct3D 11";
+    return api;
   }
-  if (gui.renderer == RENDERER_D3D11) { if (note) *note = 1; return "Direct3D 11 is not working (the classic renderer draws): Bilinear"; }
+  if (RENDERER_IS_DX(gui.renderer)) { if (note) *note = 1; return gui.renderer == RENDERER_D3D12 ? "Direct3D 12 is not working (the classic renderer draws): Bilinear" : "Direct3D 11 is not working (the classic renderer draws): Bilinear"; }
   if (gui.renderer == RENDERER_D3D9 && d3d9_available() && gui.smooth >= 3 && d3d9_resample_available(gui.smooth)) return "Direct3D 9 pixel shader";
   if (gui.smooth == 3) return "on the processor (Sharp Bilinear)";
   if (gui.smooth >= 3) { if (note) *note = 1; return gui.renderer == RENDERER_D3D9 ? "Direct3D 9, but its shader did not compile: Bilinear" : "the classic renderer has no Bicubic: Bilinear"; }
@@ -644,9 +713,12 @@ void video_set_renderer(int renderer)
 {
   if (d3d9_available())  d3d9_shutdown();
   if (d3d11_available()) d3d11_shutdown();
+  if (d3d12_available()) d3d12_shutdown();
 
+  d3d9_set_adapter(gui.video_adapter); d3d11_set_adapter(gui.video_adapter); d3d12_set_adapter(gui.video_adapter);
   if (renderer == RENDERER_D3D9)  d3d9_init(g_hwnd);
-  if (renderer == RENDERER_D3D11) { d3d11_set_vrr(gui.vrr); d3d11_init(g_hwnd); video_reload_shader_preset(); }
+  if (renderer == RENDERER_D3D11) { d3d11_set_vrr(video_vrr_wanted()); d3d11_init(g_hwnd); video_reload_shader_preset(); }
+  if (renderer == RENDERER_D3D12) { d3d12_set_vrr(video_vrr_wanted()); d3d12_init(g_hwnd); video_reload_shader_preset(); }
 }
 
 /*
@@ -674,11 +746,16 @@ static void vsync_wait(void)
   DwmFlush();
 }
 
+static void vb_stop(void);
+
 void video_shutdown(void)
 {
+  vb_stop();
+  video_exclusive_leave();
   video_restore_display_mode();
   d3d9_shutdown();
   d3d11_shutdown();
+  d3d12_shutdown();
 
   if (osd.mem_dc)
   {
@@ -785,11 +862,29 @@ void video_invalidate(void)
 void video_viewport_changed(void)
 {
   vid.dest_valid = 0;
+  vid.have_frame = 0;
   if (bitmap.data)
   {
     ZeroMemory(bitmap.data, (size_t)FRAME_MAX_W * FRAME_MAX_H * FRAME_BPP);
   }
   if (g_hwnd) InvalidateRect(g_hwnd, NULL, TRUE);
+}
+
+static void present(HDC hdc);
+
+/* The same picture drawn again after a change of how it is drawn (a render filter, the Scaling Filter): the game's last picture is kept (it is
+   not cleared as in video_viewport_changed, which a change of the picture's own size needs) and drawn at once. While no frame runs (a menu is
+   open with Pause When Inactive on) the box stayed black until the menu closed, because the cleared picture was all there was to draw. */
+void video_picture_refresh(void)
+{
+  vid.dest_valid = 0;
+  if (!g_hwnd) return;
+  InvalidateRect(g_hwnd, NULL, TRUE);
+  if (vid.have_frame)
+  {
+    HDC hdc = GetDC(g_hwnd);
+    if (hdc) { present(hdc); ReleaseDC(g_hwnd, hdc); }
+  }
 }
 
 /* The NTSC Filter for a 32X game. The Genesis Plus GX core's own filter (Blargg's) only takes the Mega Drive's 9-bit colors, so
@@ -921,7 +1016,13 @@ void video_force_redraw(void)
 static void get_video_rect(RECT *out)
 {
   RECT client;
+  int ew, eh;
 
+  if (dx_exclusive_size(&ew, &eh))       /* True Exclusive Fullscreen: the picture is drawn into the screen mode's size, whatever the main window's is */
+  {
+    out->left = 0; out->top = 0; out->right = ew; out->bottom = eh;
+    return;
+  }
   GetClientRect(g_hwnd, &client);
   client.top += browser_toolbar_height();   /* the toolbar sits above the picture */
 
@@ -1982,6 +2083,10 @@ static void menu_paint(HDC hdc, const RECT *area)
   HBRUSH bg = CreateSolidBrush(RGB(24, 24, 28)), hi = CreateSolidBrush(RGB(40, 110, 200)), edge = CreateSolidBrush(RGB(200, 200, 200));
   HBRUSH head = CreateSolidBrush(RGB(48, 48, 58)), rule = CreateSolidBrush(RGB(150, 150, 160));
 
+  {                                       /* a small window: the rows are packed closer so the whole menu is in the picture (never closer than the text needs) */
+    int avail = area->bottom - area->top - 6;
+    if (h > avail) { row = (avail - 46) / (menu_n > 0 ? menu_n : 1); if (row < 18) row = 18; h = 46 + menu_n * row; }
+  }
   x = (area->left + area->right - w) / 2;
   y = (area->top + area->bottom - h) / 2;
   box.left = x; box.top = y; box.right = x + w; box.bottom = y + h;
@@ -2281,7 +2386,7 @@ static void present(HDC hdc)
 
     /* With "Skip Render Filter with Shaders" a shader is given the game's own picture, not one the filter already
        enlarged (shaders that scale by whole multiples or place a bezel work their sizes out from the picture they get). */
-    if (nf.index >= 0 && !(gui.shader_nofilter && gui.renderer == RENDERER_D3D11 && shader_chain_active()))
+    if (nf.index >= 0 && !(gui.shader_nofilter && RENDERER_IS_DX(gui.renderer) && shader_chain_active()))
     {
       HDC filtered_dc;
       int filtered_w, filtered_h;
@@ -2299,7 +2404,7 @@ static void present(HDC hdc)
     /* Scaling Filter > Sharp Nearest with the classic or the Direct3D 9 renderer: the picture is first enlarged by whole multiples with sharp pixels
        (nearest) and a smaller step is left for the bilinear filter, so the pixels stay crisp and all of the same size. Direct3D 11 does the same in
        a pixel shader, without this copy. A shader preset gets the picture as it is. */
-    if (gui.smooth == 1 && !(gui.renderer == RENDERER_D3D11 && hw_renderer_active() && (shader_chain_active() || d3d11_resample_available(1))))
+    if (gui.smooth == 1 && !(RENDERER_IS_DX(gui.renderer) && hw_renderer_active() && (shader_chain_active() || dx_resample_available(1))))
     {
       int nx = sharp_factor(dest.right - dest.left, src_w), ny = sharp_factor(dest.bottom - dest.top, src_h);
 
@@ -2317,7 +2422,7 @@ static void present(HDC hdc)
 
     /* Scaling Filter > Sharp Bilinear without a pixel shader (the classic renderer, Direct3D 9 whose shader did not compile): resampled on the processor to the
        size of the box, so the last stretch is one to one. */
-    if (gui.smooth == 3 && gui.renderer != RENDERER_D3D11 && !(gui.renderer == RENDERER_D3D9 && hw_renderer_active() && d3d9_resample_available(3)))
+    if (gui.smooth == 3 && !RENDERER_IS_DX(gui.renderer) && !(gui.renderer == RENDERER_D3D9 && hw_renderer_active() && d3d9_resample_available(3)))
     {
       int dw = dest.right - dest.left, dh = dest.bottom - dest.top;
 
@@ -2356,7 +2461,14 @@ static void present(HDC hdc)
       void (*hw_overlay_slot)(int);
       void (*hw_present)(void);
 
-      if (gui.renderer == RENDERER_D3D11)
+      if (gui.renderer == RENDERER_D3D12)
+      {
+        hw_render_frame = d3d12_render_frame;
+        hw_draw_overlay = d3d12_draw_overlay;
+        hw_overlay_slot = d3d12_overlay_slot;
+        hw_present      = d3d12_present;
+      }
+      else if (gui.renderer == RENDERER_D3D11)
       {
         hw_render_frame = d3d11_render_frame;
         hw_draw_overlay = d3d11_draw_overlay;
@@ -2509,20 +2621,203 @@ static void present(HDC hdc)
   draw_overlay(hdc, &area);
 }
 
+/* Frame timing for the log. For each frame shown: how long since the one before, how long showing it took (the Present call), and how many REAL
+   refreshes of the monitor the window is on came in between: a thread waits for the monitor's vertical blank (IDXGIOutput::WaitForVBlank) and
+   counts them, so a 2 is a picture shown twice and a 0 a picture that was skipped, whatever the desktop compositor does. (The compositor's own
+   refresh count, which the first version used, moved once for every frame shown and so said nothing.) */
+typedef struct { int n, d0, d1, d2, d3, n25, n30; double sum, mn, mx, psum, pmax; long vbsum; } timing_t;
+static timing_t tm_sec, tm_all;
+static double tm_last_t;            /* when the last frame was shown, in seconds (0: none yet) */
+static LONG tm_last_vb;
+
+static volatile LONG vb_count;      /* the vertical blanks counted so far */
+static volatile LONG vb_run;        /* the thread is asked to go on (0: stop) */
+static volatile LONG vb_ok;         /* the thread has seen a vertical blank */
+static HANDLE vb_thread;
+static HMONITOR vb_mon;             /* the monitor it counts for */
+static char vb_name[64];            /* ... and its name, for the log */
+
+static IDXGIOutput *vb_find_output(HMONITOR mon)
+{
+  IDXGIFactory *f = NULL;
+  IDXGIOutput *found = NULL;
+  UINT a, o;
+
+  if (FAILED(CreateDXGIFactory(&IID_IDXGIFactory, (void **)&f)) || !f) return NULL;
+  for (a = 0; !found; a++)
+  {
+    IDXGIAdapter *ad = NULL;
+
+    if (FAILED(IDXGIFactory_EnumAdapters(f, a, &ad)) || !ad) break;
+    for (o = 0; !found; o++)
+    {
+      IDXGIOutput *out = NULL;
+      DXGI_OUTPUT_DESC d;
+
+      if (FAILED(IDXGIAdapter_EnumOutputs(ad, o, &out)) || !out) break;
+      if (SUCCEEDED(IDXGIOutput_GetDesc(out, &d)) && d.Monitor == mon)
+      {
+        found = out;
+        WideCharToMultiByte(CP_ACP, 0, d.DeviceName, -1, vb_name, sizeof(vb_name), NULL, NULL);
+      }
+      else IDXGIOutput_Release(out);
+    }
+    IDXGIAdapter_Release(ad);
+  }
+  IDXGIFactory_Release(f);
+  return found;
+}
+
+static DWORD WINAPI vb_proc(LPVOID arg)
+{
+  IDXGIOutput *out = vb_find_output((HMONITOR)arg);
+  int fails = 0;
+
+  while (vb_run)
+  {
+    if (!out) { Sleep(100); if (++fails > 50) break; out = vb_find_output((HMONITOR)arg); continue; }
+    if (SUCCEEDED(IDXGIOutput_WaitForVBlank(out))) { InterlockedIncrement(&vb_count); vb_ok = 1; fails = 0; }
+    else { Sleep(20); if (++fails > 100) break; }
+  }
+  if (out) IDXGIOutput_Release(out);
+  return 0;
+}
+
+static void vb_stop(void)
+{
+  if (!vb_thread) return;
+  vb_run = 0;
+  if (WaitForSingleObject(vb_thread, 300) == WAIT_TIMEOUT) TerminateThread(vb_thread, 0);
+  CloseHandle(vb_thread);
+  vb_thread = NULL;
+}
+
+static void vb_start(HMONITOR mon)
+{
+  vb_stop();
+  vb_name[0] = '\0';
+  vb_ok = 0;
+  vb_mon = mon;
+  vb_run = 1;
+  vb_thread = CreateThread(NULL, 0, vb_proc, (LPVOID)mon, 0, NULL);
+  if (!vb_thread) vb_run = 0;
+}
+
+static void video_timing_note(double present_ms)
+{
+  LARGE_INTEGER c, f;
+  double now;
+  static DWORD last_check;
+  DWORD tick = GetTickCount();
+
+  QueryPerformanceCounter(&c);
+  QueryPerformanceFrequency(&f);
+  now = (double)c.QuadPart / (double)f.QuadPart;
+  if (!vb_thread || tick - last_check > 2000)         /* (the window may have been moved to the other monitor) */
+  {
+    HMONITOR mon = MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST);
+
+    last_check = tick;
+    if (mon && (!vb_thread || mon != vb_mon)) vb_start(mon);
+  }
+  if (tm_last_t > 0.0 && now - tm_last_t < 0.25)     /* (a longer gap is a pause or a menu, not the pace of the game) */
+  {
+    long vb = (long)vb_count;
+    int r = (int)(vb - tm_last_vb);
+    double ms = (now - tm_last_t) * 1000.0;
+    timing_t *tt[2];
+    int k;
+
+    tt[0] = &tm_sec; tt[1] = &tm_all;
+    for (k = 0; k < 2; k++)
+    {
+      timing_t *x = tt[k];
+
+      if (!x->n || ms < x->mn) x->mn = ms;
+      if (ms > x->mx) x->mx = ms;
+      x->sum += ms;
+      x->n++;
+      if (ms > 25.0) x->n25++;
+      if (ms > 30.0) x->n30++;
+      x->psum += present_ms;
+      if (present_ms > x->pmax) x->pmax = present_ms;
+      x->vbsum += r;
+      if (r <= 0) x->d0++; else if (r == 1) x->d1++; else if (r == 2) x->d2++; else x->d3++;
+    }
+  }
+  tm_last_t = now;
+  tm_last_vb = (LONG)vb_count;
+}
+
+static void timing_text(timing_t *t, char *out, size_t n)
+{
+  int counted = vb_ok && t->n >= 10 && t->vbsum > 0 && t->vbsum < (long)t->n * 8;      /* (a thread that counts far too many is not counting vertical blanks) */
+  double secs = t->sum / 1000.0;
+  int hz1000 = secs > 0.0 ? (int)((double)t->vbsum / secs * 1000.0 + 0.5) : 0;
+  char head[300];
+
+  if (!t->n) { lstrcpynA(out, "no frames", (int)n); return; }
+  wsprintfA(head, "%d frames, %d.%02d to %d.%02d ms apart (average %d.%02d), %d over 25 ms, %d over 30 ms; showing a frame took %d.%02d ms on average, %d.%02d at most",
+            t->n, (int)t->mn, (int)(t->mn * 100) % 100, (int)t->mx, (int)(t->mx * 100) % 100, (int)(t->sum / t->n), (int)(t->sum / t->n * 100) % 100,
+            t->n25, t->n30, (int)(t->psum / t->n), (int)(t->psum / t->n * 100) % 100, (int)t->pmax, (int)(t->pmax * 100) % 100);
+  if (counted)
+    wsprintfA(out, "%s; real refreshes of %s between two frames: 0 x %d, 1 x %d, 2 x %d, 3 or more x %d (the monitor counted at %d.%03d Hz)",
+              head, vb_name[0] ? vb_name : "the monitor", t->d0, t->d1, t->d2, t->d3, hz1000 / 1000, hz1000 % 1000);
+  else
+    wsprintfA(out, "%s; no count of the monitor's refreshes (%s)", head, vb_thread ? "the vertical blank was not seen" : "no counting thread");
+}
+
+/* The last second (whole = 0) or since the game started (whole = 1) as a line for the log; the counting starts again. */
+void video_timing_text(int whole, char *out, size_t n)
+{
+  timing_t *t = whole ? &tm_all : &tm_sec;
+
+  timing_text(t, out, n);
+  ZeroMemory(t, sizeof(*t));
+  if (whole) tm_last_t = 0.0;
+}
+
+/* Variable Refresh Rate as it is used: not while True Exclusive Fullscreen is the Fullscreen Mode (that needs the ordinary swap chain). */
+int video_vrr_wanted(void) { return gui.vrr && gui.fs_mode != 2; }
+
+static HWND excl_hwnd;          /* True Exclusive Fullscreen (below) */
+static int excl_tried;
+static void exclusive_try(void);
+
+/* True Exclusive Fullscreen is wanted and not tried yet (or is running): then the resolution and the refresh rate are asked of DXGI itself when it takes
+   the screen (and given back by it when it lets go), not set by changing the desktop's mode first (Windows can answer that with a mode that only the program
+   sees). If DXGI cannot do it, exclusive_try falls back to the desktop mode change. */
+static int true_excl_owns_mode(void)
+{
+  if (excl_hwnd) return 1;
+  return !excl_tried && vid.fullscreen && gui.fs_true && gui.fs_exclusive && RENDERER_IS_DX(gui.renderer) && hw_renderer_active() && !video_dx_vrr_active() && !pico_active();
+}
+
 void video_frame(void)
 {
   HDC hdc = GetDC(g_hwnd);
   /* Direct3D 11: the swap chain waits for the display's refresh itself (a real VSync). The other renderers wait for the compositor
      after the frame is shown (vsync_wait). Either way not when the sound buffer is low. */
-  int vrr = gui.renderer == RENDERER_D3D11 && hw_renderer_active() && d3d11_vrr_active();      /* variable refresh: the display follows the game, no waiting */
-  int swap_sync = gui.vsync && vsync_allowed && gui.renderer == RENDERER_D3D11 && hw_renderer_active() && !vrr;
+  int vrr = RENDERER_IS_DX(gui.renderer) && hw_renderer_active() && video_dx_vrr_active();      /* variable refresh: the display follows the game, no waiting */
+  int swap_sync = gui.vsync && vsync_allowed && RENDERER_IS_DX(gui.renderer) && hw_renderer_active() && !vrr;
 
   if (!hdc) return;
   new_frame = 1;
-  d3d11_set_sync(swap_sync);
-  present(hdc);
-  d3d11_set_sync(0);                  /* (a repaint of the window must not wait) */
-  new_frame = 0;
+  vid.have_frame = 1;
+  if (RENDERER_IS_DX(gui.renderer)) video_dx_show_surface(1);       /* (hidden once a game is stopped) */
+  if (excl_hwnd && !dx_exclusive_active()) video_exclusive_leave();      /* (the device was lost and made again: the plain picture window is back, the black window over it must go) */
+  if (vid.fullscreen && gui.fs_true && gui.fs_exclusive && !excl_hwnd && !excl_tried && !vrr && RENDERER_IS_DX(gui.renderer) && hw_renderer_active() && !pico_active()) exclusive_try();
+  dx_set_sync(swap_sync);
+  {
+    LARGE_INTEGER p0, p1, pf;
+    QueryPerformanceCounter(&p0);
+    present(hdc);
+    QueryPerformanceCounter(&p1);
+    QueryPerformanceFrequency(&pf);
+    dx_set_sync(0);                  /* (a repaint of the window must not wait) */
+    new_frame = 0;
+    video_timing_note((double)(p1.QuadPart - p0.QuadPart) * 1000.0 / (double)pf.QuadPart);
+  }
   if (!swap_sync && !vrr) vsync_wait();
   ReleaseDC(g_hwnd, hdc);
 }
@@ -2596,6 +2891,79 @@ void video_show_notice(const char *text, int ms)
 
 static char fs_mode_device[CCHDEVICENAME];   /* the monitor whose display mode was changed ("" = none) */
 
+/* "Fullscreen Monitor" (Settings > Video): which monitor a game goes fullscreen on. gui.fs_monitor is the Windows name of the screen ("\\.\DISPLAY2"),
+   empty = the monitor the window is on. A name that is not there any more (a monitor that was unplugged) counts as empty. */
+typedef struct { int n; char dev[8][32]; char name[8][96]; HMONITOR mon[8]; } monlist_t;
+
+static BOOL CALLBACK monlist_proc(HMONITOR hm, HDC hdc, LPRECT rc, LPARAM lp)
+{
+  monlist_t *l = (monlist_t *)lp;
+  MONITORINFOEXA mi;
+
+  (void)hdc; (void)rc;
+  if (l->n >= 8) return FALSE;
+  mi.cbSize = sizeof(mi);
+  if (!GetMonitorInfoA(hm, (MONITORINFO *)&mi)) return TRUE;
+  lstrcpynA(l->dev[l->n], mi.szDevice, 32);
+  l->mon[l->n] = hm;
+  snprintf(l->name[l->n], 96, "Monitor %d: %d x %d%s", l->n + 1,
+            (int)(mi.rcMonitor.right - mi.rcMonitor.left), (int)(mi.rcMonitor.bottom - mi.rcMonitor.top),
+            (mi.dwFlags & MONITORINFOF_PRIMARY) ? " (main)" : "");
+  l->n++;
+  return TRUE;
+}
+
+int video_monitor_list(char names[][96], int max)
+{
+  monlist_t l;
+  int i;
+
+  l.n = 0;
+  EnumDisplayMonitors(NULL, NULL, monlist_proc, (LPARAM)&l);
+  for (i = 0; i < l.n && i < max; i++) lstrcpynA(names[i], l.name[i], 96);
+  return l.n < max ? l.n : max;
+}
+
+/* Index (0-based) of the monitor the user chose in the list above, or -1 for none; sets or clears gui.fs_monitor from a list position. */
+int video_monitor_chosen(void)
+{
+  monlist_t l;
+  int i;
+
+  if (!gui.fs_monitor[0]) return -1;
+  l.n = 0;
+  EnumDisplayMonitors(NULL, NULL, monlist_proc, (LPARAM)&l);
+  for (i = 0; i < l.n; i++) if (!lstrcmpiA(l.dev[i], gui.fs_monitor)) return i;
+  return -1;
+}
+
+void video_monitor_choose(int k)         /* k: 0-based position, or -1 = the monitor the window is on */
+{
+  monlist_t l;
+
+  gui.fs_monitor[0] = '\0';
+  if (k < 0) return;
+  l.n = 0;
+  EnumDisplayMonitors(NULL, NULL, monlist_proc, (LPARAM)&l);
+  if (k < l.n) lstrcpynA(gui.fs_monitor, l.dev[k], sizeof(gui.fs_monitor));
+}
+
+/* The monitor fullscreen uses: the chosen one, else where the window is. */
+static HMONITOR fs_monitor(void)
+{
+  monlist_t l;
+  int i;
+
+  if (gui.fs_monitor[0])
+  {
+    l.n = 0;
+    EnumDisplayMonitors(NULL, NULL, monlist_proc, (LPARAM)&l);
+    for (i = 0; i < l.n; i++) if (!lstrcmpiA(l.dev[i], gui.fs_monitor)) return l.mon[i];
+  }
+  return MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST);
+}
+
+
 /* The screen sizes the monitor the window is on can be switched to (at least 640x480, at its color depth), smallest first. */
 int video_fullscreen_modes(int *ws, int *hs, int max)
 {
@@ -2605,7 +2973,7 @@ int video_fullscreen_modes(int *ws, int *hs, int max)
   int n = 0, k;
 
   mi.cbSize = sizeof(mi);
-  if (!GetMonitorInfoA(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST), (MONITORINFO *)&mi)) return 0;
+  if (!GetMonitorInfoA(fs_monitor(), (MONITORINFO *)&mi)) return 0;
   ZeroMemory(&cur, sizeof(cur)); cur.dmSize = sizeof(cur);
   if (!EnumDisplaySettingsA(mi.szDevice, ENUM_CURRENT_SETTINGS, &cur)) return 0;
   for (i = 0; ; i++)
@@ -2633,6 +3001,7 @@ static void fs_mode_change(const MONITORINFOEXA *mi)
   DWORD i;
 
   if (gui.fs_res_w <= 0 || gui.fs_res_h <= 0) return;
+  if (true_excl_owns_mode()) return;                    /* (DXGI takes the screen at that size itself) */
   ZeroMemory(&cur, sizeof(cur)); cur.dmSize = sizeof(cur);
   if (!EnumDisplaySettingsA(mi->szDevice, ENUM_CURRENT_SETTINGS, &cur)) return;
   ZeroMemory(&best, sizeof(best));
@@ -2645,10 +3014,65 @@ static void fs_mode_change(const MONITORINFOEXA *mi)
     if (!best.dmSize || m.dmDisplayFrequency == cur.dmDisplayFrequency ||
         (best.dmDisplayFrequency != cur.dmDisplayFrequency && m.dmDisplayFrequency > best.dmDisplayFrequency)) best = m;
   }
-  if (!best.dmSize || (best.dmPelsWidth == cur.dmPelsWidth && best.dmPelsHeight == cur.dmPelsHeight)) return;
+  if (!best.dmSize) { gui_log("Exclusive Fullscreen: this screen has no %dx%d mode at %lu bits, it stays at %lux%lu", gui.fs_res_w, gui.fs_res_h, (unsigned long)cur.dmBitsPerPel, (unsigned long)cur.dmPelsWidth, (unsigned long)cur.dmPelsHeight); return; }
+  if (best.dmPelsWidth == cur.dmPelsWidth && best.dmPelsHeight == cur.dmPelsHeight) return;
   best.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
-  if (ChangeDisplaySettingsExA(mi->szDevice, &best, NULL, CDS_FULLSCREEN, NULL) == DISP_CHANGE_SUCCESSFUL)
-    lstrcpynA(fs_mode_device, mi->szDevice, sizeof(fs_mode_device));
+  {
+    LONG r = ChangeDisplaySettingsExA(mi->szDevice, &best, NULL, CDS_FULLSCREEN, NULL);
+    DEVMODEA now;
+    ZeroMemory(&now, sizeof(now)); now.dmSize = sizeof(now);
+    EnumDisplaySettingsA(mi->szDevice, ENUM_CURRENT_SETTINGS, &now);
+    gui_log("Exclusive Fullscreen: switching %s from %lux%lu to %lux%lu at %lu Hz: result %ld, the screen is now %lux%lu", mi->szDevice,
+            (unsigned long)cur.dmPelsWidth, (unsigned long)cur.dmPelsHeight, (unsigned long)best.dmPelsWidth, (unsigned long)best.dmPelsHeight,
+            (unsigned long)best.dmDisplayFrequency, (long)r, (unsigned long)now.dmPelsWidth, (unsigned long)now.dmPelsHeight);
+    if (r == DISP_CHANGE_SUCCESSFUL) lstrcpynA(fs_mode_device, mi->szDevice, sizeof(fs_mode_device));
+  }
+}
+
+/* Smooth Motion (Settings > Video, with Exclusive Fullscreen): the screen is put at 50 Hz for a PAL game and 60 Hz for an
+   NTSC one, in the size it has now, while the game is fullscreen; video_restore_display_mode() gives the screen back. A screen without
+   such a mode is left as it is (the log says so). */
+void video_match_refresh(void)
+{
+  MONITORINFOEXA mi;
+  DEVMODEA cur, m, best;
+  HMONITOR mon;
+  int pal = vdp_pal ? 1 : 0;
+  int want1 = pal ? 50 : 60, want2 = pal ? 100 : 120, ok1 = pal ? 50 : 59, ok2 = pal ? 100 : 119;
+  DWORD i;
+
+  if (!vid.fullscreen || !gui.fs_exclusive || !gui.sync_display || !emu_running || pico_active()) return;
+  if (true_excl_owns_mode()) return;                    /* (asked of DXGI with the resolution) */
+  mi.cbSize = sizeof(mi);
+  mon = fs_monitor();
+  if (!mon || !GetMonitorInfoA(mon, (MONITORINFO *)&mi)) return;
+  ZeroMemory(&cur, sizeof(cur)); cur.dmSize = sizeof(cur);
+  if (!EnumDisplaySettingsA(mi.szDevice, ENUM_CURRENT_SETTINGS, &cur)) return;
+  {
+    int f = (int)cur.dmDisplayFrequency;
+    if (f == want1 || f == want2 || f == ok1 || f == ok2) return;        /* the screen already runs at the game's rate (or twice it) */
+  }
+  ZeroMemory(&best, sizeof(best));
+  for (i = 0; ; i++)
+  {
+    ZeroMemory(&m, sizeof(m)); m.dmSize = sizeof(m);
+    if (!EnumDisplaySettingsA(mi.szDevice, i, &m)) break;
+    if (m.dmBitsPerPel != cur.dmBitsPerPel || m.dmPelsWidth != cur.dmPelsWidth || m.dmPelsHeight != cur.dmPelsHeight) continue;
+    if ((int)m.dmDisplayFrequency == want1 || (!best.dmSize && ((int)m.dmDisplayFrequency == want2))) best = m;
+    if ((int)m.dmDisplayFrequency == want1) break;
+  }
+  if (!best.dmSize)
+  {
+    gui_log("Smooth Motion (screen refresh rate): this screen has no %d Hz mode at %lux%lu, it stays at %lu Hz", want1, (unsigned long)cur.dmPelsWidth, (unsigned long)cur.dmPelsHeight, (unsigned long)cur.dmDisplayFrequency);
+    return;
+  }
+  best.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
+  if (ChangeDisplaySettingsExA(mi.szDevice, &best, NULL, CDS_FULLSCREEN, NULL) == DISP_CHANGE_SUCCESSFUL)
+  {
+    lstrcpynA(fs_mode_device, mi.szDevice, sizeof(fs_mode_device));
+    gui_log("Smooth Motion (screen refresh rate): the screen is now at %lu Hz (was %lu Hz) for this %s game", (unsigned long)best.dmDisplayFrequency, (unsigned long)cur.dmDisplayFrequency, pal ? "PAL" : "NTSC");
+  }
+  else gui_log("Smooth Motion (screen refresh rate): Windows did not switch the screen to %lu Hz", (unsigned long)best.dmDisplayFrequency);
 }
 
 void video_restore_display_mode(void)
@@ -2660,9 +3084,168 @@ void video_restore_display_mode(void)
   }
 }
 
+/* ---- True Exclusive Fullscreen ----
+   With Exclusive Fullscreen + True Exclusive Fullscreen + Direct3D 11 the picture is put in real DXGI exclusive fullscreen on a window of its own that covers
+   the monitor (d3d11_exclusive_enter). That window passes keys and the mouse on to the main window. Anything that takes the focus away (another window, a
+   dialog, Alt+Tab) or Alt+Enter / Esc leaves it again and the game stays in the ordinary borderless fullscreen. */
+static int excl_entering;        /* the window is being switched: its activation changes are not "the user left" */
+/* excl_tried: tried since fullscreen began (a failure is not tried again every frame) */
+
+static DWORD excl_move_tick;     /* when the mouse last moved: the cursor shows for 2 seconds after that */
+
+static LRESULT CALLBACK excl_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+  switch (msg)
+  {
+    case WM_SYSKEYDOWN: case WM_SYSKEYUP:
+      if (wp == VK_MENU || wp == VK_F10) return 0;       /* (Alt must not open the main window's menu: it fights with the exclusive screen) */
+      return SendMessage(g_hwnd, msg, wp, lp);
+    case WM_SYSCOMMAND:
+      if ((wp & 0xFFF0) == SC_KEYMENU) return 0;
+      break;
+    case WM_KEYDOWN: case WM_KEYUP: case WM_CHAR:
+    case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_MBUTTONDOWN: case WM_MBUTTONUP:
+    case WM_MOUSEWHEEL: case WM_LBUTTONDBLCLK:
+      return SendMessage(g_hwnd, msg, wp, lp);
+    case WM_MOUSEMOVE:
+      excl_move_tick = GetTickCount();
+      SetCursor(LoadCursor(NULL, IDC_ARROW));
+      SetTimer(hwnd, 1, 2100, NULL);
+      if ((short)HIWORD(lp) < 3) lp = MAKELPARAM(LOWORD(lp), 3);           /* (the top edge would slide the main window's menu bar and toolbar in) */
+      return SendMessage(g_hwnd, msg, wp, lp);
+    case WM_TIMER:
+      if (wp == 1 && GetTickCount() - excl_move_tick >= 2000) { KillTimer(hwnd, 1); SetCursor(NULL); }
+      return 0;
+    case WM_SETCURSOR:
+      SetCursor((GetTickCount() - excl_move_tick < 2000) ? LoadCursor(NULL, IDC_ARROW) : NULL);
+      return TRUE;
+    case WM_ERASEBKGND:
+      return 1;
+    case WM_ACTIVATE:
+      if (LOWORD(wp) == WA_INACTIVE && !excl_entering) PostMessage(g_hwnd, WM_APP_EXCL_LEAVE, 0, 0);
+      return 0;
+    case WM_CLOSE:
+      PostMessage(g_hwnd, WM_APP_EXCL_LEAVE, 0, 0);
+      return 0;
+  }
+  return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+int video_exclusive_owns(HWND h) { return h && h == excl_hwnd; }
+int video_exclusive_active(void) { return excl_hwnd != NULL; }
+
+void video_exclusive_leave(void)
+{
+  if (!excl_hwnd) return;
+  excl_entering = 1;
+  dx_exclusive_leave();
+  DestroyWindow(excl_hwnd);
+  excl_hwnd = NULL;
+  excl_entering = 0;
+  gui_log("True exclusive fullscreen: left");
+  SetForegroundWindow(g_hwnd);
+  vid.dest_valid = 0;
+  InvalidateRect(g_hwnd, NULL, TRUE);
+}
+
+static void exclusive_try(void)
+{
+  static int registered;
+  MONITORINFOEXA mi;
+  DEVMODEA cur;
+  HMONITOR mon;
+  long hr;
+  int w, h, hz_n, hz_d;
+
+  excl_tried = 1;
+  mi.cbSize = sizeof(mi);
+  mon = fs_monitor();
+  if (!mon || !GetMonitorInfoA(mon, (MONITORINFO *)&mi)) return;
+  ZeroMemory(&cur, sizeof(cur)); cur.dmSize = sizeof(cur);
+  if (!EnumDisplaySettingsA(mi.szDevice, ENUM_CURRENT_SETTINGS, &cur)) return;
+  w = (int)cur.dmPelsWidth; h = (int)cur.dmPelsHeight;
+  hz_n = (int)cur.dmDisplayFrequency; hz_d = 1;
+  /* (The chosen Fullscreen Resolution is not used here: a lower mode asked of DXGI left the rest of the screen showing an old picture on at least one PC.
+     True Exclusive Fullscreen keeps the screen's own resolution and the picture is scaled to it; the refresh rate is asked of DXGI.) */
+  if (gui.sync_display && emu_running)                   /* Smooth Motion: 50 Hz for a PAL game, 60 Hz for an NTSC one, when the screen has it at that size */
+  {
+    DEVMODEA m;
+    DWORD i;
+    int want = vdp_pal ? 50 : 60;
+    for (i = 0; ; i++)
+    {
+      ZeroMemory(&m, sizeof(m)); m.dmSize = sizeof(m);
+      if (!EnumDisplaySettingsA(mi.szDevice, i, &m)) break;
+      if (m.dmBitsPerPel == cur.dmBitsPerPel && (int)m.dmPelsWidth == w && (int)m.dmPelsHeight == h && (int)m.dmDisplayFrequency == want) { hz_n = want; break; }
+    }
+  }
+  cur.dmDisplayFrequency = (DWORD)hz_n;
+  if (hz_n == 59 || hz_n == 119 || hz_n == 239 || hz_n == 29) { hz_n = (hz_n + 1) * 1000; hz_d = 1001; }      /* (the 59.94 style modes) */
+  if (!registered)
+  {
+    WNDCLASSA wc;
+    ZeroMemory(&wc, sizeof(wc));
+    wc.lpfnWndProc = excl_proc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "GPEX_ExclusiveFS";
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    if (!RegisterClassA(&wc)) return;
+    registered = 1;
+  }
+  excl_entering = 1;
+  excl_hwnd = CreateWindowExA(WS_EX_TOPMOST, "GPEX_ExclusiveFS", "Genesis Plus EX", WS_POPUP,
+                              mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
+                              g_hwnd, NULL, GetModuleHandle(NULL), NULL);
+  if (!excl_hwnd) { excl_entering = 0; gui_log("True exclusive fullscreen: could not make its window"); return; }
+  ShowWindow(excl_hwnd, SW_SHOW);
+  SetForegroundWindow(excl_hwnd);
+  hr = gui.renderer == RENDERER_D3D12 ? d3d12_exclusive_enter(excl_hwnd, w, h, hz_n, hz_d) : d3d11_exclusive_enter(excl_hwnd, w, h, hz_n, hz_d);
+  if (hr)
+  {
+    DestroyWindow(excl_hwnd);
+    excl_hwnd = NULL;
+    excl_entering = 0;
+    SetForegroundWindow(g_hwnd);
+    gui_log("True exclusive fullscreen: not possible (0x%08lX), the game stays in borderless fullscreen", (unsigned long)hr);
+    if (gui.fs_exclusive)                              /* the ordinary Exclusive Fullscreen: the desktop's mode is changed instead, and the window follows it */
+    {
+      fs_mode_change(&mi);
+      video_match_refresh();
+      if (GetMonitorInfoA(mon, (MONITORINFO *)&mi))
+        SetWindowPos(g_hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOOWNERZORDER);
+    }
+    return;
+  }
+  excl_entering = 0;
+  vid.dest_valid = 0;
+  InvalidateRect(g_hwnd, NULL, TRUE);
+  gui_log("True exclusive fullscreen: entered, %dx%d at %lu Hz", w, h, (unsigned long)cur.dmDisplayFrequency);
+}
+
+void video_fullscreen_refit(void)
+{
+  MONITORINFOEXA mi;
+  RECT wr;
+  LONG_PTR style;
+
+  if (!vid.fullscreen || !g_hwnd) return;
+  style = GetWindowLongPtr(g_hwnd, GWL_STYLE);
+  if ((style & WS_CAPTION) == WS_CAPTION || !(style & WS_POPUP)) return;      /* (the window is not in its fullscreen form yet or any more: a mode change of our own is under way) */
+  if (true_excl_owns_mode()) return;                                         /* (the exclusive window of DXGI follows the screen itself) */
+  mi.cbSize = sizeof(mi);
+  if (!GetMonitorInfoA(fs_monitor(), (MONITORINFO *)&mi) || !GetWindowRect(g_hwnd, &wr)) return;
+  if (wr.left == mi.rcMonitor.left && wr.top == mi.rcMonitor.top && wr.right == mi.rcMonitor.right && wr.bottom == mi.rcMonitor.bottom) return;
+  gui_log("Fullscreen: the screen changed, the window takes the monitor again (%ld,%ld %ldx%ld)", mi.rcMonitor.left, mi.rcMonitor.top,
+          mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top);
+  SetWindowPos(g_hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
+               SWP_NOOWNERZORDER | SWP_NOACTIVATE);
+}
+
 void video_set_fullscreen(int on)
 {
   if (on == vid.fullscreen) return;
+  if (!on) video_exclusive_leave();
+  excl_tried = 0;
 
   /*
    * Set before touching the window, not after: SetWindowPos below fires
@@ -2686,7 +3269,7 @@ void video_set_fullscreen(int on)
     vid.saved_menu = GetMenu(g_hwnd);
 
     mi.cbSize = sizeof(mi);
-    mon = MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST);
+    mon = fs_monitor();
     if (!GetMonitorInfoA(mon, (MONITORINFO *)&mi))
     {
       vid.fullscreen = 0;      /* nothing was changed: do not claim fullscreen */
@@ -2696,6 +3279,7 @@ void video_set_fullscreen(int on)
     if (gui.fs_exclusive)
     {
       fs_mode_change(&mi);
+      video_match_refresh();
       GetMonitorInfoA(mon, (MONITORINFO *)&mi);   /* its rectangle may have changed */
     }
 

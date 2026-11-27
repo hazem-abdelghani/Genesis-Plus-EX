@@ -63,6 +63,8 @@ static void set_pad_defaults(int player)
   for (i = 0; i < PAD_KEYS; i++)
   {
     p->key[i] = 0;
+    p->key2[i] = 0;
+    p->button2[i] = 0;
   }
 
   /* A modern pad laid out the way a 6-button Control Pad expects. */
@@ -88,13 +90,17 @@ static void set_pad_defaults(int player)
     p->key[PAD_DOWN]  = VK_DOWN;
     p->key[PAD_LEFT]  = VK_LEFT;
     p->key[PAD_RIGHT] = VK_RIGHT;
-    p->key[PAD_A]     = 'Z';
-    p->key[PAD_B]     = 'X';
-    p->key[PAD_C]     = 'C';
+    p->key2[PAD_UP]    = 'W';        /* WASD is the second key of the D-pad */
+    p->key2[PAD_DOWN]  = 'S';
+    p->key2[PAD_LEFT]  = 'A';
+    p->key2[PAD_RIGHT] = 'D';
+    p->key[PAD_A]     = VK_NUMPAD1;
+    p->key[PAD_B]     = VK_NUMPAD2;
+    p->key[PAD_C]     = VK_NUMPAD3;
     p->key[PAD_START] = VK_RETURN;
-    p->key[PAD_X]     = 'A';
-    p->key[PAD_Y]     = 'S';
-    p->key[PAD_Z]     = 'D';
+    p->key[PAD_X]     = VK_NUMPAD4;
+    p->key[PAD_Y]     = VK_NUMPAD5;
+    p->key[PAD_Z]     = VK_NUMPAD6;
     p->key[PAD_MODE]  = VK_RSHIFT;
   }
 }
@@ -126,14 +132,17 @@ void set_config_defaults(void)
   /* --- system --- */
   config.system         = 0;
   config.region_detect  = 0;
+  config.region_order   = 1;
   config.vdp_mode       = 0;
   config.master_clock   = 0;
   config.force_dtack    = 0;
+  config.no_sprite_limit = 0;
   config.addr_error     = 1;
   config.bios           = 0;
   config.lock_on        = 0;
   config.add_on         = 0;
   config.cd_latency     = 1;
+  config.cd_cache       = 0;
   config.hot_swap       = 0;
 
   /* --- display --- */
@@ -186,7 +195,7 @@ void set_config_defaults(void)
   gui.browser_col_hidden  = 0;
   gui.browser_col_extra   = 1;   /* Genre is shown at first */
   gui.clean_names         = 1;
-  gui.browser_gridlines   = 0;
+  gui.browser_gridlines   = 1;
   gui.allow_opposing      = 0;
   gui.turbo_rate          = 2;   /* Medium: 15 presses a second */
   gui.confirm_exit        = 1;
@@ -202,17 +211,17 @@ void set_config_defaults(void)
   gui.toolbar_labels      = 1;
   gui.keep_awake          = 1;
   gui.cursor_idle = 3; gui.frame_cap = 0; gui.bass = 0; gui.log_on = 0; gui.pause_pad = 0; gui.keep_aspect = 1;
-  gui.normalize = 0; gui.autosave_min = 0; gui.skip_len = 0; gui.rewind_speed = 1; gui.np_upnp = 0; gui.overdrive = 0;
+  gui.normalize = 0; gui.autosave_min = 0; gui.skip_len = 0; gui.run_ahead = 0; gui.rewind_speed = 1; gui.np_upnp = 0; gui.overdrive = 0;
   gui.osd_opts = 1; gui.osd_pos = 2; gui.osd_time = 2; gui.osd_size = 1; gui.fps_pos = 0; gui.osd_color = 0; gui.osd_lines = 2;
   gui.mute_unfocused      = 0;
   gui.row_density         = 1;
   gui.browser_col_order[0] = -1;
   gui.bezel_path[0] = '\0';
-  gui.vs_limit = 3; gui.cpu_speed = 2; gui.stereo_idx = 1; gui.mouse_sens = 2; gui.gun_ox = gui.gun_oy = 3;
+  gui.vs_limit = 3; gui.cpu_speed = 2; gui.stereo_idx = 1; gui.mouse_sens = 2; gui.gun_ox = gui.gun_oy = 6;
   gui.adj_contrast = gui.adj_sat = gui.adj_gamma = 100; gui.adj_hue = 0; gui.adj_bright = 0;
   gui.lcd_color = 0;
-  gui.bar_color = 0; gui.fs_exclusive = 0; gui.fs_res_w = gui.fs_res_h = 0; gui.confine_mouse = 0;
-  gui.audio_device[0] = '\0';
+  gui.bar_color = 0; gui.fs_exclusive = 0; gui.fs_true = 0; gui.fs_mode = 0; gui.fs_monitor[0] = '\0'; gui.fs_res_w = gui.fs_res_h = 0; gui.confine_mouse = 0;
+  gui.audio_device[0] = '\0'; gui.video_adapter[0] = '\0';
   gui.scan_subfolders     = 1;
   gui.browser_sort_column = 0;   /* Name */
   gui.browser_sort_ascending = 1;
@@ -222,6 +231,8 @@ void set_config_defaults(void)
   gui.browser_col_pct[1] = 36;
   gui.renderer            = RENDERER_D3D11;
   gui.vsync               = 0;
+  gui.sync_display        = 0;
+  gui.alt_timing          = 0;
   gui.vrr                 = 0;
   gui.stick_shape         = 0;
   gui.crossfeed           = 0;
@@ -248,7 +259,7 @@ void set_config_defaults(void)
   gui.show_fps            = 0;
   gui.favorites_only      = 0;
   gui.recent_mode         = 1;
-  gui.az_strip            = 1;
+  gui.letter_strip            = 1;
   gui.fullscreen_toolbar  = 0;
   gui.integer_scale       = 0;
   { int k; for (k = 0; k < padhk_count(); k++) { gui.padhk[k] = padhk_default(k); gui.padhk_di[k] = 0; } }
@@ -261,6 +272,7 @@ void set_config_defaults(void)
   gui.mute_dac            = 0;
   gui.dac_level           = 100;
   gui.mute_pwm            = 0;
+  gui.mute_cdda           = 0;
   gui.pwm_level           = 100;
   gui.autosave            = 1;
   gui.resume_choice       = 0;
@@ -276,6 +288,7 @@ void set_config_defaults(void)
   gui.window_x            = -32000;
   gui.window_y            = -32000;
   gui.window_maximized    = 0;
+  gui.window_w = gui.window_h = 0;
 
   gui.render_filter[0]    = '\0';
   gui.sound_enabled       = 1;
@@ -287,7 +300,7 @@ void set_config_defaults(void)
   gui.rewind_memory       = 1;   /* 256 MB */
   gui.pause_on_focus_loss = 0;
   gui.always_on_top       = 0;
-  gui.fast_forward_ratio  = 4;
+  gui.fast_forward_idx    = GUI_FF_DEFAULT;
   gui.state_slot          = 0;
   gui.rom_dir[0]          = '\0';
   gui.shader_preset_path[0] = '\0';
@@ -437,7 +450,7 @@ static const char *ini_section_title(const char *section)
     { "osd",       "On-Screen Display Settings" },
     { "netplay",   "Netplay Settings" },
     { "directories", "Directories" },
-    { "folders",   "ROM Directories" },
+    { "folders",   "Game Folders" },
     { "window",    "Window Position and Size" },
     { "hotkeys",   "Keyboard Shortcuts" },
     { "history",   "Play History" },
@@ -703,7 +716,7 @@ void config_load(void)
     ini_get_str("video", "shader_params_for", gui.shader_params_for, sizeof(gui.shader_params_for));
     ini_get_str("input", "combos", gui.combo_text, sizeof(gui.combo_text));
     gui.group_console  = ini_get("general", "group_by_console", 0) ? 1 : 0;
-    gui.az_strip       = ini_get("general", "az_strip", gui.az_strip) ? 1 : 0;
+    gui.letter_strip       = ini_get("general", "az_strip", gui.letter_strip) ? 1 : 0;
     gui.padhk_hold_on  = ini_get("input", "padhk_hold_on", 0) ? 1 : 0;
     gui.padhk_hold[0]  = ini_get_pad("input", "padhk_hold_button", 0);
     gui.padhk_hold[1]  = ini_get_pad("input", "padhk_hold_button_di", 0);
@@ -772,9 +785,11 @@ void config_load(void)
        preserves whatever the person already had (GDI stays GDI, D3D9 stays
        D3D9) rather than silently resetting everyone to the new default. */
     int legacy_default = ini_get("video", "hw_accel", gui.renderer != RENDERER_GDI) ? RENDERER_D3D9 : RENDERER_GDI;
-    gui.renderer = clampi(ini_get("video", "renderer", legacy_default), RENDERER_GDI, RENDERER_D3D11);
+    gui.renderer = clampi(ini_get("video", "renderer", legacy_default), RENDERER_GDI, RENDERER_D3D12);
   }
   gui.vsync = ini_get("video", "vsync", gui.vsync) ? 1 : 0;
+  gui.sync_display = ini_get("video", "sync_display", gui.sync_display) ? 1 : 0;
+  gui.alt_timing = ini_get("video", "alt_timing", gui.alt_timing) ? 1 : 0;
   gui.vrr   = ini_get("video", "vrr", gui.vrr) ? 1 : 0;
   gui.stick_shape = clampi(ini_get("input", "stick_shape", gui.stick_shape), 0, 3);
   gui.crossfeed   = clampi(ini_get("audio", "crossfeed", gui.crossfeed), 0, 3);
@@ -819,11 +834,12 @@ void config_load(void)
       hotkey_ini_key(k, hkey, sizeof(hkey));
       gui.hotkey[k] = ini_get("hotkeys", hkey, gui.hotkey[k]);
     }
+    gui.hotkeys_off = ini_get("hotkeys", "disabled", 0) ? 1 : 0;
     /* The Sega Pico page keys were [ and ] at first: now Page Down (previous) and Page Up (next). */
     for (k = 0; k < hotkeys_count(); k++)
     {
-      if (!lstrcmpA(hotkey_name(k), "Sega Pico: Previous Page") && gui.hotkey[k] == VK_OEM_4) gui.hotkey[k] = hotkey_default(k);
-      if (!lstrcmpA(hotkey_name(k), "Sega Pico: Next Page") && gui.hotkey[k] == VK_OEM_6) gui.hotkey[k] = hotkey_default(k);
+      if (!lstrcmpA(hotkey_name(k), "Sega Pico Storyware: Previous Page") && gui.hotkey[k] == VK_OEM_4) gui.hotkey[k] = hotkey_default(k);
+      if (!lstrcmpA(hotkey_name(k), "Sega Pico Storyware: Next Page") && gui.hotkey[k] == VK_OEM_6) gui.hotkey[k] = hotkey_default(k);
     }
     /* Fast Forward and Rewind keys used to be set in Controls: carry the old choice over. */
     if (ini_get("hotkeys", "rev", 0) < 5)
@@ -845,10 +861,50 @@ void config_load(void)
         if (!used) gui.hotkey[k] = hotkey_default(k);
       }
     }
+    /* (0x10000 is the Ctrl flag of the shortcut codes, K_CTRL in hotkeys.c.) The mute keys moved: DAC from Ctrl+D to Ctrl+L, PWM from Ctrl+P to Ctrl+K, CD Audio (Ctrl+K at first) to Ctrl+J. A key left as it was is changed once. */
+    if (ini_get("hotkeys", "rev", 0) < 9)
+    {
+      static const struct { const char *name; int old; } mv[3] = { { "Mute DAC Sound", 0x10000 | 'D' }, { "Mute PWM Sound", 0x10000 | 'P' }, { "Mute CD Audio", 0x10000 | 'K' } };
+      int m, flag[3] = { 0, 0, 0 };
+
+      for (m = 0; m < 3; m++)
+        for (k = 0; k < hotkeys_count(); k++)
+          if (!lstrcmpA(hotkey_name(k), mv[m].name) && gui.hotkey[k] == mv[m].old) { gui.hotkey[k] = 0; flag[m] = 1; }
+      for (m = 0; m < 3; m++)
+        for (k = 0; flag[m] && k < hotkeys_count(); k++)
+          if (!lstrcmpA(hotkey_name(k), mv[m].name))
+          {
+            int j, used = 0;
+            for (j = 0; j < hotkeys_count(); j++) if (gui.hotkey[j] == hotkey_default(k)) used = 1;
+            if (!used) gui.hotkey[k] = hotkey_default(k);
+          }
+    }
+    /* The Pause Menu got Ctrl+P after the list was saved with it empty: it gets the key once, when nothing else has it. */
+    if (ini_get("hotkeys", "rev", 0) < 10)
+    {
+      for (k = 0; k < hotkeys_count(); k++)
+      {
+        int j, used = 0;
+        if (lstrcmpA(hotkey_name(k), "Pause Menu") || gui.hotkey[k]) continue;
+        for (j = 0; j < hotkeys_count(); j++) if (gui.hotkey[j] == hotkey_default(k)) used = 1;
+        if (!used) gui.hotkey[k] = hotkey_default(k);
+      }
+    }
+    /* Mute CD Audio was saved with no key by a test build: it gets its key once. */
+    if (ini_get("hotkeys", "rev", 0) < 8)
+    {
+      for (k = 0; k < hotkeys_count(); k++)
+      {
+        int j, used = 0;
+        if (lstrcmpA(hotkey_name(k), "Mute CD Audio") || gui.hotkey[k]) continue;
+        for (j = 0; j < hotkeys_count(); j++) if (gui.hotkey[j] == hotkey_default(k)) used = 1;
+        if (!used) gui.hotkey[k] = hotkey_default(k);
+      }
+    }
     /* Newer default keys: applied once to settings saved with the older ones. */
     if (ini_get("hotkeys", "rev", 0) < 4)
     {
-      static const char *const moved[] = { "Reset", "Hard Reset", "ROM Directory", "Mute FM Sound", "Mute PSG Sound",
+      static const char *const moved[] = { "Reset", "Hard Reset", "Game Folder", "Mute FM Sound", "Mute PSG Sound",
                                            "Show / Hide the Search Bar", "Undo Load State", "Undo Save State" };
       int m, j;
       for (m = 0; m < (int)(sizeof(moved) / sizeof(moved[0])); m++)
@@ -877,6 +933,7 @@ void config_load(void)
   gui.mute_dac = ini_get("audio", "mute_dac", gui.mute_dac) ? 1 : 0;
   gui.dac_level = clampi(ini_get("audio", "dac_level", gui.dac_level), 0, 150);
   gui.mute_pwm = ini_get("audio", "mute_pwm", gui.mute_pwm) ? 1 : 0;
+  gui.mute_cdda = ini_get("audio", "mute_cdda", gui.mute_cdda) ? 1 : 0;
   gui.pwm_level = clampi(ini_get("audio", "pwm_level", gui.pwm_level), 0, 200);
   gui.autosave = ini_get("general", "autosave", gui.autosave) ? 1 : 0;
   gui.resume_choice = ini_get("general", "resume_choice", gui.resume_choice);
@@ -912,6 +969,8 @@ void config_load(void)
   /* --- window geometry --- */
   gui.window_x         = ini_get("window", "x", gui.window_x);
   gui.window_y         = ini_get("window", "y", gui.window_y);
+  gui.window_w         = clampi(ini_get("window", "w", 0), 0, 20000);
+  gui.window_h         = clampi(ini_get("window", "h", 0), 0, 20000);
   gui.window_maximized = ini_get("window", "maximized", gui.window_maximized) ? 1 : 0;
 
   /* --- render filter --- */
@@ -986,15 +1045,18 @@ void config_load(void)
     config.system = (uint8)(ok ? val : 0);
   }
   config.region_detect = (uint8)clampi(ini_get("system", "region", config.region_detect), 0, 4);
+  config.region_order  = (uint8)clampi(ini_get("system", "region_order", config.region_order), 0, 5);
   config.vdp_mode      = (uint8)clampi(ini_get("system", "vdp_mode", config.vdp_mode), 0, 2);
   config.bios          = (uint8)clampi(ini_get("system", "bios", config.bios), 0, 3);
   config.lock_on       = (uint8)clampi(ini_get("system", "lock_on", config.lock_on), 0, 3);
   config.addr_error    = (uint8)(ini_get("system", "address_error", config.addr_error) ? 1 : 0);
   config.cd_latency    = (uint8)(ini_get("system", "cd_latency", config.cd_latency) ? 1 : 0);
+  config.cd_cache      = (uint8)(ini_get("system", "cd_image_cache", config.cd_cache) ? 1 : 0);
   config.enhanced_vscroll = (uint8)(ini_get("video", "enhanced_vscroll", config.enhanced_vscroll) ? 1 : 0);
   gui.vs_limit         = clampi(ini_get("video", "enhanced_vscroll_limit", gui.vs_limit), 0, 7);
   config.enhanced_vscroll_limit = (uint8)(2 * (gui.vs_limit + 1));
   config.force_dtack   = (uint8)(ini_get("system", "lock_ups", config.force_dtack ? 0 : 1) ? 0 : 1);
+  config.no_sprite_limit = (uint8)(ini_get("system", "no_sprite_limit", config.no_sprite_limit) ? 1 : 0);
   gui.cpu_speed        = clampi(ini_get("system", "cpu_speed", gui.cpu_speed), 0, 7);
   if (ini_get("system", "options_rev", 0) < 1)   /* the light gun cursors were switched on before they became off by default */
   {
@@ -1016,7 +1078,13 @@ void config_load(void)
      value is ever actually used to pick up where a previous session left
      off. */
   gui.state_slot          = 0;
-  gui.fast_forward_ratio  = clampi(ini_get("general", "fast_forward_ratio", gui.fast_forward_ratio), 2, 16);
+  {
+    static const int ff[GUI_FF_COUNT] = GUI_FF_RATIOS;
+    int want = clampi(ini_get("general", "fast_forward_ratio", ff[GUI_FF_DEFAULT]), 2, 16), k, best = GUI_FF_DEFAULT;     /* (the ratio is what the settings file keeps: the nearest choice) */
+
+    for (k = 0; k < GUI_FF_COUNT; k++) if (abs(ff[k] - want) < abs(ff[best] - want)) best = k;
+    gui.fast_forward_idx = best;
+  }
   ini_get_str("general", "rom_dir", gui.rom_dir, sizeof(gui.rom_dir));
   ini_get_str("general", "shader_preset_path", gui.shader_preset_path, sizeof(gui.shader_preset_path));
 
@@ -1059,6 +1127,7 @@ void config_load(void)
   gui.normalize        = ini_get("audio", "normalize", gui.normalize) ? 1 : 0;
   gui.autosave_min     = clampi(ini_get("general", "state_backup", gui.autosave_min), 0, 4);
   gui.skip_len         = clampi(ini_get("general", "skip_intro_choice", gui.skip_len), 0, 6);
+  gui.run_ahead        = clampi(ini_get("emulation", "run_ahead", gui.run_ahead), 0, 2);
   gui.rewind_speed     = clampi(ini_get("general", "rewind_speed", gui.rewind_speed), 0, 3);
   gui.np_upnp          = ini_get("netplay", "upnp", gui.np_upnp) ? 1 : 0;
   gui.overdrive        = ini_get("audio", "overdrive", gui.overdrive) ? 1 : 0;
@@ -1073,10 +1142,11 @@ void config_load(void)
   gui.row_density      = clampi(ini_get("general", "row_density", gui.row_density), 0, 2);
   gui.stereo_idx   = clampi(ini_get("audio", "stereo_width", gui.stereo_idx), 0, 3);
   ini_get_str("audio", "device", gui.audio_device, sizeof(gui.audio_device));
+  ini_get_str("video", "adapter", gui.video_adapter, sizeof(gui.video_adapter));
   gui.audio_backend    = clampi(ini_get("audio", "backend", gui.audio_backend), 0, 3);
   gui.mouse_sens   = clampi(ini_get("input", "mouse_sensitivity", gui.mouse_sens), 0, 4);
-  gui.gun_ox       = clampi(ini_get("input", "gun_offset_x", gui.gun_ox), 0, 6);
-  gui.gun_oy       = clampi(ini_get("input", "gun_offset_y", gui.gun_oy), 0, 6);
+  gui.gun_ox       = clampi(ini_get("input", "gun_offset_x2", ini_get("input", "gun_offset_x", 3) * 2), 0, 12);        /* (it was 0..6 in steps of 4 pixels: x2 is the same distance in steps of 2) */
+  gui.gun_oy       = clampi(ini_get("input", "gun_offset_y2", ini_get("input", "gun_offset_y", 3) * 2), 0, 12);
   gui.confine_mouse = ini_get("input", "confine_mouse", gui.confine_mouse) ? 1 : 0;
   gui.adj_bright   = clampi(ini_get("video", "brightness_pct", gui.adj_bright), -50, 50);
   gui.adj_contrast = clampi(ini_get("video", "contrast_pct", gui.adj_contrast), 50, 150);
@@ -1086,6 +1156,9 @@ void config_load(void)
   gui.adj_hue      = clampi(ini_get("video", "hue_degrees", gui.adj_hue), -30, 30);
   gui.bar_color    = clampi(ini_get("video", "border_color", gui.bar_color), 0, 6);
   gui.fs_exclusive = ini_get("video", "fullscreen_exclusive", gui.fs_exclusive) ? 1 : 0;
+  gui.fs_true = ini_get("video", "fullscreen_true_exclusive", gui.fs_true) ? 1 : 0;
+  gui.fs_mode = gui.fs_exclusive ? (gui.fs_true ? 2 : 1) : 0;
+  ini_get_str("video", "fullscreen_monitor", gui.fs_monitor, sizeof(gui.fs_monitor));
   gui.fs_res_w     = clampi(ini_get("video", "fullscreen_width", 0), 0, 16384);
   gui.fs_res_h     = clampi(ini_get("video", "fullscreen_height", 0), 0, 16384);
   gui.deadzone[0]      = clampi(ini_get("input", "deadzone_p1", gui.deadzone[0]), 0, 100);
@@ -1131,6 +1204,12 @@ void config_load(void)
 
       wsprintfA(key, "btn_%s", pad_key_names[i]);
       gui.pad[player].button[i] = ini_get_pad(section, key, gui.pad[player].button[i]);
+
+      wsprintfA(key, "key2_%s", pad_key_names[i]);
+      gui.pad[player].key2[i] = ini_get(section, key, gui.pad[player].key2[i]);
+
+      wsprintfA(key, "btn2_%s", pad_key_names[i]);
+      gui.pad[player].button2[i] = ini_get_pad(section, key, gui.pad[player].button2[i]);
     }
     gui.pad[player].turbo = (unsigned)ini_get(section, "turbo", (int)gui.pad[player].turbo) & 0x3F0u;
 
@@ -1154,6 +1233,31 @@ void config_load(void)
         p->key[PAD_A] = 'Z';  p->key[PAD_B] = 'X';  p->key[PAD_C] = 'C';
         p->key[PAD_X] = 'A';  p->key[PAD_Y] = 'S';  p->key[PAD_Z] = 'D';
       }
+
+      /* ... and again (Z X C / A S D  ->  Num 1-6, with WASD as the second key of the D-pad). */
+      if (p->key[PAD_UP] == VK_UP && p->key[PAD_DOWN] == VK_DOWN &&
+          p->key[PAD_LEFT] == VK_LEFT && p->key[PAD_RIGHT] == VK_RIGHT &&
+          p->key[PAD_A] == 'Z' && p->key[PAD_B] == 'X' && p->key[PAD_C] == 'C' &&
+          p->key[PAD_X] == 'A' && p->key[PAD_Y] == 'S' && p->key[PAD_Z] == 'D' &&
+          p->key[PAD_START] == VK_RETURN && p->key[PAD_MODE] == VK_RSHIFT &&
+          (!p->key2[PAD_UP] || p->key2[PAD_UP] == 'W') && (!p->key2[PAD_DOWN] || p->key2[PAD_DOWN] == 'S') &&   /* (an ini from before the second keys has none saved: the new defaults are what was read) */
+          (!p->key2[PAD_LEFT] || p->key2[PAD_LEFT] == 'A') && (!p->key2[PAD_RIGHT] || p->key2[PAD_RIGHT] == 'D') &&
+          !p->key2[PAD_A] && !p->key2[PAD_B] && !p->key2[PAD_C] &&
+          !p->key2[PAD_X] && !p->key2[PAD_Y] && !p->key2[PAD_Z])
+      {
+        p->key2[PAD_UP] = 'W';  p->key2[PAD_DOWN] = 'S';  p->key2[PAD_LEFT] = 'A';  p->key2[PAD_RIGHT] = 'D';
+        p->key[PAD_A] = VK_NUMPAD1;  p->key[PAD_B] = VK_NUMPAD2;  p->key[PAD_C] = VK_NUMPAD3;
+        p->key[PAD_X] = VK_NUMPAD4;  p->key[PAD_Y] = VK_NUMPAD5;  p->key[PAD_Z] = VK_NUMPAD6;
+      }
+
+      /* A WASD default second key that an older, customized config already uses on another button would press two buttons: it is dropped. */
+      {
+        int a, b;
+        for (a = 0; a < PAD_KEYS; a++)
+          if (p->key2[a])
+            for (b = 0; b < PAD_KEYS; b++)
+              if (b != a && (p->key[b] == p->key2[a] || (p->key2[b] == p->key2[a] && b < a))) { p->key2[a] = 0; break; }
+      }
     }
   }
 
@@ -1163,6 +1267,27 @@ void config_load(void)
     wsprintfA(key, "file%d", i);
     ini_get_str("recent", key, buf, sizeof(buf));
     lstrcpynA(gui.recent[i], buf, GUI_PATH_LEN);
+  }
+
+  /* --- Mega CD + 32X discs --- */
+  gui.cd32x_n = ini_get("cd32x", "count", 0);
+  if (gui.cd32x_n < 0) gui.cd32x_n = 0;
+  if (gui.cd32x_n > 32) gui.cd32x_n = 32;
+  for (i = 0; i < gui.cd32x_n; i++)
+  {
+    wsprintfA(key, "disc%d", i);
+    ini_get_str("cd32x", key, buf, sizeof(buf));
+    gui.cd32x[i] = (unsigned int)strtoul(buf, NULL, 16);
+  }
+
+  gui.cd32x_no_n = ini_get("cd32x", "plain_count", 0);
+  if (gui.cd32x_no_n < 0) gui.cd32x_no_n = 0;
+  if (gui.cd32x_no_n > 64) gui.cd32x_no_n = 64;
+  for (i = 0; i < gui.cd32x_no_n; i++)
+  {
+    wsprintfA(key, "plain%d", i);
+    ini_get_str("cd32x", key, buf, sizeof(buf));
+    gui.cd32x_no[i] = (unsigned int)strtoul(buf, NULL, 16);
   }
 
   /* --- favorites --- */
@@ -1232,6 +1357,8 @@ void config_save(void)
   ini_put("video", "browser_col1_pct", gui.browser_col_pct[1]);
   ini_put("video", "renderer", gui.renderer);
   ini_put("video", "vsync", gui.vsync);
+  ini_put("video", "sync_display", gui.sync_display);
+  ini_put("video", "alt_timing", gui.alt_timing);
   ini_put("video", "vrr", gui.vrr);
   ini_put("input", "stick_shape", gui.stick_shape);
   ini_put("audio", "crossfeed", gui.crossfeed);
@@ -1276,13 +1403,15 @@ void config_save(void)
       hotkey_ini_key(k, hkey, sizeof(hkey));
       ini_put("hotkeys", hkey, gui.hotkey[k]);
     }
-    ini_put("hotkeys", "rev", 7);
+    ini_put("hotkeys", "disabled", gui.hotkeys_off);
+    ini_put("hotkeys", "rev", 10);
   }
   ini_put("audio", "mute_fm", gui.mute_fm);
   ini_put("audio", "mute_psg", gui.mute_psg);
   ini_put("audio", "mute_dac", gui.mute_dac);
   ini_put("audio", "dac_level", gui.dac_level);
   ini_put("audio", "mute_pwm", gui.mute_pwm);
+  ini_put("audio", "mute_cdda", gui.mute_cdda);
   ini_put("audio", "pwm_level", gui.pwm_level);
   ini_put("general", "autosave", gui.autosave);
   ini_put("general", "resume_choice", gui.resume_choice);
@@ -1298,6 +1427,8 @@ void config_save(void)
 
   ini_put("window", "x", gui.window_x);
   ini_put("window", "y", gui.window_y);
+  ini_put("window", "w", gui.window_w);
+  ini_put("window", "h", gui.window_h);
   ini_put("window", "maximized", gui.window_maximized);
 
   ini_put_str("video", "render_filter", gui.render_filter);
@@ -1330,14 +1461,17 @@ void config_save(void)
 
   ini_put("system", "console", config.system);
   ini_put("system", "region", config.region_detect);
+  ini_put("system", "region_order", config.region_order);
   ini_put("system", "vdp_mode", config.vdp_mode);
   ini_put("system", "bios", config.bios);
   ini_put("system", "lock_on", config.lock_on);
   ini_put("system", "address_error", config.addr_error);
   ini_put("system", "cd_latency", config.cd_latency);
+  ini_put("system", "cd_image_cache", config.cd_cache);
   ini_put("video", "enhanced_vscroll", config.enhanced_vscroll);
   ini_put("video", "enhanced_vscroll_limit", gui.vs_limit);
   ini_put("system", "lock_ups", config.force_dtack ? 0 : 1);
+  ini_put("system", "no_sprite_limit", config.no_sprite_limit);
   ini_put("system", "cpu_speed", gui.cpu_speed);
   ini_put("system", "options_rev", 1);
   ini_put("input", "invert_mouse", config.invert_mouse);
@@ -1348,7 +1482,7 @@ void config_save(void)
   ini_put("general", "rewind_enabled", gui.rewind);
   ini_put("general", "rewind_size", gui.rewind_memory);
   ini_put("general", "state_slot", gui.state_slot);
-  ini_put("general", "fast_forward_ratio", gui.fast_forward_ratio);
+  { static const int ff[GUI_FF_COUNT] = GUI_FF_RATIOS; ini_put("general", "fast_forward_ratio", ff[gui.fast_forward_idx < 0 || gui.fast_forward_idx >= GUI_FF_COUNT ? GUI_FF_DEFAULT : gui.fast_forward_idx]); }
   ini_put_str("general", "rom_dir", gui.rom_dir);
   ini_put_str("general", "shader_preset_path", gui.shader_preset_path);
 
@@ -1375,6 +1509,7 @@ void config_save(void)
   ini_put("audio", "normalize", gui.normalize);
   ini_put("general", "state_backup", gui.autosave_min);
   ini_put("general", "skip_intro_choice", gui.skip_len);
+  ini_put("emulation", "run_ahead", gui.run_ahead);
   ini_put("general", "rewind_speed", gui.rewind_speed);
   ini_put("netplay", "upnp", gui.np_upnp);
   ini_put("audio", "overdrive", gui.overdrive);
@@ -1412,7 +1547,7 @@ void config_save(void)
     ini_put_str("video", "shader_params_for", gui.shader_params_for);
     ini_put_str("input", "combos", gui.combo_text);
     ini_put("general", "group_by_console", gui.group_console);
-    ini_put("general", "az_strip", gui.az_strip);
+    ini_put("general", "az_strip", gui.letter_strip);
     ini_put("input", "padhk_hold_on", gui.padhk_hold_on);
     ini_put_pad("input", "padhk_hold_button", gui.padhk_hold[0]);
     ini_put_pad("input", "padhk_hold_button_di", gui.padhk_hold[1]);
@@ -1439,10 +1574,11 @@ void config_save(void)
   }
   ini_put("audio", "stereo_width", gui.stereo_idx);
   ini_put_str("audio", "device", gui.audio_device);
+  ini_put_str("video", "adapter", gui.video_adapter);
   ini_put("audio", "backend", gui.audio_backend);
   ini_put("input", "mouse_sensitivity", gui.mouse_sens);
-  ini_put("input", "gun_offset_x", gui.gun_ox);
-  ini_put("input", "gun_offset_y", gui.gun_oy);
+  ini_put("input", "gun_offset_x2", gui.gun_ox);
+  ini_put("input", "gun_offset_y2", gui.gun_oy);
   ini_put("input", "confine_mouse", gui.confine_mouse);
   ini_put("video", "brightness_pct", gui.adj_bright);
   ini_put("video", "contrast_pct", gui.adj_contrast);
@@ -1451,7 +1587,9 @@ void config_save(void)
   ini_put("video", "gamma_pct", gui.adj_gamma);
   ini_put("video", "hue_degrees", gui.adj_hue);
   ini_put("video", "border_color", gui.bar_color);
-  ini_put("video", "fullscreen_exclusive", gui.fs_exclusive);
+  ini_put("video", "fullscreen_exclusive", gui.fs_mode >= 1);
+  ini_put("video", "fullscreen_true_exclusive", gui.fs_mode == 2);
+  ini_put_str("video", "fullscreen_monitor", gui.fs_monitor);
   ini_put("video", "fullscreen_width", gui.fs_res_w);
   ini_put("video", "fullscreen_height", gui.fs_res_h);
   ini_put("input", "deadzone_p1", gui.deadzone[0]);
@@ -1473,6 +1611,12 @@ void config_save(void)
 
       wsprintfA(key, "btn_%s", pad_key_names[i]);
       ini_put_pad(section, key, gui.pad[player].button[i]);
+
+      wsprintfA(key, "key2_%s", pad_key_names[i]);
+      ini_put(section, key, gui.pad[player].key2[i]);
+
+      wsprintfA(key, "btn2_%s", pad_key_names[i]);
+      ini_put_pad(section, key, gui.pad[player].button2[i]);
     }
     ini_put(section, "turbo", (int)gui.pad[player].turbo);
   }
@@ -1481,6 +1625,20 @@ void config_save(void)
   {
     wsprintfA(key, "file%d", i);
     ini_put_str("recent", key, gui.recent[i]);
+  }
+
+  ini_put("cd32x", "count", gui.cd32x_n);
+  for (i = 0; i < gui.cd32x_n; i++)
+  {
+    wsprintfA(key, "disc%d", i);
+    { char hb[16]; wsprintfA(hb, "%08x", gui.cd32x[i]); ini_put_str("cd32x", key, hb); }
+  }
+
+  ini_put("cd32x", "plain_count", gui.cd32x_no_n);
+  for (i = 0; i < gui.cd32x_no_n; i++)
+  {
+    wsprintfA(key, "plain%d", i);
+    { char hb[16]; wsprintfA(hb, "%08x", gui.cd32x_no[i]); ini_put_str("cd32x", key, hb); }
   }
 
   ini_put("favorites", "count", fav_n);
@@ -1591,4 +1749,71 @@ void config_add_recent(const char *path)
     if (i < count) lstrcpynA(gui.recent[i], moved[i], GUI_PATH_LEN);
     else gui.recent[i][0] = '\0';
   }
+}
+
+
+/* ---- the discs started as Mega CD + 32X ones ---- */
+
+static unsigned int cd32x_hash(const char *path)
+{
+  unsigned int h = 2166136261u;
+
+  for (; *path; path++)
+  {
+    unsigned char ch = (unsigned char)*path;
+    if (ch >= 'A' && ch <= 'Z') ch = (unsigned char)(ch + 32);
+    if (ch == '/') ch = '\\';
+    h ^= ch;
+    h *= 16777619u;
+  }
+  return h;
+}
+
+int config_cd32x_has(const char *path)
+{
+  unsigned int h = cd32x_hash(path);
+  int i;
+
+  for (i = 0; i < gui.cd32x_n; i++) if (gui.cd32x[i] == h) return 1;
+  return 0;
+}
+
+void config_cd32x_add(const char *path)
+{
+  int i;
+
+  if (config_cd32x_has(path)) return;
+  if (gui.cd32x_n >= 32) { for (i = 1; i < 32; i++) gui.cd32x[i - 1] = gui.cd32x[i]; gui.cd32x_n = 31; }
+  gui.cd32x[gui.cd32x_n++] = cd32x_hash(path);
+  { unsigned int h = cd32x_hash(path); int k = 0; for (i = 0; i < gui.cd32x_no_n; i++) if (gui.cd32x_no[i] != h) gui.cd32x_no[k++] = gui.cd32x_no[i]; gui.cd32x_no_n = k; }
+  config_save();
+}
+
+int config_cd32x_no_has(const char *path)
+{
+  unsigned int h = cd32x_hash(path);
+  int i;
+
+  for (i = 0; i < gui.cd32x_no_n; i++) if (gui.cd32x_no[i] == h) return 1;
+  return 0;
+}
+
+void config_cd32x_no_add(const char *path)
+{
+  int i;
+
+  if (config_cd32x_no_has(path)) return;
+  if (gui.cd32x_no_n >= 64) { for (i = 1; i < 64; i++) gui.cd32x_no[i - 1] = gui.cd32x_no[i]; gui.cd32x_no_n = 63; }
+  gui.cd32x_no[gui.cd32x_no_n++] = cd32x_hash(path);
+  config_save();
+}
+
+/* The disc is no longer started as a Mega CD + 32X one. */
+void config_cd32x_remove(const char *path)
+{
+  unsigned int h = cd32x_hash(path);
+  int i, k = 0;
+
+  for (i = 0; i < gui.cd32x_n; i++) if (gui.cd32x[i] != h) gui.cd32x[k++] = gui.cd32x[i];
+  if (k != gui.cd32x_n) { gui.cd32x_n = k; config_save(); }
 }

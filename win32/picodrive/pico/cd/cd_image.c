@@ -114,7 +114,7 @@ int load_cd_image(const char *cd_img_name, int *type)
   };
   int i, j, n, lba, index, length, ret;
   int iso_name_len, missed, cd_img_sectors;
-  char tmp_name[256], tmp_ext[10], tmp_ext_u[10];
+  char tmp_name[1024], tmp_ext[10], tmp_ext_u[10];
   track_t *tracks = cdd.toc.tracks;
   cd_data_t *cue_data = NULL;
   pm_file *pmf;

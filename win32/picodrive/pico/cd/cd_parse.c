@@ -209,8 +209,8 @@ out:
 
 cd_data_t *cue_parse(const char *fname)
 {
-	char current_file[256], *current_filep, cue_base[256];
-	char buff[256], buff2[32], ext[4], *p;
+	char current_file[1024], *current_filep, cue_base[1024];
+	char buff[1024], buff2[32], ext[4], *p;
 	int ret, count = 0, count_alloc = 2, pending_pregap = 0;
 	size_t current_filep_size, fname_len;
 	cd_data_t *data = NULL, *tmp;

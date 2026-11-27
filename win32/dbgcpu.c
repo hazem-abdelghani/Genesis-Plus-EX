@@ -20,9 +20,12 @@
  *  with the library's own disassembler.
  *
  *  Limits: the main 68000 only in the other games (not the Mega CD's second
- *  one, which a read or write breakpoint may also catch), and not the Z80,
- *  which neither core hooks. The idea comes from the Genesis Plus GX debugger
- *  project (smd_dgx); this code is written for Win32.
+ *  one, which a read or write breakpoint may also catch), and the Z80 only
+ *  through its memory accesses (the core has no hook for its instructions;
+ *  dc_z80_install() puts the debugger between the Z80 and its memory).
+ *  The VDP's VRAM, CRAM and VSRAM are watched through the core's VDP hooks
+ *  (not a VRAM fill or copy, which the core does not report). The idea comes
+ *  from the Genesis Plus GX debugger project (smd_dgx); this code is written for Win32.
  ****************************************************************************/
 
 #include <windows.h>
@@ -59,7 +62,8 @@
 enum { M_RUN, M_STEP, M_RUNTO, M_OUT };
 enum { BP_E = 1, BP_R = 2, BP_W = 4 };
 
-typedef struct { unsigned addr, end; int type, enabled, cpu; } bp_t;
+enum { SP_CPU = 0, SP_Z80, SP_VRAM, SP_CRAM, SP_VSRAM };     /* what a breakpoint watches: the 68000's memory, the Z80's, or a memory of the VDP */
+typedef struct { unsigned addr, end; int type, enabled, cpu, space; } bp_t;
 typedef struct { unsigned ret, target; } frame_t;
 
 static bp_t dc_bp[DC_MAXBP];
@@ -530,7 +534,7 @@ static void dc_set_buttons(void)
 /* The game is stopped here: this waits, answering the program's windows, until a button of the debugger lets it go on. */
 static void dc_stop(const char *reason)
 {
-  MSG msg;
+  MSG msg = { 0 };
 
   if (!dc_win) return;
   dc_broken = 1;
@@ -563,10 +567,81 @@ static void dc_stop(const char *reason)
   emu_timing_resync();
 }
 
+/* The 68000's address as a breakpoint sees it. The core hands over the address as the program built it: $FFFF8000 for a short absolute address
+   (sign-extended; most games reach their RAM that way), and the work RAM repeats every 64 KB from $E00000 on, so a breakpoint at $FF8000 missed
+   both. Only the low 24 bits count, and the repeats of the RAM are the RAM at $FF0000. */
+static unsigned dc_addr68(unsigned a)
+{
+  a &= 0xFFFFFFu;
+  return a >= 0xE00000u ? 0xFF0000u | (a & 0xFFFFu) : a;
+}
+
 static int dc_match(const bp_t *b, unsigned a, int width, int type)
 {
-  return b->enabled && (b->type & type) && a + (unsigned)width > b->addr && a <= b->end;
+  a = dc_addr68(a);
+  return b->enabled && b->space == SP_CPU && (b->type & type) && a + (unsigned)width > b->addr && a <= b->end;
 }
+
+/* The Z80 and the VDP's memories: only the low bits of the address count (the Z80's 64 KB; the VRAM's 64 KB; the 128 bytes of the CRAM and the VSRAM). */
+static int dc_match_space(const bp_t *b, int space, unsigned a, int width, int type)
+{
+  a &= space == SP_CRAM || space == SP_VSRAM ? 0x7Fu : 0xFFFFu;
+  return b->enabled && b->space == space && (b->type & type) && a + (unsigned)width > b->addr && a <= b->end;
+}
+
+static void dc_hit(int space, int write, unsigned address, int width, const char *by)
+{
+  static const char *const names[] = { "68000", "Z80", "VRAM", "CRAM", "VSRAM" };
+  char t[112];
+
+  if (space == SP_Z80) wsprintfA(t, "Z80 %s of $%X at Z80 $%X", write ? "write" : "read", address & 0xFFFFu, (unsigned)Z80.pc.w.l);
+  else wsprintfA(t, "%s %s of $%X%s (68000 at $%X)", names[space], write ? "write" : "read", address & (space == SP_VRAM ? 0xFFFFu : 0x7Fu), by, dc_pc);
+  (void)width;
+  dc_stop(t);
+}
+
+/* The Z80 reads and writes memory through two function pointers of the core (the core itself has no hook for them): while the window is
+   open they point here, and these call the core's own. The instruction fetches of the Z80 do not come this way, so there is no Execute
+   breakpoint for the Z80. */
+static unsigned char (*dc_z80_r)(unsigned int);
+static void (*dc_z80_w)(unsigned int, unsigned char);
+
+static void dc_z80_check(int write, unsigned address)
+{
+  int i;
+
+  if (!dc_win || dc_broken || dc_np) return;
+  for (i = 0; i < dc_nbp; i++)
+    if (dc_match_space(&dc_bp[i], SP_Z80, address, 1, write ? BP_W : BP_R)) { dc_hit(SP_Z80, write, address, 1, ""); return; }
+}
+
+static unsigned char dc_z80_rd(unsigned int address)
+{
+  dc_z80_check(0, address);
+  return dc_z80_r(address);
+}
+
+static void dc_z80_wr(unsigned int address, unsigned char data)
+{
+  dc_z80_check(1, address);
+  dc_z80_w(address, data);
+}
+
+static void dc_z80_install(void)
+{
+  if (z80_readmem == dc_z80_rd) return;
+  dc_z80_r = z80_readmem; dc_z80_w = z80_writemem;
+  z80_readmem = dc_z80_rd; z80_writemem = dc_z80_wr;
+}
+
+static void dc_z80_remove(void)
+{
+  if (z80_readmem != dc_z80_rd) return;
+  z80_readmem = dc_z80_r; z80_writemem = dc_z80_w;
+}
+
+static int dc_vdp_cpuw;          /* writes to the VDP's data port the 68000 is making (the other writes to the VDP's memories are a DMA) */
+static int dc_dma_new;           /* the next write of a DMA is its first */
 
 static void dc_hook(hook_type_t type, int width, unsigned address, unsigned value)
 {
@@ -581,6 +656,9 @@ static void dc_hook(hook_type_t type, int width, unsigned address, unsigned valu
     int kind, len = 0;
 
     if (address != m68k.pc) return;                          /* the Mega CD's second 68000 */
+    dc_z80_install();                                        /* (the core sets its pointers again when the game is reset) */
+    dc_vdp_cpuw = 0;
+    dc_dma_new = 1;
     dc_pc = address;
     dc_stopcpu = 0;
     op = dc_rd16(address);
@@ -606,14 +684,55 @@ static void dc_hook(hook_type_t type, int width, unsigned address, unsigned valu
     return;
   }
 
+  if (type == HOOK_VRAM_R || type == HOOK_VRAM_W || type == HOOK_CRAM_R || type == HOOK_CRAM_W || type == HOOK_VSRAM_R || type == HOOK_VSRAM_W)
+  {
+    int space = (type == HOOK_VRAM_R || type == HOOK_VRAM_W) ? SP_VRAM : (type == HOOK_CRAM_R || type == HOOK_CRAM_W) ? SP_CRAM : SP_VSRAM;
+    int write = (type == HOOK_VRAM_W || type == HOOK_CRAM_W || type == HOOK_VSRAM_W);
+    int dma = 0;
+
+    if (write)
+    {
+      if (dc_vdp_cpuw > 0) dc_vdp_cpuw--;
+      else dma = 1;                                        /* no write of the 68000 to the data port came first: the VDP is doing a DMA */
+    }
+    if (dma && dc_dma_new)
+    {
+      /* A DMA from the 68000's memory: its source (from the VDP's registers) is read, so a Read breakpoint there stops it. */
+      unsigned n = ((unsigned)reg[20] << 8) | reg[19], src;
+
+      dc_dma_new = 0;
+      if (!n) n = 0x10000;
+      if (!(reg[23] & 0x80))
+      {
+        src = ((unsigned)(reg[23] & 0x7F) << 17) | ((unsigned)reg[22] << 9) | ((unsigned)reg[21] << 1);
+        for (i = 0; i < dc_nbp; i++)
+          if (dc_bp[i].enabled && dc_bp[i].space == SP_CPU && (dc_bp[i].type & BP_R) && dc_bp[i].cpu == 0 &&
+              dc_addr68(src) <= dc_bp[i].end && dc_addr68(src) + n * 2 > dc_bp[i].addr)
+          {
+            char t[96];
+
+            wsprintfA(t, "DMA reads $%X (%u word%s) for the VDP (68000 at $%X)", src & 0xFFFFFFu, n, n == 1 ? "" : "s", dc_pc);
+            dc_stop(t);
+            break;
+          }
+      }
+    }
+    for (i = 0; i < dc_nbp; i++)
+      if (dc_match_space(&dc_bp[i], space, address, 2, write ? BP_W : BP_R)) { dc_hit(space, write, address, 2, dma ? " by DMA" : ""); return; }
+    return;
+  }
+
   if (type == HOOK_M68K_R || type == HOOK_M68K_W)
   {
+    dc_dma_new = 1;
+    if (type == HOOK_M68K_W && (address & 0xE700E0u) == 0xC00000u && (address & 0x1Fu) < 4) dc_vdp_cpuw = width == 4 ? 2 : 1;
+    else dc_vdp_cpuw = 0;
     for (i = 0; i < dc_nbp; i++)
       if (dc_match(&dc_bp[i], address, width, type == HOOK_M68K_R ? BP_R : BP_W))
       {
         char t[96];
 
-        wsprintfA(t, "%s of $%X (%d byte%s) at $%X", type == HOOK_M68K_R ? "Read" : "Write", address, width, width == 1 ? "" : "s", dc_pc);
+        wsprintfA(t, "%s of $%X (%d byte%s) at $%X", type == HOOK_M68K_R ? "Read" : "Write", address & 0xFFFFFFu, width, width == 1 ? "" : "s", dc_pc);
         dc_stop(t);
         return;
       }
@@ -985,6 +1104,7 @@ static void dc_paint(HDC target, const RECT *c)
     char ty[16] = "";
 
     if (dc_32x) lstrcatA(ty, dc_bp[i].cpu == 0 ? "68K " : dc_bp[i].cpu == 1 ? "MSH " : "SSH ");
+    else if (dc_bp[i].space) lstrcatA(ty, dc_bp[i].space == SP_Z80 ? "Z80 " : dc_bp[i].space == SP_VRAM ? "VRAM " : dc_bp[i].space == SP_CRAM ? "CRAM " : "VSRAM ");
     if (dc_bp[i].type & BP_E) lstrcatA(ty, "X");
     if (dc_bp[i].type & BP_R) lstrcatA(ty, "R");
     if (dc_bp[i].type & BP_W) lstrcatA(ty, "W");
@@ -997,8 +1117,8 @@ static void dc_paint(HDC target, const RECT *c)
       SetTextColor(dc, RGB(255, 255, 255));
     }
     else SetTextColor(dc, dc_bp[i].enabled ? fg : dim);
-    if (dc_bp[i].end > dc_bp[i].addr) wsprintfA(line, dc_bp[i].cpu ? "%c %-8s %08X - %08X" : "%c %-8s %06X - %06X", dc_bp[i].enabled ? '*' : ' ', ty, dc_bp[i].addr, dc_bp[i].end);
-    else wsprintfA(line, dc_bp[i].cpu ? "%c %-8s %08X" : "%c %-8s %06X", dc_bp[i].enabled ? '*' : ' ', ty, dc_bp[i].addr);
+    if (dc_bp[i].end > dc_bp[i].addr) wsprintfA(line, dc_bp[i].cpu ? "%c %-8s %08X - %08X" : dc_bp[i].space ? "%c %-8s %04X - %04X" : "%c %-8s %06X - %06X", dc_bp[i].enabled ? '*' : ' ', ty, dc_bp[i].addr, dc_bp[i].end);
+    else wsprintfA(line, dc_bp[i].cpu ? "%c %-8s %08X" : dc_bp[i].space ? "%c %-8s %04X" : "%c %-8s %06X", dc_bp[i].enabled ? '*' : ' ', ty, dc_bp[i].addr);
     TextOutA(dc, bps.left + S(8), y, line, lstrlenA(line));
     y += dc_lh;
   }
@@ -1053,13 +1173,13 @@ static void dc_toggle_bp(unsigned a)
     }
   if (dc_nbp < DC_MAXBP)
   {
-    dc_bp[dc_nbp].addr = a; dc_bp[dc_nbp].end = a; dc_bp[dc_nbp].type = BP_E; dc_bp[dc_nbp].enabled = 1; dc_bp[dc_nbp].cpu = dc_cur;
+    dc_bp[dc_nbp].addr = a; dc_bp[dc_nbp].end = a; dc_bp[dc_nbp].type = BP_E; dc_bp[dc_nbp].enabled = 1; dc_bp[dc_nbp].cpu = dc_cur; dc_bp[dc_nbp].space = SP_CPU;
     dc_nbp++;
   }
 }
 
 /* A modal window for a new breakpoint: an address (or a range), and what stops the game there. */
-typedef struct { unsigned addr, end; int type, cpu, done, ok; HWND dlg, a, b, x, r, w, cb; } bpedit_t;
+typedef struct { unsigned addr, end; int type, cpu, space, done, ok; HWND dlg, a, b, x, r, w, cb, sp; } bpedit_t;
 
 static LRESULT CALLBACK dc_bp_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
@@ -1078,13 +1198,23 @@ static LRESULT CALLBACK dc_bp_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         if (!t[0]) { gui_notify("Type the address in hex"); return 0; }
         e->cpu = e->cb ? (int)SendMessage(e->cb, CB_GETCURSEL, 0, 0) : 0;
         if (e->cpu < 0) e->cpu = 0;
+        e->space = e->sp ? (int)SendMessage(e->sp, CB_GETCURSEL, 0, 0) : 0;
+        if (e->space < 0) e->space = 0;
         e->addr = (unsigned)strtoul(t, NULL, 16) & (e->cpu ? 0xFFFFFFFFu : 0xFFFFFFu);
         GetWindowTextA(e->b, t, sizeof(t));
         e->end = t[0] ? ((unsigned)strtoul(t, NULL, 16) & (e->cpu ? 0xFFFFFFFFu : 0xFFFFFFu)) : e->addr;
+        if (!e->cpu && !e->space) { e->addr = dc_addr68(e->addr); e->end = t[0] ? dc_addr68(e->end) : e->addr; }
+        else if (e->space)                                       /* (the Z80's and the VDP's memories are smaller) */
+        {
+          unsigned m = e->space == SP_CRAM || e->space == SP_VSRAM ? 0x7Fu : 0xFFFFu;
+
+          e->addr &= m; e->end = t[0] ? (e->end & m) : e->addr;
+        }
         if (e->end < e->addr) e->end = e->addr;
         e->type = e->cb ? BP_E : ((SendMessage(e->x, BM_GETCHECK, 0, 0) == BST_CHECKED ? BP_E : 0) | (SendMessage(e->r, BM_GETCHECK, 0, 0) == BST_CHECKED ? BP_R : 0) |
                   (SendMessage(e->w, BM_GETCHECK, 0, 0) == BST_CHECKED ? BP_W : 0));
-        if (!e->type) { gui_notify("Tick what should stop the game: Execute, Read or Write"); return 0; }
+        if (e->space) e->type &= ~BP_E;                          /* (the Z80 and the VDP have no instruction to reach) */
+        if (!e->type) { gui_notify(e->space ? "Tick Read or Write" : "Tick what should stop the game: Execute, Read or Write"); return 0; }
         e->ok = 1; e->done = 1;
         return 0;
       }
@@ -1130,7 +1260,7 @@ static void dc_add_bp(void)
 {
   static int registered;
   bpedit_t e;
-  MSG msg;
+  MSG msg = { 0 };
   RECT r, pr;
   DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
   char t[24];
@@ -1150,7 +1280,7 @@ static void dc_add_bp(void)
     registered = 1;
   }
   ZeroMemory(&e, sizeof(e));
-  r.left = 0; r.top = 0; r.right = S(300); r.bottom = S(176);
+  r.left = 0; r.top = 0; r.right = S(300); r.bottom = S(dc_32x ? 176 : 208);
   AdjustWindowRectEx(&r, style, FALSE, 0);
   e.dlg = CreateWindowExA(0, "GPEXBreakpointEdit", "New Breakpoint", style, 0, 0, r.right - r.left, r.bottom - r.top, GetAncestor(dc_win, GA_ROOT), NULL, g_inst, &e);
   if (!e.dlg) return;
@@ -1170,13 +1300,21 @@ static void dc_add_bp(void)
   }
   else
   {
-    e.x = dc_ctl(e.dlg, "BUTTON", "Execute", WS_TABSTOP | BS_AUTOCHECKBOX, 0, 16, 78, 80, 20, 203);
-    e.r = dc_ctl(e.dlg, "BUTTON", "Read", WS_TABSTOP | BS_AUTOCHECKBOX, 0, 104, 78, 70, 20, 204);
-    e.w = dc_ctl(e.dlg, "BUTTON", "Write", WS_TABSTOP | BS_AUTOCHECKBOX, 0, 182, 78, 70, 20, 205);
+    dc_ctl(e.dlg, "STATIC", "Memory:", SS_LEFT, 0, 12, 82, 100, 16, 0);
+    e.sp = dc_ctl(e.dlg, "COMBOBOX", "", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, 0, 120, 78, 170, 140, 207);
+    SendMessageA(e.sp, CB_ADDSTRING, 0, (LPARAM)"68000 (the game's memory)");
+    SendMessageA(e.sp, CB_ADDSTRING, 0, (LPARAM)"Z80 memory");
+    SendMessageA(e.sp, CB_ADDSTRING, 0, (LPARAM)"VDP: VRAM");
+    SendMessageA(e.sp, CB_ADDSTRING, 0, (LPARAM)"VDP: CRAM (colors)");
+    SendMessageA(e.sp, CB_ADDSTRING, 0, (LPARAM)"VDP: VSRAM (scroll)");
+    SendMessage(e.sp, CB_SETCURSEL, 0, 0);
+    e.x = dc_ctl(e.dlg, "BUTTON", "Execute", WS_TABSTOP | BS_AUTOCHECKBOX, 0, 16, 110, 80, 20, 203);
+    e.r = dc_ctl(e.dlg, "BUTTON", "Read", WS_TABSTOP | BS_AUTOCHECKBOX, 0, 104, 110, 70, 20, 204);
+    e.w = dc_ctl(e.dlg, "BUTTON", "Write", WS_TABSTOP | BS_AUTOCHECKBOX, 0, 182, 110, 70, 20, 205);
     SendMessage(e.x, BM_SETCHECK, BST_CHECKED, 0);
   }
-  dc_ctl(e.dlg, "BUTTON", "OK", WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 120, 132, 80, 26, IDOK);
-  dc_ctl(e.dlg, "BUTTON", "Cancel", WS_TABSTOP | BS_PUSHBUTTON, 0, 208, 132, 80, 26, IDCANCEL);
+  dc_ctl(e.dlg, "BUTTON", "OK", WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 120, dc_32x ? 132 : 164, 80, 26, IDOK);
+  dc_ctl(e.dlg, "BUTTON", "Cancel", WS_TABSTOP | BS_PUSHBUTTON, 0, 208, dc_32x ? 132 : 164, 80, 26, IDCANCEL);
   GetWindowRect(dc_win, &pr);
   SetWindowPos(e.dlg, NULL, pr.left + ((pr.right - pr.left) - (r.right - r.left)) / 2, pr.top + ((pr.bottom - pr.top) - (r.bottom - r.top)) / 2,
                r.right - r.left, r.bottom - r.top, SWP_NOZORDER);
@@ -1187,9 +1325,10 @@ static void dc_add_bp(void)
       { 201, NULL, "The address, in hex. For an instruction, the address of its first byte." },
       { 202, NULL, "The end of a range, in hex (leave empty for one address)." },
       { 203, NULL, "Stop the game when the processor reaches the instruction." },
-      { 204, NULL, "Stop the game when the 68000 reads from the address." },
-      { 205, NULL, "Stop the game when the 68000 writes to the address." },
+      { 204, NULL, "Stop the game when it reads from the address (for the 68000, a DMA that reads there stops it too)." },
+      { 205, NULL, "Stop the game when it writes to the address (a DMA from the 68000's memory into the VRAM, CRAM or VSRAM counts)." },
       { 206, NULL, "Which processor the breakpoint is for." },
+      { 207, NULL, "What to watch: the game's memory (68000), the Z80's memory, or a memory of the VDP (a DMA from the 68000's memory into it stops the game too). Only Read and Write exist for the Z80 and the VDP." },
       { IDOK, NULL, "Add the breakpoint." },
       { IDCANCEL, NULL, "Close without adding anything." }
     };
@@ -1219,7 +1358,7 @@ static void dc_add_bp(void)
   SetForegroundWindow(GetAncestor(dc_win, GA_ROOT));
   if (e.ok)
   {
-    dc_bp[dc_nbp].addr = e.addr; dc_bp[dc_nbp].end = e.end; dc_bp[dc_nbp].type = e.type; dc_bp[dc_nbp].enabled = 1; dc_bp[dc_nbp].cpu = e.cpu;
+    dc_bp[dc_nbp].addr = e.addr; dc_bp[dc_nbp].end = e.end; dc_bp[dc_nbp].type = e.type; dc_bp[dc_nbp].enabled = 1; dc_bp[dc_nbp].cpu = e.cpu; dc_bp[dc_nbp].space = e.space;
     dc_selbp = dc_nbp++;
     InvalidateRect(dc_win, NULL, FALSE);
   }
@@ -1281,7 +1420,7 @@ static LRESULT CALLBACK dc_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
       dc_top = dc_pc;
       dc_set_buttons();
       SetTimer(h, DC_TIMER, DC_TICK_MS, NULL);
-      if (dc_32x) pico_cpu_hook(dc_pico_hook); else set_cpu_hook(dc_hook);
+      if (dc_32x) pico_cpu_hook(dc_pico_hook); else { set_cpu_hook(dc_hook); dc_z80_install(); }
       return 0;
 
     case WM_SIZE:
@@ -1440,7 +1579,7 @@ static LRESULT CALLBACK dc_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 
     case WM_DESTROY:
       KillTimer(h, DC_TIMER);
-      if (dc_32x) pico_cpu_hook(NULL); else set_cpu_hook(NULL);
+      if (dc_32x) pico_cpu_hook(NULL); else { set_cpu_hook(NULL); dc_z80_remove(); }
       dc_broken = 0;
       dc_pause_req = 0;
       dc_mode = M_RUN;

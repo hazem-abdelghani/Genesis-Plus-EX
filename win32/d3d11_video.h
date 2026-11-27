@@ -70,9 +70,16 @@ void d3d11_overlay_slot(int slot);     /* which of two overlay textures the next
 int  d3d11_draw_overlay(const uint32 *argb_pixels, int argb_pitch,
                          int w, int h, const RECT *screen_area);
 
+int  d3d11_adapter_list(char names[][96], int max);   /* the graphics cards (names, UTF-8), for Settings > Video > Video Adapter; software adapters left out */
+void d3d11_set_adapter(const char *name);              /* the card to make the device on ("" = Auto): used the next time the device is made */
 void d3d11_set_vrr(int on);           /* variable refresh wanted (1) or not (0): used the next time the device is made */
 int  d3d11_resample_available(int mode);   /* Scaling Filter 1 (Sharp Nearest), 3 (Sharp Bilinear) and 4 (Bicubic): did its pixel shader compile? */
+int  d3d11_exclusive_size(int *w, int *h);   /* in True Exclusive Fullscreen: the size of the screen mode the picture is drawn into (1), else 0 */
 int  d3d11_vrr_active(void);          /* 1 when the swap chain was made for variable refresh (gui.vrr on and the PC supports it) */
+long d3d11_exclusive_enter(HWND win, int w, int h, int hz_num, int hz_den);   /* real exclusive fullscreen on win (0 = done, else the HRESULT that stopped it) */
+void d3d11_exclusive_leave(void);
+int  d3d11_exclusive_active(void);
+void d3d11_show_surface(int on);      /* hide (0) or show (1) the window the picture is drawn in (hidden once a game is stopped) */
 void d3d11_set_sync(int on);          /* VSync: the next d3d11_present() waits for the display's refresh (1) or not (0) */
 void d3d11_present(void);
 

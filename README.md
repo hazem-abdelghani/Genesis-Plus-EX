@@ -1,8 +1,8 @@
-![Genesis Plus EX](win32/images/Genesis-Plus-EX-Logo.png)
+![Genesis Plus EX](win32/images/logos/Genesis-Plus-EX-Logo.png)
 
 # Genesis Plus EX
 
-**A fast, portable Windows front end for the Genesis Plus GX emulator core and, for 32X games, PicoDrive.**
+**Genesis Plus EX: a fast, portable Windows emulator**
 
 Genesis Plus EX plays Sega Mega Drive / Genesis, Master System, Game Gear,
 SG-1000, Mega CD / Sega CD, Pico and 32X games. It is a native Windows program that
@@ -47,14 +47,14 @@ Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx) by Eke-Eke
 |---|---|
 | **Systems** | Mega Drive / Genesis, Master System, Game Gear, SG-1000, Mega CD / Sega CD (multi-disc too), Pico, 32X (through PicoDrive) |
 | **Files** | `.zip`, `.gz` and `.7z` open directly; Mega CD from `.cue`, `.chd` or `.bin` (also inside a `.zip` or `.7z`); 32X from `.32x` |
-| **Picture** | GDI, Direct3D 9 or Direct3D 11; 40+ built-in render filters in families (xBRZ, real HQx, xBR, LQ2x, ScaleFX, CRT Geom, Super Eagle, 2xSaI, scanlines, aperture grille and more); RetroArch `.slangp` shader presets (Direct3D 11, 64-bit); NTSC filter, scanlines, LCD ghosting, Deinterlacing, integer scaling, bezels; Picture Adjustments (Brightness, Contrast, Saturation, Gamma, Hue) |
+| **Picture** | GDI, Direct3D 9, Direct3D 11 or Direct3D 12; 40+ built-in render filters in families (xBRZ, real HQx, xBR, LQ2x, ScaleFX, CRT Geom, Super Eagle, 2xSaI, scanlines, aperture grille and more); RetroArch `.slangp` shader presets (Direct3D 11, 64-bit); NTSC filter, scanlines, LCD ghosting, Deinterlacing, integer scaling, bezels; Picture Adjustments (Brightness, Contrast, Saturation, Gamma, Hue) |
 | **Sound** | Five FM chip emulations, low-pass filter or 3-band EQ, stereo width, bass boost, WASAPI / XAudio2 / waveOut output |
 | **Input** | Keyboard and gamepads (Xbox pads through XInput; PlayStation, Nintendo and other pads through DirectInput), remappable per player; every Sega peripheral (mouse, light guns, Team Player, EA 4-Way Play and more); turbo, combos, profiles |
 | **Saving** | 10 save-state slots with thumbnails, rewind, auto resume, rolling backup states, undo for a state load |
 | **Library** | List or grid game browser with cover art, search, filters, favorites, recently played, several folders |
 | **Cheats** | Game Genie, Action Replay and work RAM byte codes with a Status for each, a Cheat Code Converter, Similar Cheat Files, `.cht` import and export, cheats in netplay, 32X SH-2 memory in Cheat Search |
 | **Controls** | Per-player remapping, a Combos list, turbo rate, editable hotkeys (also on the gamepad), controller profiles, Hide Mouse Pointer |
-| **Tools** | Debug viewers (memory, VDP, sound, CPU), a CPU Debugger with breakpoints and stepping (68000, Z80 and the 32X SH-2s), RAM Search and RAM Watch (also for the 32X SDRAM), tooltips on every debug control, ROM patching (IPS, BPS), ROM Information, Change Disc, game speed and frame advance, netplay, User Guide |
+| **Tools** | Debug viewers (memory, VDP, sound, CPU), a CPU Debugger with breakpoints and stepping (68000, Z80 and the 32X SH-2s), RAM Search and RAM Watch (also for the 32X SDRAM), tooltips on every debug control, ROM patching (IPS, BPS), Game Information, Change Disc, game speed and frame advance, netplay, User Guide |
 | **Extras** | Cheats and a cheat finder, input recording, video / audio / GIF / VGM recording, screenshots, LAN netplay |
 | **Looks** | Light, Dark and seven colored dark themes (Sapphire, Ruby, Emerald, Amethyst, Amber, Aquamarine, Diamond) with tinted buttons, menus, title bar and scroll bars; accent colors, a Classic or Modern style, Large interface |
 | **Languages** | Translations are plain `.po` files in a `Languages` folder (Options > Language); only English ships, `Template.pot` is the template |
@@ -82,10 +82,11 @@ Based on [Genesis Plus GX](https://github.com/ekeeke/genesis-plus-gx) by Eke-Eke
 1. Put `Genesis Plus EX.exe` in a folder of its own and run it. It creates its
    data folders next to itself on first start.
 2. Open a game in any of these ways:
-   - **File → Open ROM** (Ctrl+O),
+   - **File → Open Game** (Ctrl+O),
    - drag a game onto the window,
-   - **File → ROM Directory** (Ctrl+R) to browse a folder of games,
+   - **File → Game Folder** (Ctrl+R) to browse a folder of games,
    - pass the game on the command line.
+   An archive (`.zip` or `.7z`) that holds more than one game opens a window to pick which one to play (with a search box); one game, or a game with its `.cue` and audio files, starts at once.
 3. Play. The keyboard works at once (see [Controls](#controls)); a connected
    gamepad needs no setup either.
 
@@ -94,7 +95,7 @@ build exist. The 32-bit one has no shaders, because the shader library has
 no 32-bit version.
 
 Most settings are in **Options → Settings...** (tabs: General, Video, Audio,
-Picture, Input, Options, OSD). Hover over any option for a short description.
+Picture, Input, Emulation, OSD). Hover over any option for a short description.
 **Help → User Guide** inside the program explains every menu item and the Settings, Controls, Cheats and Netplay windows.
 
 Windows 10 version 1903 or later is recommended: it lets game and folder names
@@ -110,10 +111,11 @@ If the program's own folder cannot be written to (for example in `Program Files`
 
 ```
 Genesis Plus EX.exe
-Plugins/               the DLLs the program loads when needed: librashader.dll (shaders) and
-                       picodrive_libretro-64.dll / -32.dll (the 32X emulator, PicoDrive)
+Plugins/               the DLLs the program loads when needed: librashader.dll (shaders; with Direct3D 12
+                       also dxcompiler.dll and dxil.dll) and picodrive_libretro-64.dll / -32.dll
+                       (the 32X emulator, PicoDrive)
 genesis-plus-ex.ini    all settings
-ROMs/                  a place for your games, with a folder per console made at the first start (MegaDrive, MasterSystem ...; add it under ROM Directories; any other folder works just as well)
+ROMs/                  a place for your games, with a folder per console made at the first start (MegaDrive, MasterSystem ...; add it under Game Folders; any other folder works just as well)
 BIOS/                  optional BIOS and add-on ROMs
 Saves/                 battery saves (.srm) and Mega CD backup RAM (.brm; MegaCD/cart.brm is the Mega CD's 512 KB RAM cartridge, extra save space)
 States/                save states
@@ -127,7 +129,7 @@ Languages/             translations (Name.po), see Languages below
 Profiles/              controller profiles
 Shaders/               shader presets you pick (created on first use)
 Logs/                  genesis-plus-ex.log (with Enable Log), the crash report and dump (with Enable Crash Report)
-                       (Settings → Options → Troubleshooting → **Factory Reset...** deletes the settings file (both the one beside the program and the one in `%LOCALAPPDATA%\Genesis Plus EX`, when each exists) and starts the program again as a new copy)
+                       (Settings → Emulation → Troubleshooting → **Factory Reset...** deletes the settings file (both the one beside the program and the one in `%LOCALAPPDATA%\Genesis Plus EX`, when each exists) and starts the program again as a new copy)
 ```
 
 **Settings → General → Data Folders...** moves any of these folders (everything but Plugins and Logs) somewhere else: a list of the folders and their paths, with **Change...** and **Use Default**. Empty means beside the program; files already in the old place are not moved.
@@ -157,7 +159,7 @@ need the BIOS for their region.
 | `sk.bin`, `sk2chip.bin` | Sonic & Knuckles lock-on |
 | `32X_G_BIOS.BIN`, `32X_M_BIOS.BIN`, `32X_S_BIOS.BIN` | 32X BIOS (Genesis, Master SH-2, Slave SH-2): **not needed and not used**; PicoDrive starts 32X games without them |
 
-Turn the start-up ROMs on with **Settings → Options → Boot from BIOS When
+Turn the start-up ROMs on with **Settings → Emulation → Boot from BIOS When
 Available**.
 
 A Mega CD game without its BIOS does not start: the message names the file it needs
@@ -171,11 +173,13 @@ A Mega CD game without its BIOS does not start: the message names the file it ne
 
 | Key | Mega Drive pad |
 |---|---|
-| Arrow keys | D-pad |
-| Z, X, C | A, B, C |
-| A, S, D | X, Y, Z |
+| Arrow keys or W, A, S, D | D-pad |
+| Num 1, Num 2, Num 3 | A, B, C |
+| Num 4, Num 5, Num 6 | X, Y, Z |
 | Enter | Start |
 | Right Shift | Mode |
+
+With the **2-Button Pad** chosen as the Controller Model (Input → Controls), buttons 1 and 2 take Num 1 and Num 2 instead, as long as the keys are still the defaults.
 
 ### Gamepad Defaults (XInput)
 
@@ -194,7 +198,7 @@ it: the D-pad (or left stick) moves, the three buttons at the Mega Drive pad's
 A, B and C spots give A, B and C, the top button gives X, R1 / R (or RB) gives Y,
 R2 / ZR gives Z, and Options / + is Start and Share / − is Mode. Everything can be
 changed in the same window. A Joy-Con is a joystick of its own, so one is used
-at a time (held sideways). The log (**Settings → Options → Enable Log**) lists each
+at a time (held sideways). The log (**Settings → Emulation → Enable Log**) lists each
 pad with its vendor and product ids.
 
 ### Changing the Controls
@@ -204,9 +208,9 @@ pad with its vendor and product ids.
 - Click a button, then press the key or gamepad button you want. The same
   press works for keyboard and pad; there is no separate mode. **Esc** or a
   right click cancels. **Auto Assign** goes through all the buttons in turn.
-- A key or button can only be on one pad button; assigning it takes it from
-  the old one and a line under the pad says so.
+- A pad button can have a second key (or a second gamepad button): **Shift+click** it, or right-click it and choose **Set Second Key** (**Set Second Button** for a gamepad); either one presses it and the row shows both (for example *Z / Up*). **Clear** removes both. A key or button can only be on one place; assigning it takes it from the old one and a line under the pad says so.
 - **Turbo** is a box beside A, B, C, X, Y and Z; **Turbo Rate** sets how fast: Slower (7.5 presses a second), Slow (10), Medium (15, the default), Fast (22.5) or Faster (30).
+- **Controller Model** (Match the Game, 2-Button, 3-Button, 6-Button) sets the pad the game sees; the picture and the buttons follow it: 2-Button shows the Master System pad with buttons 1 and 2, 3-Button the three-button Mega Drive pad, and the buttons the pad does not have are hidden.
 - **Deadzone** sets how far a stick must move before it counts.
 - **Allow Opposing Directions** (Player 1 and Player 2 tabs, below the D-pad buttons) lets Left and Right, or Up and Down, be held together. A real pad cannot do it, so only one of the two reaches the game unless this is ticked (a few games and glitch tricks need both).
 - **Stick Directions** (Settings → Input): how the left stick makes the D-pad's diagonals. *Classic* compares each direction with the deadzone on its own (a small push off a straight line already adds a second direction); the other choices use the angle of the push, the deadzone being only how far it has to go: *Wide Straight Zones* (a drifting stick keeps running straight: Sonic does not roll), *Even Eight Directions* and *Wide Diagonal Zones*.
@@ -219,8 +223,8 @@ pad with its vendor and product ids.
 
   | | Keyboard and mouse | Xbox pad | PlayStation / Switch / other pad |
   |---|---|---|---|
-  | D-pad | Arrow keys | D-pad or left stick | D-pad or left stick |
-  | Red button | Z, X or C; right mouse button | A, B or X | The same places (Cross / Circle / Square, B / A / Y) |
+  | D-pad | Arrow keys or W, A, S, D | D-pad or left stick | D-pad or left stick |
+  | Red button | Num 1, Num 2 or Num 3; right mouse button | A, B or X | The same places (Cross / Circle / Square, B / A / Y) |
   | Pen | Mouse (left button touches) | Right stick moves it; RT, a press of the stick or Start touches | Right stick moves it; R2 / ZR, R3 or Start touches |
   | Previous / next page | Page Down / Page Up | LB / RB | L1 / R1 (L / R) |
 
@@ -242,14 +246,14 @@ A pad that is not an Xbox-style one starts with a layout that fits it: first by 
 copy of SDL's game controller database says about that pad (looked up by its USB vendor and product id, about 860 pads). The face buttons, shoulders,
 triggers, Start and Back of the pad are laid out like a Control Pad: A, B and C on the bottom row, X on the top row, the right shoulder as Y, the
 right trigger as Z, Back as Mode. A trigger that is an analog axis is used as a button too (see below). A pad the database does not know keeps the
-maker's layout, and buttons you set yourself are never replaced. The vendor and product id of a pad are in the log (Settings > Options >
+maker's layout, and buttons you set yourself are never replaced. The vendor and product id of a pad are in the log (Settings > Emulation >
 Enable Log): "Controller: ... (vendor 054C, product 0268)". The database is [SDL_GameControllerDB](https://github.com/mdqinc/SDL_GameControllerDB)
 (zlib license, Copyright (C) 1997-2025 Sam Lantinga and the contributors of the database); `win32/tools/make_controllerdb.py` makes `controllerdb.bin`
 from its `gamecontrollerdb.txt`.
 
-`controllerdb.bin` is not SDL's file itself but a small copy made from it: only the Windows entries (866 pads), each reduced to the pad's USB vendor
+`controllerdb.bin` is not SDL's file itself but a small copy made from it: only the Windows entries (870 pads), each reduced to the pad's USB vendor
 and product id and the ten buttons the program uses (a, b, x, y, back, start, the shoulders and the triggers), then compressed. It is about 6 KB, against
-about 610 KB for `gamecontrollerdb.txt`, and it is built into the program (a resource, like `genres.bin`), so nothing has to be shipped beside the exe.
+about 616 KB for `gamecontrollerdb.txt`, and it is built into the program (a resource, like `genres.bin`), so nothing has to be shipped beside the exe.
 `gamecontrollerdb.txt` is not part of this source. To bring the list up to date, download a newer `gamecontrollerdb.txt` from the project above, run
 `python3 tools/make_controllerdb.py gamecontrollerdb.txt` in the `win32` folder (it rewrites `controllerdb.bin`) and build again.
 
@@ -266,11 +270,11 @@ Works** in the window has an example.
 
 ### Keyboard Shortcuts
 
-Every shortcut can be changed in **Input → Hotkeys...**. The defaults:
+Every shortcut can be changed in **Input → Hotkeys...**, where a **Disable Hotkeys** check box turns all the keyboard shortcuts off at once (Esc to leave fullscreen keeps working). The defaults:
 
 | Shortcut | Action |
 |---|---|
-| Ctrl+O / Ctrl+R | Open a ROM / ROM Directory |
+| Ctrl+O / Ctrl+R | Open a ROM / Game Folder |
 | F2 (or Pause) / F3 | Pause / Stop |
 | F4 / Ctrl+F4 | Reset / hard reset |
 | F5 / F8 | Save / load the selected state slot |
@@ -283,7 +287,7 @@ Every shortcut can be changed in **Input → Hotkeys...**. The defaults:
 | `\` or `Tab` | Advance one frame while paused |
 | Page Down / Page Up | Sega Pico: previous / next page of the book (opens the Storyware window) |
 | Alt+Enter, Esc | Fullscreen |
-| Ctrl+M / Ctrl+N / Ctrl+B / Ctrl+D / Ctrl+P | Mute all / FM / PSG / DAC (drums and voices) / PWM (32X games) |
+| Ctrl+M / Ctrl+N / Ctrl+B / Ctrl+L / Ctrl+K / Ctrl+J | Mute all / FM / PSG / DAC (drums and voices) / PWM (32X games) / CD audio (Mega CD games) |
 | Ctrl+T | Show / hide the frame rate |
 | Ctrl+C | Cheats |
 | Ctrl+F | Search the game list |
@@ -297,16 +301,16 @@ Every shortcut can be changed in **Input → Hotkeys...**. The defaults:
 
 ## The Game List
 
-**File → ROM Directory** (Ctrl+R) shows your games. Double-click one to play,
+**File → Game Folder** (Ctrl+R) shows your games. Double-click one to play,
 or right-click for more: play with a saved state, edit its cheats, cover image,
-favorite, remove from recently played, create a desktop shortcut, open its ROM location, saves, states and cheats folders. Right-click on empty
+favorite, remove from recently played, create a desktop shortcut, open its game location, saves, states and cheats folders. Right-click on empty
 space shows the same menu with the choices for a game grayed. With more than one ROM
-folder set, *Open ROM Directory* opens a list of them.
+folder set, *Open Game Folder* opens a list of them.
 
 - **List or grid.** **View → View Mode**. The grid shows cover art; its size
   runs from Tiny to Extra Large (Ctrl + mouse wheel sets any size) and the
   shape, rounded corners, captions and a card frame are in Settings → General.
-  *Console Badge on Covers* (on by default; switch it off in Settings → General) puts a small coloured tag in the corner of each cover to tell
+  *Console Badge on Covers* (on by default; switch it off in Settings → General) puts a small colored tag in the corner of each cover to tell
   the consoles apart: MD, MCD, 32X, SMS, GG, SG or PICO.
   *Region Flags* (on by default; Settings → General) draws a small flag for each region of a game, taken from the tags of the file name such as `(USA)`
   or `(Japan, Europe)`: in the Region column of the list instead of the region text (a game without a region tag gets a flag with a question mark),
@@ -319,28 +323,33 @@ folder set, *Open ROM Directory* opens a list of them.
 - **Search and filters.** Type in the search bar (Ctrl+F). Search words narrow
   by one field: `region:usa`, `console:mega cd`, `genre:action`, `type:chd`,
   `fav:yes`. The filter bar narrows by console, genre and region.
-- **Several folders.** **Settings → General → ROM Directories...** adds more
+- **Several folders.** **Settings → General → Game Folders...** adds more
   folders, removes any of them, and excludes folders from the scan. Subfolders
-  are scanned too.
+  are scanned too (6 levels deep). The list holds up to 10,000 games; past that
+  the count says "N+ games (capped)".
 - **Window.** **View → Always on Top** (also in Settings → General) keeps the window above all others, and *Reset Window Size* puts it back at the
   size set under Video.
 - **Tidy names.** *Clean Game Names* hides tags like `(USA, Europe) [!]`, in the
   list and in File → Recent Files.
 - **Recently played, favorites, groups.** A *Recently Played* group at the top (those games are in the full list too; the filter bar does not hide them there),
-  stars for favorites (and *Show Favorites Only*), *Group by Console*, an A–Z
-  strip (pressing a letter again goes to the next console's games with it), and sortable columns (Genre, Region, File Size, File Type and more).
+  stars for favorites (and *Show Favorites Only*), *Group by Console*, a Letter
+  Strip (pressing a letter again goes to the next console's games with it), and sortable columns (Genre, Region, File Size, File Type and more).
 - **Typing** a letter jumps to the game that starts with it.
 - **Dropping files.** A game opens, a `.cht` file is imported and a `.gpstate`
   file loads into the running game.
 
 **Multi-disc Mega CD games** (such as *Lunar: Eternal Blue*) ask for the next
 disc themselves, as on a real console; pick the file and the game carries on
-with no reset. **File → Change Disc...** does it by hand.
+with no reset. **File → Change Disc...** does it by hand. For a game started with **Open Disc from Drive** a file dialog cannot pick the next disc, so a box asks you to put it into the same drive (use the drive's own eject button) and press OK; the drive is read again (this works in both cores, also for a Mega CD + 32X game). It has not been tried with a real drive yet. It also works for a Mega CD + 32X game (run by PicoDrive), with a `.cue`, `.iso` or `.chd` disc image: *Fahrenheit* (North America) is played that way, with Disc 1 (the Key Disc) opened as a Mega CD 32X disc (the file type *Mega CD 32X / Sega CD 32X* in File → Open Game, or Ctrl held while opening a disc from a drive), because Disc 1 alone only shows the Sega CD version; when the game has found the 32X it asks for Disc 2, the 32X version: a box asks for the next disc by itself (as it does for the other multi-disc games) and you pick Disc 2's `.cue`; File → Change Disc... does it by hand too. Tried with Fahrenheit's second disc (File → Change Disc and the automatic box).
 
 **File → Run Mega CD BIOS** (USA, Europe or Japan) starts the Mega CD's own BIOS with no disc, to reach its CD player and
 settings screen. It needs the BIOS file of that region in the `BIOS` folder (`bios_CD_U.bin`, `bios_CD_E.bin` or `bios_CD_J.bin`); it is not added to the recent files or the played list.
 
 ---
+
+### Region
+
+**Options → Region** (also Settings → Emulation): *Auto Detect* reads the region from the game; *Preferred Order* chooses which region a game gets when its header names several (USA → JPN → EUR, the program's old way, is the default, and five other orders); USA, Europe, Japan (NTSC) and Japan (PAL) force one.
 
 ## Saving Your Game
 
@@ -349,8 +358,10 @@ settings screen. It needs the BIOS file of that region in the `BIOS` folder (`bi
   to a file (*Save This Slot As...*) or delete it; double-click an empty slot to save to it. States can also be saved to
   and loaded from any `.gpstate` file to share them.
 - **Undo.** *Undo Load State* and *Undo Save State* go back one step.
+- **Run-Ahead (Emulation → Run-Ahead, or Settings → Emulation → Input Lag; off by default; hotkey Ctrl+E steps Off, 1 Frame, 2 Frames).** Cuts the delay between a button press and the picture: each frame the game is run 1 or 2 frames ahead in secret with the same buttons, the picture of the last one is shown, and the game goes back (a saved state) to where it really is, so a game that reacts later than the console did feels like the console. It makes the PC work 2 or 3 times as hard per frame. Not used in netplay, while recording or logging VGM, while an input recording is made or played, or at another game speed than 100%. It lives entirely in the program: the emulator core is not changed.
 - **Rewind.** Hold Backspace to run recent play backwards. A bar shows how much
   history is left. History size is 128 to 768 MB (256 MB by default); Rewind Speed is Slow, Normal (the default), Fast or Very Fast. While the game is paused, each press of the rewind key goes back one frame (held longer, frame after frame), the way the frame advance key goes on.
+- **Fast Forward** (hold Tab, the pad hotkey or **Emulation → Fast Forward**) runs the game several frames for each one shown; **Fast Forward Speed** (Settings → Emulation, below Rewind History Size) chooses 2×, 3×, 4× (the default), 6×, 8×, 12× or 16×. A slower PC runs as fast as it can.
 - **Auto Resume** (on by default). The game is saved when you close it and you
   are asked whether to carry on next time. The exit question has a
   *Resume this game next time* box.
@@ -365,15 +376,16 @@ settings screen. It needs the BIOS file of that region in the `BIOS` folder (`bi
 
 ### Renderer, Size and Shape
 
-- **Video → Renderer:** GDI (CPU), Direct3D 9 or Direct3D 11. Each falls back
+- **Video → Renderer:** GDI (CPU), Direct3D 9, Direct3D 11 or Direct3D 12 (Windows 10; the same picture, filters, overlays and shaders as Direct3D 11, with a frame latency of one frame). Each falls back
   to GDI by itself when it is not available.
 - **Window Size** 1× to 10× (3× by default; a window you drag to a size keeps it for the next game until you pick a size again; **Lock Window Shape When Resizing** in Settings → Video, on by default, can be switched off to drag the window to any shape), fullscreen as a borderless window or
   exclusive with its own resolution, hide the mouse pointer after
   a few seconds.
 - **Light Gun Border:** a white frame (2, 4, 6 or 8% of the window's height) round a smaller picture while a light gun is plugged in, for guns that find the screen with a camera (the Sinden Lightgun). Off by default (Settings → Input). A shot with the pointer on the bars or the frame is a shot off the screen (reload in Lethal Enforcers and others).
+- **Speed and Smoothness** (Settings → Video): *Smooth Motion* (off by default) runs a game at the screen's exact refresh rate when that is within 2% of its own, so no picture is shown twice every few seconds, and (with Exclusive Fullscreen) switches the monitor to 50 Hz for a PAL game and 60 Hz for an NTSC one while it is fullscreen; *Use Alternate Timing* paces the game by the PC's clock instead of the sound card. *Adapter* chooses the graphics card the Direct3D renderers use (Auto: Windows picks). *Variable Refresh Rate* (Direct3D 11 and 12, Windows 10 and a G-Sync or FreeSync screen) shows each frame the moment it is ready instead of waiting for the refresh; it takes the place of VSync while it is on and is off while True Exclusive Fullscreen is chosen. *Fullscreen Monitor* chooses which monitor a game goes fullscreen on (Current Monitor by default). *True Exclusive Fullscreen (a choice of Fullscreen Mode)* goes one step further with Exclusive Fullscreen and Direct3D 11 or 12: the game takes the monitor for itself (real DXGI exclusive fullscreen), so Windows no longer composes the picture; Alt+Enter, Esc or anything that takes the focus leaves it. With **Enable Log** on, the log has *Frame timing* lines (the time between two frames and how many screen refreshes came between them) to find uneven scrolling.
 - **Aspect Ratio:** *Original Console Pixels* (the default, the Mega Drive's own
   pixel shape), 1:1, 4:3 or 16:9. **Integer Scaling** keeps every pixel the same
-  size. **Scaling Filter** (Nearest, Sharp Nearest, Bilinear, Sharp Bilinear or Bicubic; Sharp Nearest first enlarges the picture by a whole multiple with sharp pixels, then smooths only the rest of the way; Sharp Bilinear is Bilinear with a narrow blend (about half a source pixel, on a smooth curve), so much less blur; Sharp Bilinear and Bicubic are pixel shaders with Direct3D 9 and 11; the classic renderer does Sharp Bilinear on the processor and has no Bicubic, which is grayed there; the whole filter is grayed while a Direct3D 11 shader runs, because the shader scales the picture itself), border color, overscan borders and interlaced mode
+  size. **Scaling Filter** (Nearest, Sharp Nearest, Bilinear, Sharp Bilinear or Bicubic; Sharp Nearest first enlarges the picture by a whole multiple with sharp pixels, then smooths only the rest of the way; Sharp Bilinear is Bilinear with a narrow blend (about half a source pixel, on a smooth curve), so much less blur; Sharp Bilinear and Bicubic are pixel shaders with Direct3D 9, 11 and 12; the classic renderer does Sharp Bilinear on the processor and has no Bicubic, which is grayed there; the whole filter is grayed while a Direct3D 11 or 12 shader runs, because the shader scales the picture itself), border color, overscan borders and interlaced mode
   (single or double field) are all options. In a game that draws a 448-line picture (Sonic 2's two player mode) *Single Field* shows the same
   half of it every frame, so it stays steady; *Double Field* shows all 448 lines: where something moves, the older field's lines are rebuilt from the new ones (which stay exactly as the game drew them), so there are hardly any comb teeth and a moving object stays sharp (a pattern that repeats and scrolls, such as blades of grass, is found too).
 - **Picture adjustments:** Brightness, Contrast, Saturation, Gamma and Hue (sliders in **Video → Picture Adjustments...**, with *Restore Defaults* and *Cancel*) and Brighten; **Video → Visual Effects → Deinterlacing** for a game in the 448-line interlaced mode (Sonic the Hedgehog 2 in 2P Vs. mode, Ys III, Air Strike Patrol): the graphics processor draws both fields from the same moment in every frame, so every frame is a whole picture and nothing that moves is combed (on by default; Interlaced Mode is not used while it is on);
@@ -426,8 +438,8 @@ switch away.
 **Video → Shaders → Preset...** loads a RetroArch-style
 `.slangp` preset (CRT looks, phosphor masks, upscalers) through
 [librashader](https://github.com/SnowflakePowered/librashader). It needs the
-**Direct3D 11** renderer and the **64-bit** program, and `librashader.dll` must
-be in the `Plugins` folder next to the `.exe` (it is included; next to the `.exe` also works). **Shader Parameters...** adjusts the
+**Direct3D 11 or Direct3D 12** renderer and the **64-bit** program, and `librashader.dll` must
+be in the `Plugins` folder next to the `.exe` (it is included; next to the `.exe` also works). With Direct3D 12 the shaders also need `dxcompiler.dll` and `dxil.dll` (Microsoft's DirectX Shader Compiler, included) in the same folder. **Preset Browser...** (Video > Shaders) lists the presets of the `Shaders` folder, with a search box; the one you pick is tried on the running game at once (the preset you pick is used at once; OK closes the window, Cancel puts back the one that was in use; Preset... in the same menu opens a file from any folder). **Shader Parameters...** adjusts the
 preset's own settings while it runs.
 
 ### Looks of the Program
@@ -452,6 +464,8 @@ preset's own settings while it runs.
 - **Interface Size:** Normal or Large (the program restarts to change it).
 - **On-screen messages (Settings → OSD):** position, size, color, time (1 – 7
   seconds), how many show at once (1 – 7), and a frame-rate counter.
+
+**Small screens and large scaling.** A window of the program that is bigger than the screen (a high Windows scaling, a large text size, a small screen) is made smaller, and a window whose controls lie outside it shows vertical and horizontal scroll bars (the mouse wheel and the Tab key scroll it too); on a short screen the tabs of Settings scroll when they hold more rows than the window has room for. Windows that fit are not changed; the log (Settings > Emulation > Enable Log) says when scroll bars were needed.
 
 ### Languages
 
@@ -490,7 +504,7 @@ To see how the windows cope with long translations without knowing a language, r
   mono output and high-quality PSG resampling.
 - **Levels and Latency...:** master, FM, PSG, CD audio, Mega CD PCM and DAC volume,
   buffer size, and a live level meter.
-- **Mute** all sound, FM only (Ctrl+N), PSG only (Ctrl+B) or the DAC (drums and voices, Ctrl+D) only; *Mute When
+- **Mute** all sound, FM only (Ctrl+N), PSG only (Ctrl+B) or the DAC (drums and voices, Ctrl+L) only; *Mute When
   Inactive* silences the game when another window has focus. *Pause When Inactive* pauses it instead.
 - Changing the FM chip or unit during a game can leave some instruments quiet
   until the game sets them again or you reset. These choices are locked during
@@ -525,10 +539,20 @@ game picked in the list.
 - **Shared codes:** a `.cht` file named after a game's CRC32 (for example
   `A1B2C3D4.cht`) in `Cheats/library` is used by any game with no list of its own.
 - **Cheat Search...** finds where a value (lives, health, ammo, a score) is kept
-  in memory, so you can make a cheat without a code: *First Scan*, change the value in the game, pick a comparison and *Next Scan*, and repeat until a few
+  in memory, so you can make a cheat without a code: *First Scan*, change the value in the game, pick what to *Find* and *Next Scan*, and repeat until a few
   addresses are left. The Memory choice (work RAM, Mega CD memory, 32X SDRAM) is remembered for the same game while the program runs, and so is the
   scan itself when the window is closed (until the game stops).
-**Tools > Fix Checksum...** saves a copy of the open Mega Drive / Genesis game with the checksum of its header (at $18E) made right: the sum of the words from $200 to the ROM End the header states. For hacks, translations and patched games, and for flash carts that check it. The open game is not changed. When the ROM End in the header is not the end of the game, it asks whether to set that right too. ROM Info shows the header's checksum, the sum of the whole file and the sum of the header's own range.
+  *Undo Scan* takes back the last Next Scan. A double click on a row opens *Change Value*, which puts a number into that address once. *Freeze* holds the selected address at the Set to value, each frame, to try it at once (it shows in the
+  Frozen column; *Unfreeze All* lets go of all of them; they end when the game stops).
+**File > Open Disc from Drive** plays a Sega CD disc straight from an optical drive (a virtual drive such as WinCDEmu counts too), with no image made first: with one Sega CD disc in the drives the entry starts it at once, with two or more it opens a list of them (the drive and the name of the game). The data track is read with normal reads; the audio tracks (the CD music) need a drive that gives raw audio sectors, otherwise the game plays without its music and the program says so. The Mega CD BIOS is needed as for any Mega CD game. A game started this way is not added to the Recent Files and Recently Played lists.
+
+**Mega CD 32X / Sega CD 32X** (a file type of **File > Open Game**, below *Mega CD / Sega CD*) is for the few games that need a Mega CD and a 32X together (Night Trap, Corpse Killer: Graveyard Edition, Slam City with Scottie Pippen, Supreme Warrior, the Brazilian Surgical Strike 32X CD, and Fahrenheit, which needs two discs: see below). Pick the disc's `.cue` sheet (or `.iso`) with that file type; the disc is started in PicoDrive, which has both machines. The program also looks for such a disc by itself, so **Open Disc from Drive** and opening a disc image both work for them: when a Mega CD disc is opened, a disc whose header says SEGA 32X is taken at once, and for the others the first 16 MB of its data track are searched for the signs of the 32X (the text "MARS" and the header "SEGA 32X"; it stops as soon as both are found), which takes a few seconds for a disc in a drive. A disc that has them is started in PicoDrive, and the answer is remembered by the disc's name or file path, so the search is made once. Choosing that file type says it by hand for an image (Night Trap and others also exist as plain Mega CD games, and the check can be wrong). Hold **Shift** while opening a disc to start it as a plain Mega CD disc and keep it that way; hold **Ctrl** while opening a disc from a drive to start it with the 32X. With Enable Log on, the check and its result are in the log. The Mega CD BIOS for the disc's region is needed (`bios_CD_U.bin`, `bios_CD_E.bin` or `bios_CD_J.bin` in the BIOS folder), the 32X needs none. PicoDrive in this program reads `.cue`/`.bin`/`.iso` and `.chd` discs (a sheet's music as `.wav` or `.ogg`, not MP3); a disc in a drive is read through the program (with the same read-ahead as other discs). The game is handled as a 32X game (saves, states and rewind in the `32X` folders), and both SH-2 processors are interpreted, so it needs a fast PC. It has been tried with Slam City with Scottie Pippen (from an image and from a disc in a drive) and with the two discs of Fahrenheit (images and a .chd).
+
+**To play Fahrenheit with the 32X** (North America; the only game known to need two discs): open Disc 1 (the Key Disc) with the file type *Mega CD 32X / Sega CD 32X* in File → Open Game (or hold Ctrl while opening it from a drive). The game finds the 32X and asks for Disc 2; the program shows a box asking for the next disc: pick Disc 2's `.cue` (a `.cue` with its `.bin`, or a `.chd`), then press Start as the game says. To play the plain Sega CD game, just open Disc 1 normally: it never asks for Disc 2. Brutal: Above the Claw is a 32X cartridge game and Tomcat Alley is a Sega CD game only: neither needs this.
+
+**Disc drives in the log**: when *Open Disc from Drive* finds no Sega CD disc, the log (Settings → Emulation → Enable Log) lists each optical drive and the disc in it: its tracks, whether it is a Sega CD disc, and whether the data and the audio can be read (a normal read, a raw read, the SCSI READ CD).
+
+**Tools > Fix Checksum...** saves a copy of the open Mega Drive / Genesis game with the checksum of its header (at $18E) made right: the sum of the words from $200 to the ROM End the header states. For hacks, translations and patched games, and for flash carts that check it. The open game is not changed. When the ROM End in the header is not the end of the game, it asks whether to set that right too. Game Information shows the header's checksum, the sum of the whole file and the sum of the header's own range.
 
 All the debug tools open in **one window, the Debugger** (**Tools > Debugger...**): the CPU Debugger on top (for a game with a 68000) and, on tabs under it, the Memory Viewer, VDP Viewer, Sound Viewer, CPU Viewer, RAM Search and RAM Watch. The **View** button at its top left shows a part directly: Memory, any view of the VDP (Registers, Palette, Tiles, Sprites, Plane A, Plane B, Window, Sprite Layer, Sprite Preview, H Scroll, V Scroll), of the Sound Viewer and of the CPU Viewer, RAM Search and RAM Watch. Drag the bar under the CPU Debugger to resize it; Esc closes the window. The Debugger has its own button on the taskbar, so it can be minimized to it. Every control of the debug windows has a tooltip: hold the pointer over it.
 Credit: the debug tools are a port of **gpgx_debugger** by Vladimir Kononovich ([lab313ru](https://github.com/lab313ru)).
@@ -551,7 +575,7 @@ Credit: the debug tools are a port of **gpgx_debugger** by Vladimir Kononovich (
   work on the list; in the New and Edit window you can also type a value to put into that address. **New List**, **Open...**, **Save...** and **Append...** use the `.wch` files of Gens. A list is kept in a file only when you save it (**Save...**, which asks where); **Open...** brings it back.
   Addresses are those of the 68000 (RAM at E00000 to FFFFFF, Z80 RAM at A00000, the ROM from 0; for a 32X game also the SDRAM at 6000000), or of the Z80 for the 8-bit consoles (RAM at C000 to FFFF).
 - The **CPU Debugger** (the top of the Debugger window) stops the 68000 of the game (in a 32X game also its Master and Slave SH-2): **Break** stops it at the next instruction; **Continue** (F5) lets it go on; **Step Into** (F7), **Step Over** (F8, a call is run as one step), **Step Out** (until the current call returns) and **Run to Cursor** (F4) go on from there. The window shows the instructions around the one it stopped at, disassembled (scroll with the wheel, or type an address and **Go**),
-  the registers, and the calls that led there. Double-click a line (or select it and press F9) to set an **execute breakpoint** there (a red dot); **Add...** makes one that stops the game when an address, or a range, is **read** or **written** too. While the game is stopped the other debug windows keep showing it as it is, and the main window waits. In a 32X game pick the processor (68000, Master SH-2 or Slave SH-2) next to **Go**; the window follows the one that stopped, and each has its own registers and calls, SH-2 instructions are disassembled by PicoDrive's disassembler, and only **execute** breakpoints exist (they need the Plugins of the same version as the program). Otherwise it works on the main 68000 only: not the Z80 (the core cannot stop it), and in a Mega CD game a read or write breakpoint may also catch the second 68000. It is off during netplay. The program is built with the core's CPU hook for it, which costs a very little speed.
+  the registers, and the calls that led there. Double-click a line (or select it and press F9) to set an **execute breakpoint** there (a red dot); **Add...** makes one that stops the game when an address, or a range, is **read** or **written** too. For the 68000 the address is the one the game reaches with the top bits and the repeats of the work RAM left out: a breakpoint at `$FF8000` also stops an access through `$FFFF8000` (a short absolute address) or `$E08000`. **Add...** can also watch the Z80's memory (Read and Write; the core does not report the Z80's instructions, so there is no Execute breakpoint for it) and the VDP's VRAM, CRAM and VSRAM (Read and Write; a DMA from the 68000's memory into them stops the game too, and the message says so; a VRAM fill or copy is not seen, as the core does not report those). A Read breakpoint on the 68000's memory also stops a DMA that reads there for the VDP. These exist in games run by Genesis Plus GX (not in 32X games). While the game is stopped the other debug windows keep showing it as it is, and the main window waits. In a 32X game pick the processor (68000, Master SH-2 or Slave SH-2) next to **Go**; the window follows the one that stopped, and each has its own registers and calls, SH-2 instructions are disassembled by PicoDrive's disassembler, and only **execute** breakpoints exist (they need the Plugins of the same version as the program). Otherwise it works on the main 68000 only: not stepping or stopping the Z80 at an instruction (the core cannot; its memory can be watched, see Add...), and in a Mega CD game a read or write breakpoint may also catch the second 68000. It is off during netplay. The program is built with the core's CPU hook for it, which costs a very little speed.
 
 ---
 
@@ -567,12 +591,12 @@ Credit: the debug tools are a port of **gpgx_debugger** by Vladimir Kononovich (
 | Stop a video, audio, GIF or VGM recording | | Alt+F11 |
 | Screenshot | `Screenshots/<Console>/` (`.png`) | F12 |
 
-Files are named after the game and the time. **Settings → Options → Screenshot
+Files are named after the game and the time. **Settings → Video → Screenshot
 Output** chooses what a screenshot contains: *Corrected* (the default:
 the picture stretched to the 4:3 shape of a TV, 640×480), *Raw* (the console's own picture at its
 own size, not stretched) or *Final* (like Corrected, with the render filter applied). **Screenshot Size** makes it 1×, 2×, 3× or 4× that size (Raw is enlarged in whole pixels, so it stays sharp). Scanlines and Brighten are never included.
 
-**Settings → Options → Video Recording** sets the size (1×–4× the console's own picture; 2× by default), the quality (automatic or 4–32 Mbit/s) and the shape (the console's own, 4:3 or 16:9) of a video recording.
+**Settings → Video → Video Recording** sets the size (1×–4× the console's own picture; 2× by default), the quality (automatic or 4–32 Mbit/s) and the shape (the console's own, 4:3 or 16:9) of a video recording.
 
 **Tools → Record → Record Input...** saves a state and every button you press afterwards
 to a `.gpm` file (named after the game and the time, like the other recordings); *Play Input Recording...* replays it exactly. Use the same
@@ -596,7 +620,9 @@ controls. Both games reset and start together. The status bar shows the ping.
 
 - Only cartridge games work (not Mega CD), and both ports need a Control Pad.
 - Pause, reset, states, cheats, rewind, fast forward and emulation settings are
-  locked during a session. Cheats work: both PCs must have the same cheats switched on before connecting (Cheats is one of the settings compared; the cheat dialog is locked during a session).
+  locked during a session, and so are the sound and picture choices that are
+  compared when it starts (FM Chip, Low-Pass Filter, 3-Band EQ, High-Quality FM
+  and PSG, Interlaced Mode, Deinterlacing, System Lock-Ups, Console Model). Cheats work: both PCs must have the same cheats switched on before connecting (Cheats is one of the settings compared; the cheat dialog is locked during a session).
 - A setting that differs between the PCs refuses the connection and names it.
   The games are compared every second; if they drift apart the session ends.
 - If the link drops, both sides wait up to a minute and carry on from the same
@@ -631,7 +657,7 @@ do for other games.
   a Mega Drive game, and the 32X needs a bit more of the PC for it).
 - **Also work:** input recording and playback (the recording starts from a state of the game), the Region setting (the library
   changes its region, and with it 50 or 60 Hz, at once), the Low-Pass Filter (the library's own, with the same range), Mute FM,
-  Mute PSG (the PWM sound of the 32X has its own **Mute PWM Sound** in Audio > Mute, and a **PWM Preamp** slider in Levels and Latency; **Mute DAC Sound** and **DAC Volume** do not reach 32X games) and LCD Ghosting.
+  Mute PSG (a Mega CD game has **Mute CD Audio** in Audio > Mute, grayed for other games, and the PWM sound of the 32X has its own **Mute PWM Sound** in Audio > Mute, and a **PWM Preamp** slider in Levels and Latency; **Mute DAC Sound** and **DAC Volume** do not reach 32X games) and LCD Ghosting.
 - **VGM recording:** logs the FM chip, the PSG and the 32X PWM to a `.vgm` file (format 1.71), starting with the state the chips are in, so a
   recording that begins while a song plays still has its instruments (also after a state was loaded: the FM chip is read back, for a Mega Drive game with either kind of FM chip and for a 32X game); the end of the file releases every held note and turns the PSG down. Most of a 32X game's music is PWM, which only some players can
   play (libvgm-based ones); the FM and PSG parts play anywhere.
@@ -805,7 +831,7 @@ so the core sees this port's `osd.h`.
 | File | Role |
 |---|---|
 | `main.c` | Window, menus, game start and stop, the emulation loop |
-| `video.c`, `d3d9_video.c`, `d3d11_video.c` | Picture: scaling, renderers, fullscreen, on-screen text, screenshots |
+| `video.c`, `d3d9_video.c`, `d3d11_video.c`, `d3d12_video.c` | Picture: scaling, renderers, fullscreen, on-screen text, screenshots |
 | `filters.c`, `xbrz_glue.cpp`, `xbrz/`, `xbr/` | Built-in render filters, including xBRZ, xBR and HQx |
 | `shader_chain.c`, `librashader/` | Shader presets through `librashader.dll` |
 | `audio.c`, `audio_be.c` | Sound output and the sound backends |
@@ -815,10 +841,17 @@ so the core sees this port's `osd.h`.
 | `dialogs.c`, `settings.c`, `theme.c`, `toolbar.c` | Windows, the Settings dialog, themes and styles, toolbar |
 | `recorder.c`, `movie.c`, `vgm.c` | Recording video, audio and GIF; input recording; VGM logs |
 | `netplay.c`, `upnp.c` | Network play and router port opening |
-| `picobook.c`, `picopcm.c` | Sega Pico: the Storyware window (the page picture and the pen pad); the speech chip (the voices), put on to the core from outside |
+| `storyware.c`, `picopcm.c` | Sega Pico: the Storyware window (the page picture and the pen pad); the speech chip (the voices), put on to the core from outside |
 | `paprium.c` | Paprium: the game's cartridge chip, done in software and hooked in from outside the core |
 | `picocore.c`, `picodrive/` | 32X games: loads the PicoDrive library and feeds it the controls, picture and sound; the PicoDrive source (built as `picodrive_libretro.dll`) |
 | `sevenzip.c`, `lzmasdk/` | `.7z` archives |
+| `config.c`, `log.c` | The settings file (INI) with its defaults; the optional log |
+| `scrollfit.c`, `archivepick.c` | Scroll bars for windows that do not fit the screen; the window that asks which game of an archive to play |
+| `disc.c` | The optical drives and the discs in them (Open Disc from Drive) |
+| `rewind.c`, `deint.c`, `extras.c` | Rewind; deinterlacing; file types, shortcuts and manuals |
+| `raudio.c` | Run-Ahead's sound: keeps the sound chain unbroken across the state loads (link-time wrappers; the core is not changed) |
+| `debugger.c`, `dbgcpu.c`, `debugwin.c`, `memview.c`, `ramsearch.c`, `ramwatch.c` | The Debugger window and its tools: CPU debugger, viewers, memory viewer, RAM Search and RAM Watch |
+| `pad.bin`, `pad_sms.bin`, `pad_md3.bin`, `tools/make_padbin.py` | The controller pictures of the Controls window (one for each Controller Model) and the script that makes such a file from a picture |
 | `controllerdb.bin`, `tools/make_controllerdb.py` | The pad layouts of SDL's game controller database (Windows entries, compressed; read by `input.c`) and the script that makes the file |
 | `i18n.c`, `i18n.h`, `tools/` | Translations: the `.po` loader, the window fitting for longer text, and the scripts that make `Languages/Template.pot` and the test language `Pseudo.po` |
 | `debugwin.c`, `memview.c`, `dbgcpu.c`, `ramsearch.c`, `ramwatch.c` | The debug windows: VDP, sound and CPU viewers, Memory Viewer, CPU Debugger, RAM Search, RAM Watch |
@@ -845,12 +878,14 @@ Other code used here (libraries, and code ported from other projects):
 | Debug tools (`dbgcpu.c`, `debugwin.c`, `memview.c`, `ramsearch.c`, `ramwatch.c`) | Ported from gpgx_debugger by Vladimir Kononovich ([lab313ru](https://github.com/lab313ru)) | gpgx_debugger's own terms |
 | 7-Zip LZMA SDK (`lzmasdk/`) | Igor Pavlov | Public domain |
 | librashader (`Plugins/librashader.dll`, `librashader/`) | chyyran | MIT, Apache-2.0 or MPL-2.0 |
+| DirectX Shader Compiler (`Plugins/dxcompiler.dll`, `dxil.dll`, `librashader/`) | Microsoft | LLVM license (Apache-2.0 with LLVM exceptions) |
 | Paprium chip (`paprium.c`) | [BillyTimeGames](https://github.com/BillyTimeGames) (Genesis-Plus-GX-Expanded-Rom-Size fork) | Same terms as Genesis Plus GX |
 | xBRZ (`xbrz/`) | Zenju (HqMAME) | GPL, with the MAME linking exception |
 | MMPX and MMPX Enhanced (`filters.c`, `mmpx_ex.cpp`) | MMPX by Morgan McGuire and Mara Gagiu; MMPX Enhanced by CrashGG (adapted for Slang by hunterk; the `mmpx-ex` shader of libretro's slang-shaders) | MIT (MMPX) |
 | Sega Pico speech chip (`picopcm.c`) | Ported from PicoDrive's `xpcm.c` and `memory.c` by notaz and irixxxx; the ADPCM was derived from MAME's upd7759 driver | MAME license (see `picodrive/COPYING`) |
 | ScaleFX 3x (`filters.c`) | A port of Sp00kyFox's ScaleFX shader passes | MIT (Copyright (c) 2016 Sp00kyFox) |
 | CRT Geom 3x (`filters.c`) | A port of the CRT-Geom shader by cgwg, Themaister and DOLLS | GPL 2 or later |
+| Controller pictures of the Controls window (`pad.bin`, `pad_sms.bin`, `pad_md3.bin`) | [Photoreal Controller Vectors by pineapple.graphics](https://forums.launchbox-app.com/files/file/3889-photoreal-controller-vectors-by-pineapple-graphics/) | See the download page |
 
 The shader presets are the RetroArch `.slangp` / Slang format, which librashader runs.
 

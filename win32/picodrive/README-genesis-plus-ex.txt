@@ -16,7 +16,8 @@ What is different from the PicoDrive source this was taken from (the changes COP
     to run 32X games, so they are replaced or left out:
       - emu2413 (the Master System FM unit): pico/sound/emu2413/emu2413.h and pico/sound/ym2413.c are empty
         stand-ins, so the YM2413 makes no sound in this build (Genesis Plus GX runs the Master System).
-      - libchdr (CHD discs, Sega CD): the build is made with use_libchdr=0.
+      - libchdr (CHD discs, Sega CD): the program's Makefile.win32 copies the libchdr of the program's own core (read only) to
+        pico/cd/libchdr in the build folder and builds with use_libchdr=1, so .chd discs open (File > Open ROM, Change Disc).
       - dr_libs (MP3 for Sega CD music): Makefile uses platform/common/mp3_dummy.o instead of mp3_drmp3.o.
       - libpicofe: platform/libretro/libretro.c defines the one macro it took from it, PXMAKE.
 
@@ -37,3 +38,17 @@ Sega CD, Master System and Pico games are not played through this build: Genesis
 Sound levels: gpex_set_levels(fm_pct, psg_pct) scales the YM2612 (with its DAC) and the PSG output in percent (100 = unchanged). The program
 calls it every frame with the FM and PSG levels of Levels and Latency (the PSG's 150% of the program is 100% here). pico/sound/sound.c
 and sn76496.c apply them; PWM is not touched.
+
+  * platform/libretro/libretro.c, pico/cd/cd_parse.c, pico/cd/cd_image.c: file names and paths of discs. lprintf() wrote each
+    log line with vsprintf into a 256-byte buffer, so the line of a track whose file name is long ("Track 1: ... <path>")
+    overwrote the stack (a crash while a Mega CD + 32X disc in a folder with long names was loading); it now uses
+    vsnprintf into 1024 bytes. The buffers for the cue sheet's file names (cue_parse, load_cd_image) and the MSU ROM path
+    (find_msu) are 1024 bytes, and find_msu no longer copies a path that does not fit.
+
+  * platform/libretro/libretro.c, disk_replace_image_index(): the old file name and label of the disc were freed twice (once at the
+    start, once at the end), which crashed the program when the disc was changed while a game ran (Fahrenheit's second disc); the second
+    free is gone.
+
+  * platform/libretro/libretro.c: gpex_version() returns the version of this library (2: long file names, changing the disc while a game runs,
+    .chd discs). The program (picocore.c) compares it with the version it was made with and, for an older library in the Plugins folder (a
+    library without the call is version 1), shows a message once.

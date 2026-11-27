@@ -2,7 +2,7 @@
  *  Genesis Plus EX -- Win32 GUI frontend
  *  Copyright (c) 2026 Hazem Abdelghani
  *
- *  log.c -- the optional genesis-plus-ex.log (Settings > Options > Enable Log)
+ *  log.c -- the optional genesis-plus-ex.log (Settings > Emulation > Enable Log)
  *
  *  Each line is appended and the file closed again at once, so what happened
  *  right before a crash is still in it. Off by default; the file is started

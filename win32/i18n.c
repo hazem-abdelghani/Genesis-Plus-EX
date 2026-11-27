@@ -14,6 +14,11 @@
 #include <stdarg.h>
 #include "i18n.h"
 
+extern HANDLE gui_find_first(const char *pattern, WIN32_FIND_DATAA *fd);      /* (main.c: the Unicode find calls, see gui.h) */
+extern BOOL   gui_find_next(HANDLE h, WIN32_FIND_DATAA *fd);
+#define FindFirstFileA gui_find_first
+#define FindNextFileA  gui_find_next
+
 extern char *osd_path(const char *filename);
 BOOL WINAPI i18n_SetMenuItemInfoA(HMENU menu, UINT item, BOOL by_pos, LPCMENUITEMINFOA mi);
 BOOL WINAPI i18n_GetMenuItemInfoA(HMENU menu, UINT item, BOOL by_pos, LPMENUITEMINFOA mi);
@@ -101,10 +106,11 @@ static void sb_add(sb_t *b, const char *s, size_t n)
 {
   if (b->n + n + 1 > b->cap)
   {
-    b->cap = (b->n + n + 1) * 2 + 64;
-    char *np = (char *)realloc(b->p, b->cap);
-    if (!np) return;                              /* (out of memory: the text is left as it was) */
+    size_t cap = (b->n + n + 1) * 2 + 64;
+    char *np = (char *)realloc(b->p, cap);
+    if (!np) return;                              /* (out of memory: the text is left as it was, and the size it has stays what it is) */
     b->p = np;
+    b->cap = cap;
   }
   memcpy(b->p + b->n, s, n);
   b->n += n;
@@ -1300,7 +1306,26 @@ LRESULT WINAPI i18n_SendMessageA(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
       if (combo ? ((st & (CBS_OWNERDRAWFIXED | CBS_OWNERDRAWVARIABLE)) && !(st & CBS_HASSTRINGS)) :
                   ((st & (LBS_OWNERDRAWFIXED | LBS_OWNERDRAWVARIABLE)) && !(st & LBS_HASSTRINGS)))
         break;
-      if (real_ptr((const void *)lp)) lp = (LPARAM)tr((const char *)lp);
+      if (real_ptr((const void *)lp))
+      {
+        static char acp_text[8][700];                              /* (a few at once: the text is read by the list while the call runs) */
+        static int  acp_n;
+        const char *t = tr((const char *)lp);
+        WCHAR w[700];
+
+        /* The list stores ANSI text in the code page of the process and draws it so: a UTF-8 text (a translation) goes in as that code page's
+           own bytes when it has all its characters there (a Chinese Windows: GBK), so the list reads it one way, not two. */
+        if (msg != CB_FINDSTRING && msg != CB_FINDSTRINGEXACT && msg != CB_SELECTSTRING && msg != LB_FINDSTRING && msg != LB_FINDSTRINGEXACT && msg != LB_SELECTSTRING &&
+            GetACP() != CP_UTF8 && has_high(t, -1) && u8_wide(t, w, 700) > 0)
+        {
+          char *o = acp_text[acp_n++ & 7];
+          BOOL used = FALSE;
+          int n = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, w, -1, o, 700, NULL, &used);
+
+          if (n > 0 && !used) t = o;
+        }
+        lp = (LPARAM)t;
+      }
       break;
     }
     case WM_SETTEXT:
@@ -1340,8 +1365,19 @@ LRESULT WINAPI i18n_SendMessageA(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
 
       if (src && (src->mask & TCIF_TEXT) && real_ptr(src->pszText))
       {
+        const char *t = tr(src->pszText);
+        WCHAR w[700];
+
         it = *src;
-        it.pszText = (LPSTR)tr(src->pszText);
+        if (has_high(t, -1) && u8_wide(t, w, 700) > 0)           /* a translated tab title is UTF-8: it goes in as Unicode, as the column titles do */
+        {
+          TCITEMW tw;
+
+          memcpy(&tw, &it, sizeof(tw));
+          tw.pszText = w;
+          return SendMessageW(wnd, msg == TCM_INSERTITEMA ? TCM_INSERTITEMW : TCM_SETITEMW, wp, (LPARAM)&tw);
+        }
+        it.pszText = (LPSTR)t;
         return SendMessageA(wnd, msg, wp, (LPARAM)&it);
       }
       break;
@@ -1353,8 +1389,19 @@ LRESULT WINAPI i18n_SendMessageA(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
 
       if (src && (src->mask & LVCF_TEXT) && real_ptr(src->pszText))
       {
+        const char *t = tr(src->pszText);
+        WCHAR w[700];
+
         col = *src;
-        col.pszText = (LPSTR)tr(src->pszText);
+        if (has_high(t, -1) && u8_wide(t, w, 700) > 0)         /* a translated title is UTF-8: it goes in as Unicode, as the rows do */
+        {
+          LVCOLUMNW cw;
+
+          memcpy(&cw, &col, sizeof(cw));
+          cw.pszText = w;
+          return SendMessageW(wnd, msg == LVM_INSERTCOLUMNA ? LVM_INSERTCOLUMNW : LVM_SETCOLUMNW, wp, (LPARAM)&cw);
+        }
+        col.pszText = (LPSTR)t;
         return SendMessageA(wnd, msg, wp, (LPARAM)&col);
       }
       break;

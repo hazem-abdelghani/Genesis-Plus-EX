@@ -39,10 +39,11 @@ typedef struct
 static const hk_t hk[] =
 {
   { "Keyboard Shortcuts",             IDM_HELP_SHORTCUTS,          VK_F1 },
-  { "Open ROM",                       IDM_FILE_OPEN,               K_CTRL | 'O' },
-  { "ROM Directory",                 IDM_FILE_BROWSER,            K_CTRL | 'R' },
+  { "Open Game",                       IDM_FILE_OPEN,               K_CTRL | 'O' },
+  { "Game Folder",                 IDM_FILE_BROWSER,            K_CTRL | 'R' },
   { "Pause and Resume",               IDM_EMU_PAUSE,               VK_F2 },
   { "Pause and Resume (Second Key)",  IDM_EMU_PAUSE,               VK_PAUSE },
+  { "Advance One Frame While Paused", HK_FRAMEADV,                 VK_OEM_5 },
   { "Stop",                           IDM_EMU_STOP,                VK_F3 },
   { "Reset",                          IDM_EMU_RESET,               VK_F4 },
   { "Hard Reset",                     IDM_EMU_HARDRESET,           K_CTRL | VK_F4 },
@@ -72,35 +73,36 @@ static const hk_t hk[] =
   { "Undo Save State",                IDM_EMU_UNDOSAVE,            K_CTRL | VK_F5 },
   { "Previous Slot",                  IDM_ACCEL_SLOT_PREV,         VK_F6 },
   { "Next Slot",                      IDM_ACCEL_SLOT_NEXT,         VK_F7 },
-  { "Advance One Frame While Paused", HK_FRAMEADV,                 VK_OEM_5 },
   { "Fast Forward (Hold)",            HK_FASTFWD,                  VK_TAB },
-  { "Pause Menu",                     IDM_INPUT_PAUSEMENU,         0 },
-  { "Game Speed: Faster",             IDM_EMU_SPEEDUP,             K_CTRL | VK_OEM_PLUS },
+  { "Rewind (Hold)",                  HK_REWIND,                   VK_BACK },
   { "Game Speed: Slower",             IDM_EMU_SPEEDDOWN,           K_CTRL | VK_OEM_MINUS },
   { "Game Speed: Normal",             IDM_EMU_SPEEDRESET,          K_CTRL | '0' },
-  { "Rewind (Hold)",                  HK_REWIND,                   VK_BACK },
-  { "Show / Hide the Search Bar",     IDM_VIEW_FINDSEARCH,         K_CTRL | 'F' },
+  { "Game Speed: Faster",             IDM_EMU_SPEEDUP,             K_CTRL | VK_OEM_PLUS },
+  { "Run-Ahead: Off, 1 Frame, 2 Frames", IDM_EMU_RUNAHEAD,         K_CTRL | 'E' },
   { "Hide / Show All Bars", IDM_VIEW_CLEANWINDOW,  K_CTRL | 'H' },
+  { "Show / Hide the Search Bar",     IDM_VIEW_FINDSEARCH,         K_CTRL | 'F' },
   { "Fullscreen",                     IDM_VIDEO_FULLSCREEN,        K_ALT | VK_RETURN },
   { "Leave Fullscreen",               IDM_ACCEL_LEAVE_FULLSCREEN,  VK_ESCAPE },
+  { "Show / Hide the Frame Rate",    IDM_VIDEO_SHOWFPS,           K_CTRL | 'T' },
   { "Mute",                           IDM_AUDIO_ENABLE,            K_CTRL | 'M' },
   { "Mute FM Sound",                 IDM_AUDIO_MUTE_FM,           K_CTRL | 'N' },
   { "Mute PSG Sound",                IDM_AUDIO_MUTE_PSG,          K_CTRL | 'B' },
-  { "Mute DAC Sound",                IDM_AUDIO_MUTE_DAC,          K_CTRL | 'D' },
-  { "Mute PWM Sound",                IDM_AUDIO_MUTE_PWM,          K_CTRL | 'P' },
-  { "Show / Hide the Frame Rate",    IDM_VIDEO_SHOWFPS,           K_CTRL | 'T' },
-  { "Console Model: Default",         IDM_SET_MODEL_BASE + 0,      K_CTRL | K_SHIFT | '3' },
-  { "Console Model: Genesis Model 1", IDM_SET_MODEL_BASE + 1,      K_CTRL | K_SHIFT | '1' },
-  { "Console Model: Genesis Model 2", IDM_SET_MODEL_BASE + 2,      K_CTRL | K_SHIFT | '2' },
+  { "Mute DAC Sound",                IDM_AUDIO_MUTE_DAC,          K_CTRL | 'L' },
+  { "Mute PWM Sound",                IDM_AUDIO_MUTE_PWM,          K_CTRL | 'K' },
+  { "Mute CD Audio",                 IDM_AUDIO_MUTE_CDDA,         K_CTRL | 'J' },
+  { "Console Model (Audio): Default",         IDM_SET_MODEL_BASE + 0,      K_CTRL | K_SHIFT | '3' },
+  { "Console Model (Audio): Model 1", IDM_SET_MODEL_BASE + 1,      K_CTRL | K_SHIFT | '1' },
+  { "Console Model (Audio): Model 2", IDM_SET_MODEL_BASE + 2,      K_CTRL | K_SHIFT | '2' },
+  { "Pause Menu",                     IDM_INPUT_PAUSEMENU,         K_CTRL | 'P' },
   { "Cheats",                         IDM_EMU_CHEATS,              K_CTRL | 'C' },
   { "Record Animated GIF",            IDM_FILE_REC_GIF,            K_CTRL | VK_F12 },
   { "Record Video + Audio",           IDM_FILE_REC_VIDEO,          K_SHIFT | VK_F11 },
   { "Record Audio Only",              IDM_FILE_REC_AUDIO,          K_CTRL | VK_F11 },
-  { "Stop Recording",                 IDM_FILE_REC_STOP,           K_ALT | VK_F11 },
   { "Record VGM File",                IDM_TOOLS_VGM,               K_SHIFT | VK_F10 },
+  { "Stop Recording",                 IDM_FILE_REC_STOP,           K_ALT | VK_F11 },
   { "Save a Screenshot",              IDM_FILE_SCREENSHOT,         VK_F12 },
-  { "Sega Pico: Previous Page",       IDM_EMU_PICO_PAGEPREV,       VK_NEXT },
-  { "Sega Pico: Next Page",           IDM_EMU_PICO_PAGENEXT,       VK_PRIOR },
+  { "Sega Pico Storyware: Previous Page",       IDM_EMU_PICO_PAGEPREV,       VK_NEXT },
+  { "Sega Pico Storyware: Next Page",           IDM_EMU_PICO_PAGENEXT,       VK_PRIOR },
 };
 #define HK_N ((int)(sizeof(hk) / sizeof(hk[0])))
 typedef char hotkey_table_fits_gui_hotkey[(sizeof(hk) / sizeof(hk[0])) <= 96 ? 1 : -1];   /* gui.hotkey[] holds 96 */
@@ -118,12 +120,15 @@ void hotkey_ini_key(int i, char *out, int len)
   (void)len;
 }
 
+/* The shortcut as it counts now: none at all while Disable Hotkeys is on (the table itself is kept). */
+static int hk_eff(int i) { return gui.hotkeys_off ? 0 : gui.hotkey[i]; }
+
 /* The key (without Ctrl/Shift/Alt) of "Advance One Frame While Paused". */
 int hotkey_frame_advance_vk(void)
 {
   int i;
   for (i = 0; i < HK_N; i++)
-    if (hk[i].cmd == HK_FRAMEADV) return K_VK(gui.hotkey[i]);
+    if (hk[i].cmd == HK_FRAMEADV) return K_VK(hk_eff(i));
   return 0;
 }
 
@@ -132,7 +137,7 @@ int hotkey_hold_vk(int cmd)
 {
   int i;
   for (i = 0; i < HK_N; i++)
-    if (hk[i].cmd == cmd) return K_VK(gui.hotkey[i]);
+    if (hk[i].cmd == cmd) return K_VK(hk_eff(i));
   return 0;
 }
 
@@ -141,7 +146,7 @@ const char *hotkey_owner_of_key(int vk)
 {
   int i;
   for (i = 0; i < HK_N; i++)
-    if (gui.hotkey[i] == vk) return hk[i].name;
+    if (hk_eff(i) == vk) return hk[i].name;
   return NULL;
 }
 
@@ -201,7 +206,8 @@ HACCEL hotkeys_build_accel(void)
 
   for (i = 0; i < HK_N && n < 64; i++)
   {
-    int c = gui.hotkey[i];
+    int c = hk_eff(i);
+    if (gui.hotkeys_off && hk[i].cmd == IDM_ACCEL_LEAVE_FULLSCREEN) c = gui.hotkey[i];      /* (Esc still leaves fullscreen: with no shortcuts a fullscreen window could not be left from the keyboard) */
     if (!K_VK(c) || hk[i].cmd == HK_FRAMEADV || hk[i].cmd == HK_FASTFWD || hk[i].cmd == HK_REWIND) continue;   /* read directly, not accelerators */
     a[n].fVirt = (BYTE)(FVIRTKEY | ((c & K_CTRL) ? FCONTROL : 0) | ((c & K_SHIFT) ? FSHIFT : 0) | ((c & K_ALT) ? FALT : 0));
     a[n].key = (WORD)K_VK(c);
@@ -220,7 +226,7 @@ void hotkey_menu_keys(int cmd, char *out, int len)
   {
     char one[64];
     if (hk[j].cmd != cmd) continue;
-    hotkey_text(gui.hotkey[j], one, sizeof(one));
+    hotkey_text(hk_eff(j), one, sizeof(one));
     if (!one[0] || lstrlenA(out) + lstrlenA(one) + 4 >= len) continue;
     if (out[0]) lstrcatA(out, " / ");
     lstrcatA(out, one);
@@ -288,7 +294,7 @@ static void relabel(HMENU menu)
       {
         if (hk[j].cmd != (int)id) continue;
         found = 1;
-        hotkey_text(gui.hotkey[j], one, sizeof(one));
+        hotkey_text(hk_eff(j), one, sizeof(one));
         if (one[0])
         {
           if (keys[0]) lstrcatA(keys, " / ");
@@ -422,9 +428,11 @@ static LRESULT CALLBACK hkd_hook(int code, WPARAM wp, LPARAM lp)
   return CallNextHookEx(hkd.hook, code, wp, lp);
 }
 
+/* The line under the list says how to use it, always the same: what happened is seen in the list itself (and a clash asks first). */
 static void hkd_set_hint(HWND dlg, const char *text)
 {
-  SetDlgItemTextA(dlg, IDC_HK_HINT, text);
+  (void)text;
+  SetDlgItemTextA(dlg, IDC_HK_HINT, "Double-click an action, then press the key you want. Right-click an action for Restore Default, Clear and Clear All.");
 }
 
 static void hkd_begin(HWND dlg, int row)
@@ -432,7 +440,7 @@ static void hkd_begin(HWND dlg, int row)
   if (row < 0 || row >= HK_N) return;
   hkd.capture = row;
   hkd_fill(dlg);
-  hkd_set_hint(dlg, "Press the new shortcut (any key, alone or with Ctrl, Shift or Alt). Click Assign again to cancel.");
+  hkd_set_hint(dlg, "Press the new shortcut (any key, alone or with Ctrl, Shift or Alt). Click the list (or wait a few seconds) to cancel.");
   SetTimer(dlg, 7, 8000, NULL);
 }
 
@@ -454,9 +462,8 @@ static INT_PTR CALLBACK hotkeys_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       RECT rc;
       static const GuiTip tips[] =
       {
-        { IDC_HK_LIST, NULL, "Every action that has a keyboard shortcut. Select one and click Assign, or double-click it." },
-        { IDC_HK_ASSIGN, NULL, "Press the key (or Ctrl/Shift/Alt and a key) you want for the selected action." },
-        { IDC_HK_CLEAR, NULL, "Take the shortcut off the selected action." },
+        { IDC_HK_DISABLE, NULL, "Turn every keyboard shortcut off (the table below is kept, and the shortcuts work again when this is unticked). The menus show no shortcut keys while it is ticked. Leave Fullscreen (Esc) keeps working." },
+        { IDC_HK_LIST, NULL, "Every action that has a keyboard shortcut. Double-click one (or select it and press F2), then press the key (or Ctrl/Shift/Alt and a key) you want. Right-click for Restore Default, Clear and Clear All." },
         { IDC_HK_DEFAULTS, NULL, "Put every shortcut back to its original key." },
         { IDOK, NULL, "Save the shortcuts. Menu labels update at once." },
         { IDCANCEL, NULL, "Close without saving." },
@@ -467,6 +474,7 @@ static INT_PTR CALLBACK hotkeys_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       hkd.capture = -1;
       hkd.got = 0;
       for (i = 0; i < HK_N; i++) hkd.work[i] = gui.hotkey[i];
+      CheckDlgButton(dlg, IDC_HK_DISABLE, gui.hotkeys_off ? BST_CHECKED : BST_UNCHECKED);
       hkd.hook = SetWindowsHookExA(WH_KEYBOARD, hkd_hook, NULL, GetCurrentThreadId());
 
       SendMessage(list, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_FULLROWSELECT, LVS_EX_FULLROWSELECT);
@@ -479,6 +487,7 @@ static INT_PTR CALLBACK hotkeys_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       col.pszText = "Shortcut";
       col.cx = (rc.right - rc.left) * 34 / 100;
       SendMessageA(list, LVM_INSERTCOLUMNA, 1, (LPARAM)&col);
+      gui_list_header_menu(list);
       hkd_fill(dlg);
       ListView_SetItemState(list, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 
@@ -487,7 +496,7 @@ static INT_PTR CALLBACK hotkeys_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         HWND header = ListView_GetHeader(list);
         if (header && theme_is_dark()) { SetWindowTheme(header, L"ItemsView", NULL); InvalidateRect(header, NULL, TRUE); }
       }
-      hkd_set_hint(dlg, "Select an action and click Assign (or double-click it), then press the key you want.");
+      hkd_set_hint(dlg, "Double-click an action, then press the key you want. Right-click an action for Restore Default, Clear and Clear All.");
       gui_dialog_tips(dlg, tips, (int)(sizeof(tips) / sizeof(tips[0])));
       return TRUE;
     }
@@ -537,13 +546,91 @@ static INT_PTR CALLBACK hotkeys_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_NOTIFY:
     {
       NMHDR *h = (NMHDR *)lp;
+      if (h->idFrom == IDC_HK_LIST && h->code == LVN_KEYDOWN && ((NMLVKEYDOWN *)lp)->wVKey == VK_F2)      /* (from the keyboard: F2 starts the same as a double-click) */
+      {
+        int sel = ListView_GetNextItem(GetDlgItem(dlg, IDC_HK_LIST), -1, LVNI_SELECTED);
+        if (hkd.capture < 0 && sel >= 0) hkd_begin(dlg, sel);
+        return TRUE;
+      }
+      if (h->idFrom == IDC_HK_LIST && h->code == NM_CLICK && hkd.capture >= 0)       /* a click on the list while a key is awaited: not assigning after all */
+      {
+        hkd_end(dlg);
+        hkd_set_hint(dlg, "Canceled.");
+        return TRUE;
+      }
       if (h->idFrom == IDC_HK_LIST && h->code == NM_DBLCLK)
       {
         int sel = ListView_GetNextItem(GetDlgItem(dlg, IDC_HK_LIST), -1, LVNI_SELECTED);
-        if (hkd.capture < 0) hkd_begin(dlg, sel);
+        if (hkd.capture < 0 && sel >= 0) hkd_begin(dlg, sel);
         return TRUE;
       }
       return FALSE;
+    }
+
+    case WM_CONTEXTMENU:        /* right-click (or the menu key) on an action: Restore Default and Clear for that one */
+    {
+      HWND list = GetDlgItem(dlg, IDC_HK_LIST);
+      POINT p;
+      int sel, cmd;
+      HMENU menu;
+
+      if ((HWND)wp != list) return FALSE;
+      if (lp == (LPARAM)-1)
+      {
+        RECT r;
+        sel = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+        if (sel < 0 || !ListView_GetItemRect(list, sel, &r, LVIR_BOUNDS)) return TRUE;
+        p.x = r.left + 24; p.y = r.bottom;
+        ClientToScreen(list, &p);
+      }
+      else
+      {
+        LVHITTESTINFO ht;
+        p.x = (short)LOWORD(lp); p.y = (short)HIWORD(lp);
+        ht.pt = p;
+        ScreenToClient(list, &ht.pt);
+        sel = ListView_HitTest(list, &ht);
+        if (sel < 0) return TRUE;
+      }
+      if (hkd.capture >= 0) hkd_end(dlg);
+      ListView_SetItemState(list, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+      menu = CreatePopupMenu();
+      AppendMenuA(menu, MF_STRING | (hkd.work[sel] == hk[sel].def ? MF_GRAYED : 0), 7001, "Restore Default");
+      AppendMenuA(menu, MF_STRING | (hkd.work[sel] == 0 ? MF_GRAYED : 0), 7002, "Clear");
+      AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+      AppendMenuA(menu, MF_STRING, 7003, "Clear All");
+      if (theme_menus_owner()) theme_ownerdraw_menu(menu);
+      cmd = (int)gui_popup(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y);
+      DestroyMenu(menu);
+      if (cmd == 7001)
+      {
+        int j;
+        char buf[320], name[64];
+
+        for (j = 0; j < HK_N; j++)              /* another action that holds that key lets go of it */
+          if (j != sel && hk[sel].def && hkd.work[j] == hk[sel].def && hk[j].cmd != hk[sel].cmd) hkd.work[j] = 0;
+        hkd.work[sel] = hk[sel].def;
+        hotkey_text(hk[sel].def, name, sizeof(name));
+        wsprintfA(buf, "%s is back to %s.", hk[sel].name, hk[sel].def ? name : "no shortcut");
+        hkd_fill(dlg);
+        ListView_SetItemState(list, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        hkd_set_hint(dlg, buf);
+      }
+      else if (cmd == 7003)           /* every shortcut off (Cancel puts them back as they were, Restore Defaults brings the original keys) */
+      {
+        int j;
+        for (j = 0; j < HK_N; j++) hkd.work[j] = 0;
+        hkd_fill(dlg);
+        ListView_SetItemState(list, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+      }
+      else if (cmd == 7002)
+      {
+        hkd.work[sel] = 0;
+        hkd_fill(dlg);
+        ListView_SetItemState(list, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        hkd_set_hint(dlg, "The shortcut was taken off.");
+      }
+      return TRUE;
     }
 
     case WM_CTLCOLORDLG:
@@ -559,28 +646,15 @@ static INT_PTR CALLBACK hotkeys_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_COMMAND:
     {
-      HWND list = GetDlgItem(dlg, IDC_HK_LIST);
-      int sel = ListView_GetNextItem(list, -1, LVNI_SELECTED);
-
       switch (LOWORD(wp))
       {
-        case IDC_HK_ASSIGN:
-          if (hkd.capture >= 0) { hkd_end(dlg); hkd_set_hint(dlg, "Canceled."); }
-          else hkd_begin(dlg, sel);
-          return TRUE;
-
-        case IDC_HK_CLEAR:
-          if (hkd.capture >= 0) hkd_end(dlg);
-          if (sel >= 0) { hkd.work[sel] = 0; hkd_fill(dlg); ListView_SetItemState(list, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED); }
-          return TRUE;
-
         case IDC_HK_DEFAULTS:
         {
           int i;
           if (hkd.capture >= 0) hkd_end(dlg);
           for (i = 0; i < HK_N; i++) hkd.work[i] = hk[i].def;
           hkd_fill(dlg);
-          hkd_set_hint(dlg, "Every shortcut is back to its original key (not saved until you click Save).");
+          hkd_set_hint(dlg, "Every shortcut is back to its original key (not saved until you click OK).");
           return TRUE;
         }
 
@@ -589,6 +663,7 @@ static INT_PTR CALLBACK hotkeys_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           int i;
           if (hkd.capture >= 0) { hkd_end(dlg); return TRUE; }
           for (i = 0; i < HK_N; i++) gui.hotkey[i] = hkd.work[i];
+          gui.hotkeys_off = IsDlgButtonChecked(dlg, IDC_HK_DISABLE) == BST_CHECKED ? 1 : 0;
           config_save();
           gui_hotkeys_changed();
           EndDialog(dlg, IDOK);
@@ -728,23 +803,30 @@ static const char *phd_button_name(padmask_t mask)
   return phd_dev >= GUI_INPUT_XPAD_COUNT ? input_pad_button_name(phd_dev, mask) : padhk_button_name(mask);
 }
 
+/* The list shows the Hold Button first, then the actions: a list row is the number it has in phd.work[] (the actions from 0, the Hold Button last) through these. */
+static int phd_idx(int row)
+{
+  return row == 0 ? PH_N : row - 1;
+}
+
 static void phd_fill(HWND dlg)
 {
   HWND list = GetDlgItem(dlg, IDC_PH_LIST);
   int i, fresh = ((int)SendMessage(list, LVM_GETITEMCOUNT, 0, 0) != PH_N + 1);
 
   SendMessage(list, WM_SETREDRAW, FALSE, 0);
-  for (i = 0; i <= PH_N; i++)      /* the last row is the Hold Button */
+  for (i = 0; i <= PH_N; i++)      /* the first row is the Hold Button */
   {
     LVITEMA it;
     const char *text;
+    int d = phd_idx(i);
 
     memset(&it, 0, sizeof(it));
     it.mask = LVIF_TEXT;
     it.iItem = i;
-    it.pszText = (LPSTR)(i < PH_N ? ph[i].name : "Hold Button (see the box below the list)");
+    it.pszText = (LPSTR)(d < PH_N ? ph[d].name : "Hold Button (see the box below the list)");
     if (fresh) SendMessageA(list, LVM_INSERTITEMA, 0, (LPARAM)&it);
-    text = (phd.capture == i) ? "Press a button ..." : (phd.work[i] ? phd_button_name(phd.work[i]) : "");
+    text = (phd.capture == d) ? "Press a button ..." : (phd.work[d] ? phd_button_name(phd.work[d]) : "");
     it.iSubItem = 1;
     it.pszText = (LPSTR)text;
     SendMessageA(list, LVM_SETITEMTEXTA, (WPARAM)i, (LPARAM)&it);
@@ -770,7 +852,7 @@ static void phd_begin(HWND dlg, int row)
     SetDlgItemTextA(dlg, IDC_PH_HINT, "Player 1 needs a gamepad: pick one under Input Devices in Controls first.");
     return;
   }
-  phd.capture = row;
+  phd.capture = phd_idx(row);
   phd.phase = 0;
   phd.deadline = GetTickCount() + 8000;
   phd_fill(dlg);
@@ -791,10 +873,10 @@ static INT_PTR CALLBACK padhk_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       {
         { IDC_PH_LIST, NULL, "Each action and the pad button that runs it, pressed on its own (Player 1's Xbox-style pad). Select one and click Assign, or double-click it." },
         { IDC_PH_ASSIGN, NULL, "Press the pad button you want for the selected action." },
-        { IDC_PH_HOLD, NULL, "When ticked, a gamepad hotkey only runs while you also hold the Hold Button (the last row), so the buttons can still be used in the game on their own." },
+        { IDC_PH_HOLD, NULL, "When ticked, a gamepad hotkey only runs while you also hold the Hold Button (the first row), so the buttons can still be used in the game on their own." },
         { IDC_PH_CLEAR, NULL, "Take the button off the selected action." },
         { IDC_PH_DEFAULTS, NULL, "Put every action back to its original button." },
-        { IDOK, NULL, "Save these settings." },
+        { IDOK, NULL, "Keep these settings and close the window (they are saved when you click OK)." },
         { IDCANCEL, NULL, "Close without saving." },
       };
       int i;
@@ -814,6 +896,7 @@ static INT_PTR CALLBACK padhk_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       col.pszText = "Gamepad Button";
       col.cx = (rc.right - rc.left) * 41 / 100;
       SendMessageA(list, LVM_INSERTCOLUMNA, 1, (LPARAM)&col);
+      gui_list_header_menu(list);
       phd_fill(dlg);
       ListView_SetItemState(list, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 
@@ -847,7 +930,7 @@ static INT_PTR CALLBACK padhk_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           wsprintfA(buf, "%s is now %s%s.", row < PH_N ? ph[row].name : "The Hold Button", phd_button_name(m), other);
           if (phd_dev >= 0)
             for (j = 0; j < PAD_KEYS; j++)
-              if (gui.pad[0].button[j] == m)
+              if (gui.pad[0].button[j] == m || gui.pad[0].button2[j] == m)
               {
                 lstrcatA(buf, " Note: it is also the Player 1 game button ");
                 lstrcatA(buf, input_button_label(j));
@@ -896,7 +979,7 @@ static INT_PTR CALLBACK padhk_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
         case IDC_PH_CLEAR:
           if (phd.capture >= 0) phd_end(dlg);
-          if (sel >= 0) { phd.work[sel] = 0; phd_fill(dlg); }
+          if (sel >= 0) { phd.work[phd_idx(sel)] = 0; phd_fill(dlg); }
           return TRUE;
 
         case IDC_PH_DEFAULTS:
@@ -907,7 +990,7 @@ static INT_PTR CALLBACK padhk_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           phd.work[PH_N] = 0;
           CheckDlgButton(dlg, IDC_PH_HOLD, BST_UNCHECKED);
           phd_fill(dlg);
-          SetDlgItemTextA(dlg, IDC_PH_HINT, "Every action is back to its original button (not saved until you click Save).");
+          SetDlgItemTextA(dlg, IDC_PH_HINT, "Every action is back to its original button (not saved until you click OK).");
           return TRUE;
         }
 
@@ -920,7 +1003,7 @@ static INT_PTR CALLBACK padhk_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           gui.padhk_hold_on = IsDlgButtonChecked(dlg, IDC_PH_HOLD) == BST_CHECKED;
           if (gui.padhk_hold_on && !phd.work[PH_N])
           {
-            MessageBoxA(dlg, "Choose a Hold Button in the last row first, or untick the box.", "Gamepad Hotkeys", MB_OK | MB_ICONINFORMATION);
+            MessageBoxA(dlg, "Choose a Hold Button in the first row first, or untick the box.", "Gamepad Hotkeys", MB_OK | MB_ICONINFORMATION);
             return TRUE;
           }
           config_save();

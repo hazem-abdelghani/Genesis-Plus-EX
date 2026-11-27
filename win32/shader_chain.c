@@ -11,7 +11,9 @@
 
 #define COBJMACROS
 #define LIBRA_RUNTIME_D3D11
+#define LIBRA_RUNTIME_D3D12
 #include <d3d11.h>
+#include <d3d12.h>
 #include "librashader/librashader.h"
 #include "shader_chain.h"
 #include <stdlib.h>
@@ -30,12 +32,19 @@ static PFN_libra_error_free             pfn_error_free;
 static PFN_libra_preset_get_runtime_params  pfn_get_params;
 static PFN_libra_preset_free_runtime_params pfn_free_params;
 static PFN_libra_d3d11_filter_chain_set_param pfn_set_param;
+/* the Direct3D 12 runtime of librashader (optional: a build of it without that leaves Shaders to the Direct3D 11 renderer) */
+static PFN_libra_d3d12_filter_chain_create pfn_chain_create12;
+static PFN_libra_d3d12_filter_chain_frame  pfn_chain_frame12;
+static PFN_libra_d3d12_filter_chain_free   pfn_chain_free12;
+static PFN_libra_d3d12_filter_chain_set_param pfn_set_param12;
 
 /* The preset's own settings (the "#pragma parameter" lines of its shaders), read when it loads. */
 static SHADER_PARAM sp[SHADER_PARAMS_MAX];
 static int sp_n;
 
 static libra_d3d11_filter_chain_t chain;
+static libra_d3d12_filter_chain_t chain12;
+static int                        use12;           /* the loaded chain is the Direct3D 12 one */
 static char                       preset_path[512];
 static char                       last_error[256];
 static size_t                     frame_count;
@@ -60,6 +69,10 @@ static void set_error_from_libra(libra_error_t err)
   if (pfn_error_free) pfn_error_free(&err);
 }
 
+static char  found_path[MAX_PATH + 32];   /* librashader.dll as it was found on disk (empty: not anywhere) */
+static DWORD load_err;                     /* why Windows would not load it */
+static char  missing_export[64];           /* it loaded but has no function by this name: an older or newer librashader.dll */
+
 void shader_chain_init(void)
 {
   if (dll) return;   /* already attempted */
@@ -75,11 +88,15 @@ void shader_chain_init(void)
     if (GetModuleFileNameA(NULL, path, MAX_PATH) > 0 && (slash = strrchr(path, '\\')) != NULL)
     {
       lstrcpyA(slash + 1, "Plugins\\librashader.dll");
+      if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) lstrcpynA(found_path, path, sizeof(found_path));
       dll = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+      if (!dll && found_path[0]) load_err = GetLastError();
       if (!dll)
       {
         lstrcpyA(slash + 1, "librashader.dll");
+        if (!found_path[0] && GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) lstrcpynA(found_path, path, sizeof(found_path));
         dll = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (!dll && !load_err && found_path[0]) load_err = GetLastError();
       }
     }
     if (!dll) dll = LoadLibraryA("librashader.dll");
@@ -110,6 +127,14 @@ void shader_chain_init(void)
     pfn_free_params = (PFN_libra_preset_free_runtime_params)p;
     p = (void *)GetProcAddress(dll, "libra_d3d11_filter_chain_set_param");
     pfn_set_param = (PFN_libra_d3d11_filter_chain_set_param)p;
+    p = (void *)GetProcAddress(dll, "libra_d3d12_filter_chain_create");
+    pfn_chain_create12 = (PFN_libra_d3d12_filter_chain_create)p;
+    p = (void *)GetProcAddress(dll, "libra_d3d12_filter_chain_frame");
+    pfn_chain_frame12 = (PFN_libra_d3d12_filter_chain_frame)p;
+    p = (void *)GetProcAddress(dll, "libra_d3d12_filter_chain_free");
+    pfn_chain_free12 = (PFN_libra_d3d12_filter_chain_free)p;
+    p = (void *)GetProcAddress(dll, "libra_d3d12_filter_chain_set_param");
+    pfn_set_param12 = (PFN_libra_d3d12_filter_chain_set_param)p;
     p = (void *)GetProcAddress(dll, "libra_error_write");
     pfn_error_write = (PFN_libra_error_write)p;
     p = (void *)GetProcAddress(dll, "libra_error_free_string");
@@ -121,6 +146,9 @@ void shader_chain_init(void)
   if (!pfn_preset_create || !pfn_preset_free || !pfn_chain_create ||
       !pfn_chain_frame || !pfn_chain_free)
   {
+    lstrcpynA(missing_export, !pfn_preset_create ? "libra_preset_create" : (!pfn_preset_free ? "libra_preset_free" : (!pfn_chain_create ? "libra_d3d11_filter_chain_create" :
+              (!pfn_chain_frame ? "libra_d3d11_filter_chain_frame" : "libra_d3d11_filter_chain_free"))), sizeof(missing_export));
+    lstrcpynA(found_path, found_path[0] ? found_path : "librashader.dll", sizeof(found_path));
     /* A librashader.dll too old/new to export what this was built against --
        treat exactly like it wasn't found at all. */
     FreeLibrary(dll);
@@ -136,12 +164,25 @@ int shader_chain_available(void)
 void shader_chain_missing_text(char *out, int len)
 {
   char folder[MAX_PATH + 16], *slash;
-  char text[MAX_PATH + 400];
+  char text[1000];
 
   folder[0] = '\0';
   if (GetModuleFileNameA(NULL, folder, MAX_PATH) > 0 && (slash = strrchr(folder, '\\')) != NULL) lstrcpyA(slash + 1, "Plugins");
-  wsprintfA(text, "Shaders need librashader.dll, and it was not found or Windows could not load it.\n\n"
-                  "Put librashader.dll (it is in the zip the program came in) in the Plugins folder:\n%s\n\nThen turn the shader on again.", folder);
+  if (missing_export[0])
+    wsprintfA(text, "The librashader.dll that was found is not the version this program needs: it has no \"%s\" (it is too old or too new).\n\n%s\n\nPut the librashader.dll from this program's zip in the Plugins folder:\n%s", missing_export, found_path, folder);
+  else if (found_path[0])
+  {
+    char why[200];
+
+    why[0] = '\0';
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, load_err, 0, why, sizeof(why), NULL);
+    { int n = lstrlenA(why); while (n > 0 && (why[n - 1] == '\r' || why[n - 1] == '\n' || why[n - 1] == ' ')) why[--n] = '\0'; }
+    wsprintfA(text, "librashader.dll was found but Windows could not load it (error %lu: %s).\n\n%s\n\n%s", (unsigned long)load_err, why,
+              found_path, load_err == 193 ? "It is a 64-bit DLL: the 32-bit program cannot use it." :
+              "A file it needs may be missing: it uses D3DX9_43.dll (DirectX End-User Runtime) and the Visual C++ 2015-2022 runtime.");
+  }
+  else
+    wsprintfA(text, "Shaders need librashader.dll, and it was not found.\n\nPut librashader.dll (it is in the zip the program came in) in the Plugins folder:\n%s\n\nThen turn the shader on again.", folder);
   lstrcpynA(out, text, len);
 }
 
@@ -152,14 +193,58 @@ void shader_chain_unload(void)
     pfn_chain_free(&chain);
     chain = NULL;
   }
+  if (chain12)
+  {
+    pfn_chain_free12(&chain12);
+    chain12 = NULL;
+  }
+  use12 = 0;
 }
 
-int shader_chain_load(void *device, const char *preset_file)
+/* librashader's Direct3D 12 runtime compiles with DXC and loads dxcompiler.dll (and dxil.dll next to it) itself when the first chain is made; when they are
+   missing it raises an exception that ends the program. They are loaded here first, from the Plugins folder, so a missing one is a message instead. */
+static int load_dxc(void)
+{
+  static int done;
+  char path[MAX_PATH + 32], *slash;
+  int i, ok = 0;
+
+  if (done) return done > 0;
+  if (GetModuleFileNameA(NULL, path, MAX_PATH) > 0 && (slash = strrchr(path, '\\')) != NULL)
+  {
+    static const char *const dirs[2] = { "Plugins\\", "" };
+    HMODULE il = NULL, cc = NULL;
+
+    for (i = 0; i < 2 && !cc; i++)
+    {
+      wsprintfA(slash + 1, "%sdxil.dll", dirs[i]);
+      il = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+      wsprintfA(slash + 1, "%sdxcompiler.dll", dirs[i]);
+      cc = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    }
+    ok = (il != NULL && cc != NULL);
+  }
+  if (ok) done = 1;                    /* (a failure is tried again the next time: the files may have been put there since) */
+  return ok;
+}
+
+/* The preset, its settings and the chain for the device: Direct3D 11 (dx12 = 0, a ID3D11Device) or Direct3D 12 (dx12 = 1, a ID3D12Device). */
+static int load_chain(void *device, const char *preset_file, int dx12)
 {
   libra_shader_preset_t preset = NULL;
   libra_error_t err;
 
   shader_chain_unload();
+  if (dx12 && (!pfn_chain_create12 || !pfn_chain_frame12 || !pfn_chain_free12))
+  {
+    lstrcpynA(last_error, "this librashader.dll has no Direct3D 12 support", sizeof(last_error));
+    return 0;
+  }
+  if (dx12 && !load_dxc())
+  {
+    lstrcpynA(last_error, "Direct3D 12 shaders need dxcompiler.dll and dxil.dll in the Plugins folder next to the program, and Windows could not load them", sizeof(last_error));
+    return 0;
+  }
   last_error[0] = '\0';
   frame_count = 0;
 
@@ -191,12 +276,26 @@ int shader_chain_load(void *device, const char *preset_file)
     }
   }
 
-  err = pfn_chain_create(&preset, (ID3D11Device *)device, NULL, &chain);
-  if (err)
+  if (dx12)
   {
-    set_error_from_libra(err);
-    chain = NULL;
-    return 0;
+    err = pfn_chain_create12(&preset, (ID3D12Device *)device, NULL, &chain12);
+    if (err)
+    {
+      set_error_from_libra(err);
+      chain12 = NULL;
+      return 0;
+    }
+    use12 = 1;
+  }
+  else
+  {
+    err = pfn_chain_create(&preset, (ID3D11Device *)device, NULL, &chain);
+    if (err)
+    {
+      set_error_from_libra(err);
+      chain = NULL;
+      return 0;
+    }
   }
 
   lstrcpynA(preset_path, preset_file, sizeof(preset_path));
@@ -204,7 +303,10 @@ int shader_chain_load(void *device, const char *preset_file)
   return 1;
 }
 
-int shader_chain_param_count(void) { return chain ? sp_n : 0; }
+int shader_chain_load(void *device, const char *preset_file) { return load_chain(device, preset_file, 0); }
+int shader_chain_load12(void *device, const char *preset_file) { return load_chain(device, preset_file, 1); }
+
+int shader_chain_param_count(void) { return (chain || chain12) ? sp_n : 0; }
 SHADER_PARAM *shader_chain_param(int i) { return (i >= 0 && i < sp_n) ? &sp[i] : NULL; }
 
 /* gui.shader_params holds "name=value;" for each parameter changed from the preset's own value. */
@@ -228,11 +330,11 @@ static void params_store(void)
 
 int shader_chain_param_set(int i, float v)
 {
-  if (!chain || !pfn_set_param || i < 0 || i >= sp_n) return 0;
+  if ((!chain && !chain12) || (!use12 && !pfn_set_param) || (use12 && !pfn_set_param12) || i < 0 || i >= sp_n) return 0;
   if (v < sp[i].min) v = sp[i].min;
   if (v > sp[i].max) v = sp[i].max;
   {
-    libra_error_t err = pfn_set_param(&chain, sp[i].name, v);
+    libra_error_t err = use12 ? pfn_set_param12(&chain12, sp[i].name, v) : pfn_set_param(&chain, sp[i].name, v);
     if (err) { set_error_from_libra(err); return 0; }
   }
   sp[i].cur = v;
@@ -245,7 +347,7 @@ void shader_chain_params_restore(void)
   char buf[sizeof(gui.shader_params)], *p, *next;
   int i;
 
-  if (!chain || !pfn_set_param || lstrcmpA(gui.shader_params_for, preset_path)) return;
+  if ((!chain && !chain12) || (!use12 && !pfn_set_param) || (use12 && !pfn_set_param12) || lstrcmpA(gui.shader_params_for, preset_path)) return;
   lstrcpynA(buf, gui.shader_params, sizeof(buf));
   for (p = buf; p && *p; p = next)
   {
@@ -259,7 +361,7 @@ void shader_chain_params_restore(void)
       if (!lstrcmpA(sp[i].name, p))
       {
         float v = (float)atof(eq);
-        libra_error_t err = pfn_set_param(&chain, p, v);
+        libra_error_t err = use12 ? pfn_set_param12(&chain12, p, v) : pfn_set_param(&chain, p, v);
         if (err) set_error_from_libra(err); else sp[i].cur = v;
       }
   }
@@ -267,7 +369,7 @@ void shader_chain_params_restore(void)
 
 int shader_chain_active(void)
 {
-  return chain != NULL;
+  return chain != NULL || chain12 != NULL;
 }
 
 const char *shader_chain_preset_path(void)
@@ -293,6 +395,38 @@ int shader_chain_render(void *context, void *input, void *output,
                         (ID3D11ShaderResourceView *)input,
                         (ID3D11RenderTargetView *)output,
                         &viewport, NULL, NULL);
+  frame_count++;
+
+  if (err) { set_error_from_libra(err); return 0; }
+  return 1;
+}
+
+/* One frame through the Direct3D 12 chain, recorded on `cmdlist` (an ID3D12GraphicsCommandList). `input` is the picture (an ID3D12Resource in the pixel
+   shader resource state), `rtv` the CPU descriptor of the render target (the back buffer, in the render target state) and its format and size. */
+int shader_chain_render12(void *cmdlist, void *input, unsigned long long rtv, int format, int out_w, int out_h, int x, int y, int w, int h)
+{
+  libra_viewport_t viewport;
+  libra_image_d3d12_t in, out;
+  libra_error_t err;
+
+  if (!chain12 || !use12) return 0;
+  if (w < 1 || h < 1) return 0;
+
+  viewport.x = (float)x;
+  viewport.y = (float)y;
+  viewport.width = (UINT)w;
+  viewport.height = (UINT)h;
+  memset(&in, 0, sizeof(in));
+  memset(&out, 0, sizeof(out));
+  in.image_type = LIBRA_D3D12_IMAGE_TYPE_RESOURCE;
+  in.handle.resource = (ID3D12Resource *)input;
+  out.image_type = LIBRA_D3D12_IMAGE_TYPE_OUTPUT_IMAGE;
+  out.handle.output.descriptor.ptr = (SIZE_T)rtv;
+  out.handle.output.format = (DXGI_FORMAT)format;
+  out.handle.output.width = (uint32_t)out_w;
+  out.handle.output.height = (uint32_t)out_h;
+
+  err = pfn_chain_frame12(&chain12, (ID3D12GraphicsCommandList *)cmdlist, frame_count, in, out, &viewport, NULL, NULL);
   frame_count++;
 
   if (err) { set_error_from_libra(err); return 0; }

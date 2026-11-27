@@ -11,9 +11,9 @@
  *  loading and the filter chain lifetime; d3d11_video.c only calls
  *  shader_chain_active()/shader_chain_render() from its own render path.
  *
- *  D3D11 only: librashader ships no 32-bit Windows build, and this app has
- *  no Vulkan/D3D12 renderer to use its other backends with. See
- *  librashader/README-librashader.txt.
+ *  Direct3D 11 and 12 (the D3D12 renderer uses librashader's Direct3D 12
+ *  runtime): librashader ships no 32-bit Windows build, so shaders are in the
+ *  64-bit program only. See librashader/README-librashader.txt.
  ****************************************************************************/
 
 #ifndef _SHADER_CHAIN_H_
@@ -39,6 +39,9 @@ void shader_chain_missing_text(char *out, int len);
    shader_chain_last_error() has a message worth showing the user. */
 int  shader_chain_load(void *device, const char *preset_path);
 
+/* The same for the Direct3D 12 renderer (device is an ID3D12Device): the preset is loaded against it with librashader's Direct3D 12 runtime. */
+int  shader_chain_load12(void *device, const char *preset_path);
+
 /* Frees the current chain, if any. Safe to call when none is loaded, and
    safe (expected) to call before the device it was created against is
    released -- the chain holds device-bound GPU resources internally. */
@@ -59,6 +62,11 @@ const char *shader_chain_preset_path(void);
    to its own passthrough draw for this frame. */
 int  shader_chain_render(void *context, void *input, void *output,
                           int x, int y, int w, int h);
+
+/* Renders one frame through the loaded Direct3D 12 chain onto `cmdlist` (an ID3D12GraphicsCommandList*): `input` is the emulator's picture (an
+   ID3D12Resource* in the pixel shader resource state), `rtv` the CPU descriptor handle of the render target (the back buffer, in the render target state;
+   a D3D12_CPU_DESCRIPTOR_HANDLE's ptr), format its DXGI_FORMAT and out_w x out_h its size; the result goes into the x/y/w/h rectangle. 1 on success. */
+int  shader_chain_render12(void *cmdlist, void *input, unsigned long long rtv, int format, int out_w, int out_h, int x, int y, int w, int h);
 
 /* Message for the most recent shader_chain_load()/shader_chain_render()
    failure, or "" if the last call succeeded. */

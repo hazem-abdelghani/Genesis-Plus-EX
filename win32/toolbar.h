@@ -11,7 +11,7 @@
 #define _TOOLBAR_H_
 
 enum { TI_OPEN, TI_REFRESH, TI_PLAY, TI_STOP, TI_RESET, TI_PAUSE, TI_FULLSCREEN,
-       TI_SCREENSHOT, TI_SETTINGS, TI_VIDEO, TI_AUDIO, TI_CONTROLS, TI_FAV, TI_FAVON, TI_SEARCH, TI_DISC, TI_N };       /* (TI_DISC is only used by a menu: File > Run Mega CD BIOS) */
+       TI_SCREENSHOT, TI_SETTINGS, TI_VIDEO, TI_AUDIO, TI_CONTROLS, TI_FAV, TI_FAVON, TI_SEARCH, TI_DISC, TI_CHIP, TI_N };       /* (TI_DISC and TI_CHIP are only used by menus: File > Open Disc from Drive and File > Run Mega CD BIOS) */
 
 /* The display scale of the window the program is on (96 = 100%), kept up to date when the window moves to another monitor. */
 extern int gui_dpi;
@@ -21,6 +21,8 @@ extern int gui_dpi;
 #define TBS(v) DPIS(gui.large_ui ? (((v) * 1175 + 500) / 1000) : (v))
 
 /* A flat button showing `icon`; `tip` is its tooltip (must stay valid). */
+/* A tip window that hides itself after a few seconds even when the pointer stays (toolbar buttons, the small buttons of the search and filter bars). */
+extern void tb_tip_autohide(HWND tip);
 HWND tb_button(HWND parent, int id, int icon, const char *tip);
 
 /* The names under the icons (View > Toolbars > Show Toolbar Labels) and the icon size (Toolbar Icon Size) set how big the

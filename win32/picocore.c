@@ -19,12 +19,14 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <io.h>
 
 #include "shared.h"
 #include "gui.h"
 #include "picocore.h"
 #include "netplay.h"
 #include "picodrive/platform/libretro/libretro-common/include/libretro.h"
+#include "disc.h"
 
 /* The libretro functions of the library. */
 static struct
@@ -49,6 +51,7 @@ static struct
   void   (*get_system_av_info)(struct retro_system_av_info *);
   void  *(*get_memory_data)(unsigned);
   size_t (*get_memory_size)(unsigned);
+  int    (*version)(void);                  /* gpex_version (a library without it is version 1) */
   void   (*set_mute)(int, int);             /* gpex_set_mute (optional) */
   void   (*set_pwm)(int);                   /* gpex_set_pwm: the level of the 32X PWM sound in percent, 0 = muted (optional) */
   void   (*set_levels)(int, int);           /* gpex_set_levels: the FM and PSG levels in percent (optional) */
@@ -77,6 +80,7 @@ static int    sys_dir_ready;
 static int    frames_logged;
 static int    core_lines;
 
+static int    tray_open_seen;      /* the game (a Mega CD game in PicoDrive) opened the disc tray: it asks for another disc */
 static int    no_input;            /* the start-up frames run without any button pressed (the same on every PC: netplay) */
 static char   last_path[GUI_PATH_LEN];   /* the game that is running, to start it again (netplay) */
 static char   keep_path[GUI_PATH_LEN];   /* a copy of it, when it was a temporary file (the unpacked game of a .7z) */
@@ -117,6 +121,137 @@ int pico_rom_is_32x(void)
   return !strncmp(rominfo.consoletype, "SEGA 32X", 8);
 }
 
+
+/* ---- the file layer of the library (libretro VFS) ----
+   PicoDrive reads a disc's sheet and track files itself, with fopen/fread/fseek inside its own library, which the program's
+   wrappers (the virtual disc of disc.c) do not reach. The library asks the program for a file layer instead, and for a disc in
+   an optical drive (disc:\... paths) this one answers from disc.c; every other path is a normal file. It is offered only while
+   such a disc is being started (vfs_on), so the games that are plain files keep the library's own file access. */
+
+struct retro_vfs_file_handle
+{
+  void *disc;                  /* a stream of the virtual disc, or NULL */
+  FILE *fp;                    /* a normal file */
+  char  path[GUI_PATH_LEN];
+};
+
+static int vfs_on;
+static const struct retro_disk_control_callback *disk_ctl;     /* the library's disc swapping (set while a game is loaded) */
+
+static const char *RETRO_CALLCONV vfs_get_path(struct retro_vfs_file_handle *h)
+{
+  return h ? h->path : NULL;
+}
+
+static struct retro_vfs_file_handle *RETRO_CALLCONV vfs_open(const char *path, unsigned mode, unsigned hints)
+{
+  struct retro_vfs_file_handle *h;
+
+  (void)hints;
+  if (!path || !(mode & (RETRO_VFS_FILE_ACCESS_READ | RETRO_VFS_FILE_ACCESS_WRITE))) return NULL;
+  h = (struct retro_vfs_file_handle *)calloc(1, sizeof(*h));
+  if (!h) return NULL;
+  lstrcpynA(h->path, path, sizeof(h->path));
+  if (disc_is_path(path))
+  {
+    if (mode & RETRO_VFS_FILE_ACCESS_WRITE) { free(h); return NULL; }        /* a disc is read only */
+    h->disc = disc_fopen(path);
+    if (!h->disc) { free(h); return NULL; }
+    return h;
+  }
+  {
+    const char *m;
+
+    if (mode & RETRO_VFS_FILE_ACCESS_WRITE)
+      m = (mode & RETRO_VFS_FILE_ACCESS_READ) ? ((mode & RETRO_VFS_FILE_ACCESS_UPDATE_EXISTING) ? "r+b" : "w+b") : ((mode & RETRO_VFS_FILE_ACCESS_UPDATE_EXISTING) ? "r+b" : "wb");
+    else
+      m = "rb";
+    h->fp = fopen(path, m);
+    if (!h->fp) { free(h); return NULL; }
+  }
+  return h;
+}
+
+static int RETRO_CALLCONV vfs_close(struct retro_vfs_file_handle *h)
+{
+  if (!h) return -1;
+  if (h->disc) disc_fclose(h->disc);
+  if (h->fp) fclose(h->fp);
+  free(h);
+  return 0;
+}
+
+static int64_t RETRO_CALLCONV vfs_tell(struct retro_vfs_file_handle *h)
+{
+  if (!h) return -1;
+  if (h->disc) return (int64_t)disc_ftell(h->disc);
+  return h->fp ? (int64_t)_ftelli64(h->fp) : -1;
+}
+
+static int64_t RETRO_CALLCONV vfs_seek(struct retro_vfs_file_handle *h, int64_t off, int whence)
+{
+  int w = whence == RETRO_VFS_SEEK_POSITION_START ? SEEK_SET : whence == RETRO_VFS_SEEK_POSITION_CURRENT ? SEEK_CUR : SEEK_END;
+
+  if (!h) return -1;
+  if (h->disc)
+  {
+    if (disc_fseek(h->disc, (long)off, w) != 0) return -1;
+    return (int64_t)disc_ftell(h->disc);
+  }
+  if (!h->fp || _fseeki64(h->fp, off, w) != 0) return -1;
+  return (int64_t)_ftelli64(h->fp);
+}
+
+static int64_t RETRO_CALLCONV vfs_size(struct retro_vfs_file_handle *h)
+{
+  int64_t here, size;
+
+  if (!h) return -1;
+  here = vfs_tell(h);
+  if (here < 0) return -1;
+  if (vfs_seek(h, 0, RETRO_VFS_SEEK_POSITION_END) < 0) return -1;
+  size = vfs_tell(h);
+  vfs_seek(h, here, RETRO_VFS_SEEK_POSITION_START);
+  return size;
+}
+
+static int64_t RETRO_CALLCONV vfs_read(struct retro_vfs_file_handle *h, void *buf, uint64_t len)
+{
+  if (!h || !buf) return -1;
+  if (h->disc) return (int64_t)disc_fread(buf, 1, (size_t)len, h->disc);
+  return h->fp ? (int64_t)fread(buf, 1, (size_t)len, h->fp) : -1;
+}
+
+static int64_t RETRO_CALLCONV vfs_write(struct retro_vfs_file_handle *h, const void *buf, uint64_t len)
+{
+  if (!h || !buf || h->disc || !h->fp) return -1;
+  return (int64_t)fwrite(buf, 1, (size_t)len, h->fp);
+}
+
+static int RETRO_CALLCONV vfs_flush(struct retro_vfs_file_handle *h)
+{
+  return (h && h->fp) ? fflush(h->fp) : 0;
+}
+
+static int RETRO_CALLCONV vfs_remove(const char *path)
+{
+  return (path && !disc_is_path(path) && DeleteFileA(path)) ? 0 : -1;
+}
+
+static int RETRO_CALLCONV vfs_rename(const char *from, const char *to)
+{
+  return (from && to && !disc_is_path(from) && !disc_is_path(to) && MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING)) ? 0 : -1;
+}
+
+static int64_t RETRO_CALLCONV vfs_truncate(struct retro_vfs_file_handle *h, int64_t length)
+{
+  if (!h || h->disc || !h->fp) return -1;
+  fflush(h->fp);
+  return _chsize_s(_fileno(h->fp), length) == 0 ? 0 : -1;
+}
+
+static struct retro_vfs_interface vfs_iface;
+
 /* ---- the callbacks of the library ---- */
 
 static void RETRO_CALLCONV core_log(enum retro_log_level level, const char *fmt, ...)
@@ -134,6 +269,7 @@ static void RETRO_CALLCONV core_log(enum retro_log_level level, const char *fmt,
     while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = '\0';
   }
   if (strstr(line, "32X startup")) started_32x = 1;
+  if (strstr(line, "cd tray open")) tray_open_seen = 1;
 
   /* The library can say the same thing every frame (an unknown SH-2 opcode, say): after a few hundred lines it is not
      written any more, or every line would be a disk write. */
@@ -284,6 +420,36 @@ static bool RETRO_CALLCONV core_environment(unsigned cmd, void *data)
       return false;                          /* everything else: the library's own defaults */
     }
 
+    case RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE:
+    case RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE:
+      /* The library's own swapping of Mega CD discs (File > Change Disc while a game runs in it). The extended interface starts with the same seven
+         functions as the plain one, so one pointer serves for both. */
+      disk_ctl = (const struct retro_disk_control_callback *)data;
+      return true;
+
+    case RETRO_ENVIRONMENT_GET_VFS_INTERFACE:
+    {
+      struct retro_vfs_interface_info *vi = (struct retro_vfs_interface_info *)data;
+
+      if (!vfs_on || !vi || vi->required_interface_version > 2) return false;
+      memset(&vfs_iface, 0, sizeof(vfs_iface));
+      vfs_iface.get_path = vfs_get_path;
+      vfs_iface.open     = vfs_open;
+      vfs_iface.close    = vfs_close;
+      vfs_iface.size     = vfs_size;
+      vfs_iface.tell     = vfs_tell;
+      vfs_iface.seek     = vfs_seek;
+      vfs_iface.read     = vfs_read;
+      vfs_iface.write    = vfs_write;
+      vfs_iface.flush    = vfs_flush;
+      vfs_iface.remove   = vfs_remove;
+      vfs_iface.rename   = vfs_rename;
+      vfs_iface.truncate = vfs_truncate;
+      vi->required_interface_version = 2;
+      vi->iface = &vfs_iface;
+      return true;
+    }
+
     case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
       if (data) *(bool *)data = vars_dirty ? true : false;
       vars_dirty = 0;
@@ -308,8 +474,6 @@ static bool RETRO_CALLCONV core_environment(unsigned cmd, void *data)
     case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO:
     case RETRO_ENVIRONMENT_SET_MINIMUM_AUDIO_LATENCY:
     case RETRO_ENVIRONMENT_SET_MEMORY_MAPS:
-    case RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE:
-    case RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE:
     case RETRO_ENVIRONMENT_SET_CONTENT_INFO_OVERRIDE:
     case RETRO_ENVIRONMENT_SET_VARIABLES:
       return true;
@@ -355,6 +519,7 @@ static int resolve(void)
     for (i = 0; i < 2 && !rt.dll; i++)
     {
       module_dir(path, sizeof(path));
+      if (lstrlenA(path) + 64 >= (int)sizeof(path)) continue;      /* (a program folder too long for the library's name) */
       lstrcatA(path, dirs[d]);
       lstrcatA(path, names[i]);
       if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) continue;
@@ -386,6 +551,7 @@ static int resolve(void)
   SYM(get_system_av_info,        "retro_get_system_av_info");
   SYM(get_memory_data,           "retro_get_memory_data");
   SYM(get_memory_size,           "retro_get_memory_size");
+  *(FARPROC *)&rt.version = GetProcAddress(rt.dll, "gpex_version");
   *(FARPROC *)&rt.set_mute = GetProcAddress(rt.dll, "gpex_set_mute");
   *(FARPROC *)&rt.set_levels = GetProcAddress(rt.dll, "gpex_set_levels");
   *(FARPROC *)&rt.set_pwm = GetProcAddress(rt.dll, "gpex_set_pwm");
@@ -401,6 +567,29 @@ static int resolve(void)
 #undef SYM
   gui_log("32X library: %s (%s)", path, rt.set_sound_log && rt.memory && rt.set_mute && rt.set_levels ? "complete" : "OLD: it lacks parts this program needs; use the one from the newest zip");
   return 1;
+}
+
+
+/* The version of the library the program was made with: an older file in the Plugins folder (the one of an older zip) still loads, but lacks later fixes. */
+#define PICO_LIB_VERSION 2
+
+static void warn_old_library(void)
+{
+  static int warned;
+  int v = rt.version ? rt.version() : 1;
+  char text[900], folder[GUI_PATH_LEN];
+
+  gui_log("PicoDrive library version %d (this program is made with version %d)", v, PICO_LIB_VERSION);
+  if (v >= PICO_LIB_VERSION || warned) return;
+  warned = 1;
+  module_dir(folder, sizeof(folder));
+  lstrcatA(folder, "Plugins");
+  wsprintfA(text, "The PicoDrive library in the Plugins folder is older than this program (it is version %d, this program is made with version %d).\n\n"
+                  "Games still start, but it lacks later fixes: .chd discs of 32X games do not open, changing the disc while a game runs can crash the program, "
+                  "and a disc in folders with long names can crash it.\n\n"
+                  "Copy %s again from the zip the program came in, into the Plugins folder:\n%s",
+            v, PICO_LIB_VERSION, sizeof(void *) == 8 ? "picodrive_libretro-64.dll" : "picodrive_libretro-32.dll", folder);
+  MessageBoxA(g_hwnd, text, APP_NAME, MB_OK | MB_ICONWARNING);
 }
 
 static void fail(char *err, int len, const char *text)
@@ -450,8 +639,11 @@ int pico_load(const char *path, char *err, int err_len)
     return 0;
   }
 
+  warn_old_library();
+
   if (!veh_handle) veh_handle = AddVectoredExceptionHandler(1, core_exception);
 
+  vfs_on = disc_is_path(path);               /* a disc in a drive: the library reads it through the program (see the file layer above) */
   rt.set_environment(core_environment);
   rt.set_video_refresh(core_video);
   rt.set_audio_sample(core_audio_sample);
@@ -492,13 +684,15 @@ int pico_load(const char *path, char *err, int err_len)
     if (n > 0 && n < sizeof(tmp) && !_strnicmp(path, tmp, n) && !strstr(path, "\\gpexmdp"))          /* (a game unpacked whole stays where it is until it closes) */
     {
       lstrcpynA(keep_path, tmp, sizeof(keep_path));
-      lstrcatA(keep_path, "gpex32x-restart.tmp");
-      if (CopyFileA(path, keep_path, FALSE)) lstrcpynA(last_path, keep_path, sizeof(last_path));
+      if (lstrlenA(keep_path) + 20 < (int)sizeof(keep_path)) lstrcatA(keep_path, "gpex32x-restart.tmp");   /* (a temp path too long for the name: no copy) */
+      else keep_path[0] = '\0';
+      if (keep_path[0] && CopyFileA(path, keep_path, FALSE)) lstrcpynA(last_path, keep_path, sizeof(last_path));
       else keep_path[0] = '\0';
     }
   }
   frames_logged = 0;
   core_lines = 0;
+  tray_open_seen = 0;
   gui_log("32X game loaded in PicoDrive (%d fps, sample rate %d, state size up to %u bytes)", (int)(core_fps + 0.5), run_rate,
           (unsigned)rt.serialize_size());
 
@@ -528,6 +722,46 @@ int pico_load(const char *path, char *err, int err_len)
   return 1;
 }
 
+static void clog_disc_change(const char *path) { gui_log("32X: the disc was changed to %s", path); }
+
+/* File > Change Disc while a Mega CD game runs in PicoDrive (a Mega CD + 32X game: Fahrenheit asks for its second disc, the 32X one, when it finds the
+   32X): the disc image is handed to the library's disc swapping (eject, put the image in the place of the current one, close). 1 when it was taken. */
+int pico_change_disc(const char *path, char *err, int err_len)
+{
+  struct retro_game_info gi;
+  unsigned index;
+
+  fail(err, err_len, "");
+  if (!loaded || !disk_ctl || !disk_ctl->replace_image_index || !disk_ctl->set_eject_state)
+  {
+    fail(err, err_len, "PicoDrive cannot swap discs here.");
+    return 0;
+  }
+  memset(&gi, 0, sizeof(gi));
+  gi.path = path;
+  index = disk_ctl->get_image_index ? disk_ctl->get_image_index() : 0;
+  disk_ctl->set_eject_state(true);
+  if (!disk_ctl->replace_image_index(index, &gi))
+  {
+    disk_ctl->set_eject_state(false);
+    fail(err, err_len, "PicoDrive could not read that disc image (it reads .cue sheets with .bin, .wav or .ogg tracks, .iso and .chd).");
+    return 0;
+  }
+  disk_ctl->set_eject_state(false);
+  clog_disc_change(path);
+  return 1;
+}
+
+
+/* 1 once after the game has opened the disc tray (it asks for another disc: the program then asks the player for it, as it does for the other core). */
+int pico_take_tray_open(void)
+{
+  int r = tray_open_seen;
+
+  tray_open_seen = 0;
+  return loaded ? r : 0;
+}
+
 void pico_unload(void)
 {
   if (!restarting && keep_path[0]) { DeleteFileA(keep_path); keep_path[0] = '\0'; }
@@ -546,6 +780,7 @@ void pico_unload(void)
   }
   if (veh_handle) { RemoveVectoredExceptionHandler(veh_handle); veh_handle = NULL; }
   audio_out = NULL;
+  disk_ctl = NULL;
 }
 
 int pico_active(void)

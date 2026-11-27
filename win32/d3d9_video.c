@@ -173,8 +173,32 @@ static void setup_render_state(void)
   IDirect3DDevice9_SetFVF(device, D3D9_FVF);
 }
 
+static char adapter9_want[96];      /* the graphics card asked for, as a UTF-8 name ("" = Auto) */
+
+void d3d9_set_adapter(const char *name) { lstrcpynA(adapter9_want, name ? name : "", sizeof(adapter9_want)); }
+
+/* The Direct3D 9 number of the card asked for (its description is the name Direct3D 11 lists, in the ANSI code page), or the default one. */
+static UINT adapter9_index(void)
+{
+  WCHAR wide[96];
+  char ansi[192];
+  UINT i, n;
+
+  if (!adapter9_want[0] || !d3d) return D3DADAPTER_DEFAULT;
+  if (!MultiByteToWideChar(CP_UTF8, 0, adapter9_want, -1, wide, 96)) return D3DADAPTER_DEFAULT;
+  if (!WideCharToMultiByte(CP_ACP, 0, wide, -1, ansi, sizeof(ansi), NULL, NULL)) return D3DADAPTER_DEFAULT;
+  n = IDirect3D9_GetAdapterCount(d3d);
+  for (i = 0; i < n; i++)
+  {
+    D3DADAPTER_IDENTIFIER9 id;
+    if (SUCCEEDED(IDirect3D9_GetAdapterIdentifier(d3d, i, 0, &id)) && !lstrcmpiA(id.Description, ansi)) return i;
+  }
+  return D3DADAPTER_DEFAULT;
+}
+
 static int create_device(int w, int h)
 {
+  UINT ad = adapter9_index();
   ZeroMemory(&pp, sizeof(pp));
   pp.Windowed               = TRUE;
   pp.SwapEffect              = D3DSWAPEFFECT_COPY;
@@ -187,10 +211,10 @@ static int create_device(int w, int h)
   if (pp.BackBufferWidth  < 1) pp.BackBufferWidth  = 1;
   if (pp.BackBufferHeight < 1) pp.BackBufferHeight = 1;
 
-  if (FAILED(IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, d3d_hwnd,
+  if (FAILED(IDirect3D9_CreateDevice(d3d, ad, D3DDEVTYPE_HAL, d3d_hwnd,
              D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device)))
   {
-    if (FAILED(IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, d3d_hwnd,
+    if (FAILED(IDirect3D9_CreateDevice(d3d, ad, D3DDEVTYPE_HAL, d3d_hwnd,
                D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device)))
     {
       device = NULL;

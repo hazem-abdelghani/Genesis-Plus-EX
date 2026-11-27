@@ -2,7 +2,7 @@
  *  Genesis Plus EX -- Win32 GUI frontend
  *  Copyright (c) 2026 Hazem Abdelghani
  *
- *  toolbar.c -- flat icon buttons for the ROM browser's toolbar.
+ *  toolbar.c -- flat icon buttons for the game browser's toolbar.
  *
  *  The Refresh and Reset icons follow the Lucide "RefreshCw" and "RotateCcw"
  *  shapes (lucide.dev, ISC license).
@@ -122,6 +122,23 @@ static void draw_icon(Canvas *c, int icon)
       ellipse(c, 12, 12, 9, 0, 2.0);
       ellipse(c, 12, 12, 2.6, 0, 2.0);
       arc(c, 12, 12, 5.9, 250 * d, 200 * d, 1.7);
+      break;
+    }
+
+    case TI_CHIP:      /* a chip: the body, its die and two pins on each side (File > Run Mega CD BIOS: the console's own program) */
+    {
+      static const double pin[2] = { 9.6, 14.4 };
+      int k;
+
+      roundrect(c, 7, 7, 17, 17, 1.6, 0, 1.8);
+      roundrect(c, 10.3, 10.3, 13.7, 13.7, 0.6, 1, 1.0);
+      for (k = 0; k < 2; k++)
+      {
+        line(c, pin[k], 3, pin[k], 7, 1.8);
+        line(c, pin[k], 17, pin[k], 21, 1.8);
+        line(c, 3, pin[k], 7, pin[k], 1.8);
+        line(c, 17, pin[k], 21, pin[k], 1.8);
+      }
       break;
     }
 
@@ -473,6 +490,45 @@ static LRESULT CALLBACK tb_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id,
   return DefSubclassProc(h, m, w, l);
 }
 
+/* A tip window of a toolbar button or of a small button of the search and filter bars: it goes away by itself after a while, even when the pointer stays on the
+   button. (Windows' own timer for that did not hide them: they stayed until the pointer moved.) */
+#define TIP_HIDE_TIMER 0x7A11
+#define TIP_HIDE_MS 8000
+
+static LRESULT CALLBACK tip_hide_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR ref)
+{
+  (void)id; (void)ref;
+  switch (m)
+  {
+    case WM_SHOWWINDOW:
+      if (w) SetTimer(h, TIP_HIDE_TIMER, TIP_HIDE_MS, NULL);
+      else KillTimer(h, TIP_HIDE_TIMER);
+      break;
+
+    case WM_TIMER:
+      if (w == TIP_HIDE_TIMER)
+      {
+        KillTimer(h, TIP_HIDE_TIMER);
+        SendMessageA(h, TTM_POP, 0, 0);
+        return 0;
+      }
+      break;
+
+    case WM_NCDESTROY:
+      KillTimer(h, TIP_HIDE_TIMER);
+      RemoveWindowSubclass(h, tip_hide_proc, 98);
+      break;
+  }
+  return DefSubclassProc(h, m, w, l);
+}
+
+void tb_tip_autohide(HWND tip)
+{
+  if (!tip) return;
+  SendMessageA(tip, TTM_SETDELAYTIME, TTDT_AUTOPOP, 6000);
+  SetWindowSubclass(tip, tip_hide_proc, 98, 0);
+}
+
 HWND tb_button(HWND parent, int id, int icon, const char *tip)
 {
   HWND b = CreateWindowExA(0, "BUTTON", "", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
@@ -490,6 +546,7 @@ HWND tb_button(HWND parent, int id, int icon, const char *tip)
       g_tip = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, NULL,
                               WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
                               0, 0, 0, 0, parent, NULL, g_inst, NULL);
+    if (g_tip && !GetPropA(g_tip, "tbhide")) { tb_tip_autohide(g_tip); SetPropA(g_tip, "tbhide", (HANDLE)1); }
     if (g_tip)
     {
       memset(&ti, 0, sizeof(ti));

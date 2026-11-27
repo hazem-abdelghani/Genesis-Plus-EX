@@ -16,6 +16,7 @@
 #endif
 #include <windows.h>
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <mfapi.h>
@@ -59,7 +60,10 @@ static struct
   volatile LONG done;          /* a GIF has reached its length limit: stop it (not an error) */
   char     path[MAX_PATH * 2];
   char     error[256];
-  int      rate;
+  int      rate;               /* the sample rate of the file (44100 or 48000) */
+  int      src_rate;           /* the sample rate of the game's sound; when it is another one the sound is resampled to `rate` */
+  double   rs_pos;             /* resampler: where the next output sample falls among the input samples (the first one of the next chunk is 0; -1 is the last of the one before) */
+  short    rs_prev[2];         /* the last input pair of the chunk before */
   unsigned fps_x1000;          /* frame rate * 1000 */
   int      canvas_w, canvas_h; /* video output size (even) */
   int      start_sw, start_sh; /* the picture size the recording began with */
@@ -904,6 +908,8 @@ int recorder_start(int mode, const char *path, int sample_rate, double fps)
   memset(&rec, 0, sizeof(rec));
   rec.mode  = mode;
   rec.rate  = (sample_rate == 44100) ? 44100 : 48000;
+  rec.src_rate = sample_rate > 0 ? sample_rate : rec.rate;     /* (a game sound rate of 22050 or 32000 was written as if it were 48000: the sound came out fast and high) */
+  rec.rs_pos = 0.0;
   if (fps < 1.0) fps = 60.0;
   rec.fps_x1000 = (unsigned)(fps * 1000.0 + 0.5);
   lstrcpynA(rec.path, path, sizeof(rec.path));
@@ -927,7 +933,7 @@ int recorder_start(int mode, const char *path, int sample_rate, double fps)
       return 0;
     }
 
-    /* A multiple of the current picture (Settings > Options > Video Recording), sharp when it is the picture's own shape. Fixed for the whole
+    /* A multiple of the current picture (Settings > Video > Video Recording), sharp when it is the picture's own shape. Fixed for the whole
        file: a later change in the game's resolution is letterboxed into it. */
     rec.start_sw = sw;
     rec.start_sh = sh;
@@ -1013,7 +1019,7 @@ void recorder_capture(const short *samples, int frames)
     const unsigned short *px;
     int pitch, w, h, y;
 
-    InterlockedExchangeAdd(&rec.audio_frames_in, frames);   /* only to measure the length */
+    InterlockedExchangeAdd(&rec.audio_frames_in, (LONG)((long long)frames * rec.rate / (rec.src_rate > 0 ? rec.src_rate : rec.rate)));   /* only to measure the length */
     if (rec.audio_frames_in / rec.rate >= GIF_MAX_SECONDS)
     {
       InterlockedExchange(&rec.done, 1);   /* the main loop stops the recording */
@@ -1071,11 +1077,45 @@ void recorder_capture(const short *samples, int frames)
 audio:
   if (samples && frames > 0)
   {
-    void *copy = malloc((size_t)frames * 4);
-    it = (rec_item *)malloc(sizeof(*it));
-    if (!copy || !it) { free(copy); free(it); return; }
+    void *copy;
+    int out_frames = frames;
 
-    memcpy(copy, samples, (size_t)frames * 4);
+    if (rec.src_rate > 0 && rec.src_rate != rec.rate)       /* another sample rate than the file's: linear resampling, carried over from chunk to chunk */
+    {
+      double step = (double)rec.src_rate / (double)rec.rate, pos = rec.rs_pos;
+      size_t cap = (size_t)((double)frames / step) + 4;
+      short *o;
+      size_t n = 0;
+
+      copy = malloc(cap * 4);
+      if (!copy) return;
+      o = (short *)copy;
+      while (pos < (double)(frames - 1) && n < cap)
+      {
+        int i = (int)floor(pos);
+        double fr = pos - (double)i;
+        short al = i < 0 ? rec.rs_prev[0] : samples[i * 2], ar = i < 0 ? rec.rs_prev[1] : samples[i * 2 + 1];
+        short bl = samples[(i + 1) * 2], br = samples[(i + 1) * 2 + 1];
+        o[n * 2]     = (short)((double)al + ((double)bl - (double)al) * fr);
+        o[n * 2 + 1] = (short)((double)ar + ((double)br - (double)ar) * fr);
+        n++;
+        pos += step;
+      }
+      rec.rs_pos = pos - (double)frames;
+      rec.rs_prev[0] = samples[(frames - 1) * 2];
+      rec.rs_prev[1] = samples[(frames - 1) * 2 + 1];
+      out_frames = (int)n;
+      if (out_frames <= 0) { free(copy); return; }
+    }
+    else
+    {
+      copy = malloc((size_t)frames * 4);
+      if (!copy) return;
+      memcpy(copy, samples, (size_t)frames * 4);
+    }
+    it = (rec_item *)malloc(sizeof(*it));
+    if (!it) { free(copy); return; }
+    frames = out_frames;
     it->kind = ITEM_AUDIO; it->w = it->h = 0; it->frames = frames; it->data = copy;
 
     if (!queue_push(it))

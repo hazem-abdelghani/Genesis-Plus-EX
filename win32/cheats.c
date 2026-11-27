@@ -584,6 +584,8 @@ void cheats_hold_for_boot(void)
   boot_hold = BOOT_HOLD_MAX;
 }
 
+static void cs_freeze_apply(void);        /* Cheat Search: the frozen addresses (further down) */
+
 void cheats_ram_update(void)
 {
   uint8 *base;
@@ -601,6 +603,7 @@ void cheats_ram_update(void)
       cheats_apply();                                 /* the game has started (it is being played): the ROM codes go in now */
     }
   }
+  cs_freeze_apply();
   cnt = ram_patches;
 
   while (cnt)
@@ -1490,6 +1493,7 @@ static INT_PTR CALLBACK cheatconv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
           col.pszText = "Code";  col.cx = rc.right - col.cx;         /* the last column fills what is left */
         }
         SendMessageA(list, LVM_INSERTCOLUMNA, 1, (LPARAM)&col);
+        gui_list_header_menu(list);
         {
           HWND header = ListView_GetHeader(list);
           if (header && theme_is_dark()) { SetWindowTheme(header, L"ItemsView", NULL); InvalidateRect(header, NULL, TRUE); }
@@ -1557,7 +1561,7 @@ static void cheats_hint_text(char *out, int out_len)
 {
   if (!emu_running && !emu_rom_filename()[0])
   {
-    lstrcpynA(out, "Load a ROM first: how a code is read depends on the console.", out_len);
+    lstrcpynA(out, "Open a game first: how a code is read depends on the console.", out_len);
   }
   else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
   {
@@ -2388,7 +2392,7 @@ static INT_PTR CALLBACK cheats_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             int k = (int)SendDlgItemMessage(dlg, IDC_CHEATS_FILES, CB_GETCURSEL, 0, 0);
             if (k >= 1 && k <= sim_n)
             {
-              char path[GUI_PATH_LEN], msg[160];
+              char path[MAX_PATH * 2 + 2], msg[MAX_PATH + 64];     /* (a folder and a file name of any length that Windows allows; the message holds the name) */
               int n;
 
               int merge = 0;
@@ -2567,8 +2571,14 @@ static int   cs_size, cs_started, cs_count;
 static int   cs_region_kept;             /* the region chosen last time Cheat Search was open, and for which game: it comes back for the same game */
 static char  cs_region_game[GUI_PATH_LEN];
 static char  cs_scan_game[GUI_PATH_LEN]; /* the game the scan in progress belongs to: closing the window keeps the scan until the game stops */
-static int   cs_mode_kept;               /* the Compare choice and the Value typed, kept with it */
+static int   cs_mode_kept;               /* the Find choice and the Value typed, kept with it */
 static char  cs_value_kept[16];
+static uint16 cs_undo_snap[0x80000], cs_undo_prev[0x80000];     /* the scan as it was before the last Next Scan (one step back) */
+static uint8 cs_undo_ok[0x80000];
+static int   cs_undo_count, cs_undo_valid;
+#define CS_FREEZE_MAX 64
+static struct { int region, wide; uint32 addr; unsigned value; } cs_frozen[CS_FREEZE_MAX];   /* addresses held at a value, each frame, while the game runs */
+static int   cs_frozen_count;
 static int   cs_region;   /* 0 = work RAM, 1 = Mega CD PRG-RAM, 2 = Mega CD Word RAM (2M or 1M mode), 3 = the 32X SDRAM (the SH-2 processors' memory) */
 
 static int cs_md(void)
@@ -2576,15 +2586,75 @@ static int cs_md(void)
   return cheat_md();
 }
 
-static uint8 cs_read(uint32 a)
+static uint8 *cs_base(int region)
 {
   uint32 m;
-  const uint8 *base = cs_region == 1 ? scd.prg_ram : cs_region == 2 ? wordram_window(&m) : cs_region == 3 ? pico_memory(2, NULL) : cheat_wram();
+  return region == 1 ? scd.prg_ram : region == 2 ? wordram_window(&m) : region == 3 ? pico_memory(2, NULL) : cheat_wram();
+}
+
+/* How many bytes of a memory can be addressed now. */
+static uint32 cs_region_size(int region)
+{
+  return region == 3 ? 0x40000 : region == 1 ? 0x80000 : region == 2 ? (cheats_wordram_1m() ? 0x20000 : 0x40000) : cheat_md() ? 0x10000 : 0x2000;
+}
+
+static uint8 cs_read(uint32 a)
+{
+  const uint8 *base = cs_base(cs_region);
   if (!base) return 0;
 #ifdef LSB_FIRST
   if (cs_md()) a ^= 1;   /* the 16-bit consoles' RAM is kept with every pair of bytes swapped */
 #endif
   return base[a];
+}
+
+static void cs_poke(int region, uint32 a, uint8 v)
+{
+  uint8 *base = cs_base(region);
+
+  if (!base || a >= cs_region_size(region)) return;
+#ifdef LSB_FIRST
+  if (cs_md()) a ^= 1;
+#endif
+  base[a] = v;
+}
+
+static int cs_frozen_find(int region, uint32 a)
+{
+  int i;
+
+  for (i = 0; i < cs_frozen_count; i++)
+    if (cs_frozen[i].region == region && cs_frozen[i].addr == a) return i;
+  return -1;
+}
+
+/* A value (one byte or two) into a memory. */
+static void cs_put(int region, uint32 a, int wide, unsigned v)
+{
+  if (wide)
+  {
+    if (cheat_md()) { cs_poke(region, a, (uint8)(v >> 8)); cs_poke(region, a + 1, (uint8)v); }
+    else            { cs_poke(region, a, (uint8)v); cs_poke(region, a + 1, (uint8)(v >> 8)); }
+  }
+  else cs_poke(region, a, (uint8)v);
+}
+
+/* Called each frame (by cheats_ram_update): the frozen addresses are written back, whether or not Enable Cheats is on. */
+static void cs_freeze_apply(void)
+{
+  int i;
+
+  if (netplay_state() != NP_IDLE) return;                      /* (a value only one side holds would desynchronize the game) */
+  for (i = 0; i < cs_frozen_count; i++)
+  {
+    int region = cs_frozen[i].region;
+    uint32 a = cs_frozen[i].addr;
+    unsigned v = cs_frozen[i].value;
+
+    if ((region == 1 || region == 2) && !cheat_mcd()) continue;              /* (a memory the game does not have now) */
+    if (region == 3 && !pico_active()) continue;
+    cs_put(region, a, cs_frozen[i].wide, v);
+  }
 }
 
 /* The value at address a: one byte, or two (big-endian on the Mega Drive, little-endian on the 8-bit consoles). */
@@ -2610,6 +2680,22 @@ static void cs_addr_text(uint32 a, char *out, int len)
   else gui_snprintf(out, len, "%04X", (unsigned)(0xC000 + (a & 0x1FFF)));
 }
 
+#define CS_TIMER_NOTE 7
+static void cs_show_status(void);
+
+/* The line at the bottom: cs_set_text is a message about what was just done (it goes after a few seconds, back to the state of the search),
+   cs_set_text_keep stays until the next action. */
+static void cs_set_text_keep(const char *fmt, ...)
+{
+  char buf[160];
+  va_list ap;
+  va_start(ap, fmt);
+  wvsprintfA(buf, fmt, ap);
+  va_end(ap);
+  KillTimer(cs_dlg, CS_TIMER_NOTE);
+  SetDlgItemTextA(cs_dlg, IDC_CS_COUNT, buf);
+}
+
 static void cs_set_text(const char *fmt, ...)
 {
   char buf[160];
@@ -2618,6 +2704,35 @@ static void cs_set_text(const char *fmt, ...)
   wvsprintfA(buf, fmt, ap);
   va_end(ap);
   SetDlgItemTextA(cs_dlg, IDC_CS_COUNT, buf);
+  SetTimer(cs_dlg, CS_TIMER_NOTE, 5000, NULL);
+}
+
+/* The Frozen column of an address: the value it is held at, or nothing. */
+static void cs_frozen_text(int a, char *out, int len)
+{
+  int f = cs_frozen_find(cs_region, (uint32)a);
+
+  if (f >= 0) gui_snprintf(out, len, "%u", cs_frozen[f].value);
+  else out[0] = '\0';
+}
+
+static void cs_update_freeze_buttons(void)
+{
+  HWND list = GetDlgItem(cs_dlg, IDC_CS_LIST);
+  int sel = ListView_GetNextItem(list, -1, LVNI_SELECTED), frozen = 0;
+
+  if (sel >= 0)
+  {
+    LVITEMA it;
+
+    ZeroMemory(&it, sizeof(it));
+    it.mask = LVIF_PARAM;
+    it.iItem = sel;
+    SendMessageA(list, LVM_GETITEMA, 0, (LPARAM)&it);
+    frozen = cs_frozen_find(cs_region, (uint32)it.lParam) >= 0;
+  }
+  SetDlgItemTextA(cs_dlg, IDC_CS_FREEZE, frozen ? "Unfreeze" : "Freeze");
+  EnableWindow(GetDlgItem(cs_dlg, IDC_CS_UNFREEZEALL), cs_frozen_count > 0);
 }
 
 static void cs_fill_list(void)
@@ -2651,6 +2766,10 @@ static void cs_fill_list(void)
       gui_snprintf(t, sizeof(t), "%u", (unsigned)cs_prev[a]);
       it.pszText = t;
       SendMessageA(list, LVM_SETITEMTEXTA, (WPARAM)row, (LPARAM)&it);
+      it.iSubItem = 3;
+      cs_frozen_text(a, t, sizeof(t));
+      it.pszText = t;
+      SendMessageA(list, LVM_SETITEMTEXTA, (WPARAM)row, (LPARAM)&it);
       row++;
     }
   }
@@ -2658,12 +2777,20 @@ static void cs_fill_list(void)
   InvalidateRect(list, NULL, TRUE);
 
   EnableWindow(GetDlgItem(cs_dlg, IDC_CS_SEARCH), cs_started && cs_count > 0);   /* nothing to narrow down yet */
+  EnableWindow(GetDlgItem(cs_dlg, IDC_CS_UNDO), cs_started && cs_undo_valid);   /* a Next Scan to take back */
+  cs_update_freeze_buttons();
   /* Enter does the next step: Next Scan once there is something to narrow down, else First Scan. */
   SendMessage(cs_dlg, DM_SETDEFID, (cs_started && cs_count > 0) ? IDC_CS_SEARCH : IDC_CS_NEW, 0);
-  if (!cs_started) cs_set_text("Click First Scan to begin.");
-  else if (cs_count == 0) cs_set_text("Nothing found. Click First Scan to start over.");
-  else if (cs_count <= CS_MAX_SHOWN) cs_set_text("%d address%s left.", cs_count, cs_count == 1 ? "" : "es");
-  else cs_set_text("%d addresses: click Next Scan to narrow it down.", cs_count);
+  cs_show_status();
+}
+
+/* The state of the search, as a line. */
+static void cs_show_status(void)
+{
+  if (!cs_started) cs_set_text_keep("Click First Scan to begin.");
+  else if (cs_count == 0) cs_set_text_keep("Nothing found. Click First Scan to start over.");
+  else if (cs_count <= CS_MAX_SHOWN) cs_set_text_keep("%d address%s left.", cs_count, cs_count == 1 ? "" : "es");
+  else cs_set_text_keep("%d addresses: click Next Scan to narrow it down.", cs_count);
 }
 
 static void cs_new(void)
@@ -2682,6 +2809,7 @@ static void cs_new(void)
     cs_count += cs_ok[a];
   }
   cs_started = 1;
+  cs_undo_valid = 0;
   lstrcpynA(cs_scan_game, emu_rom_path(), sizeof(cs_scan_game));
   cs_fill_list();
 }
@@ -2698,8 +2826,21 @@ static void cs_search(void)
     GetDlgItemTextA(cs_dlg, IDC_CS_VALUE, buf, sizeof(buf));
     if (!buf[0]) { cs_set_text("Type the value to look for."); return; }
     val = atoi(buf);
-    if (val < 0 || val > (cs_wide ? 65535 : 255)) { cs_set_text(cs_wide ? "Only values from 0 to 65535 can be searched." : "Only values from 0 to 255 can be searched."); return; }
+    if (!cs_wide && val > 255 && val <= 65535)      /* too big for one byte: offered as a two-byte search (a new scan) */
+    {
+      if (MessageBoxA(cs_dlg, "That value does not fit in 1 byte (0 to 255).\n\nSearch for it as a 2-byte value instead? This starts a new scan with Size 2 bytes.", "Cheat Search", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+      cs_wide = 1;
+      SendDlgItemMessage(cs_dlg, IDC_CS_SIZE, CB_SETCURSEL, 1, 0);
+      cs_new();
+    }
+    if (val < 0 || val > (cs_wide ? 65535 : 255)) { cs_set_text(cs_wide ? "Only values from 0 to 65535 can be searched (a 2-byte value is the largest)." : "Only values from 0 to 255 fit in 1 byte: choose Size 2 bytes for larger ones."); return; }
   }
+
+  memcpy(cs_undo_snap, cs_snap, (size_t)cs_size * sizeof(cs_snap[0]));
+  memcpy(cs_undo_prev, cs_prev, (size_t)cs_size * sizeof(cs_prev[0]));
+  memcpy(cs_undo_ok, cs_ok, (size_t)cs_size);
+  cs_undo_count = cs_count;
+  cs_undo_valid = 1;
 
   for (a = 0; a < cs_size; a++)
   {
@@ -2723,6 +2864,141 @@ static void cs_search(void)
   cs_fill_list();
 }
 
+static void cs_undo(void)
+{
+  if (!cs_started || !cs_undo_valid) return;
+  memcpy(cs_snap, cs_undo_snap, (size_t)cs_size * sizeof(cs_snap[0]));
+  memcpy(cs_prev, cs_undo_prev, (size_t)cs_size * sizeof(cs_prev[0]));
+  memcpy(cs_ok, cs_undo_ok, (size_t)cs_size);
+  cs_count = cs_undo_count;
+  cs_undo_valid = 0;
+  cs_fill_list();
+  cs_set_text("Last Next Scan undone: %d address%s.", cs_count, cs_count == 1 ? "" : "es");
+}
+
+/* Freeze: the selected address is held at the Set to value (its value now when that is empty), each frame, until Unfreeze. */
+static void cs_toggle_freeze(void)
+{
+  HWND list = GetDlgItem(cs_dlg, IDC_CS_LIST);
+  int sel = ListView_GetNextItem(list, -1, LVNI_SELECTED), f;
+  LVITEMA it;
+  char vtxt[16], t[16];
+  int val;
+
+  if (sel < 0) { cs_set_text("Select an address in the list first."); return; }
+  ZeroMemory(&it, sizeof(it));
+  it.mask = LVIF_PARAM;
+  it.iItem = sel;
+  SendMessageA(list, LVM_GETITEMA, 0, (LPARAM)&it);
+
+  f = cs_frozen_find(cs_region, (uint32)it.lParam);
+  if (f >= 0)
+  {
+    cs_frozen[f] = cs_frozen[--cs_frozen_count];
+    cs_set_text("Unfrozen.");
+  }
+  else
+  {
+    GetDlgItemTextA(cs_dlg, IDC_CS_SETVAL, vtxt, sizeof(vtxt));
+    val = vtxt[0] ? atoi(vtxt) : (int)cs_cur((uint32)it.lParam);
+    if (val < 0 || val > (cs_wide ? 65535 : 255)) { cs_set_text(cs_wide ? "Set to: 0 to 65535." : "Set to: 0 to 255 (choose Size 2 bytes for larger values)."); return; }
+    if (netplay_state() != NP_IDLE) { cs_set_text("Not while netplay is on: the other player would not see it."); return; }
+    if (cs_frozen_count >= CS_FREEZE_MAX) { cs_set_text("Too many frozen addresses (%d): unfreeze some first.", CS_FREEZE_MAX); return; }
+    cs_frozen[cs_frozen_count].region = cs_region;
+    cs_frozen[cs_frozen_count].addr = (uint32)it.lParam;
+    cs_frozen[cs_frozen_count].wide = cs_wide;
+    cs_frozen[cs_frozen_count].value = (unsigned)val;
+    cs_frozen_count++;
+    cs_set_text("Frozen at %d: the game cannot change it until you click Unfreeze.", val);
+  }
+  cs_frozen_text((int)it.lParam, t, sizeof(t));
+  it.mask = LVIF_TEXT;
+  it.iSubItem = 3;
+  it.pszText = t;
+  SendMessageA(list, LVM_SETITEMTEXTA, (WPARAM)sel, (LPARAM)&it);
+  cs_update_freeze_buttons();
+}
+
+/* A double click on a row: the Change Value window; the number goes into that address once (the game is free to change it again). */
+static INT_PTR CALLBACK cs_change_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+  switch (msg)
+  {
+    case WM_INITDIALOG:
+      SetWindowLongPtr(dlg, DWLP_USER, lp);
+      theme_apply_to_window(dlg);
+      SendDlgItemMessage(dlg, IDC_CS_CHANGE_EDIT, EM_LIMITTEXT, 5, 0);
+      SetDlgItemTextA(dlg, IDC_CS_CHANGE_EDIT, (const char *)lp);
+      SendDlgItemMessage(dlg, IDC_CS_CHANGE_EDIT, EM_SETSEL, 0, -1);
+      SetFocus(GetDlgItem(dlg, IDC_CS_CHANGE_EDIT));
+      return FALSE;                                  /* (the focus is set here) */
+
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    {
+      HBRUSH br = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
+      if (br) return (LRESULT)br;
+      break;
+    }
+
+    case WM_COMMAND:
+      if (LOWORD(wp) == IDOK)
+      {
+        char *text = (char *)GetWindowLongPtr(dlg, DWLP_USER), buf[16];
+        int v;
+
+        GetDlgItemTextA(dlg, IDC_CS_CHANGE_EDIT, buf, sizeof(buf));
+        v = atoi(buf);
+        if (!buf[0] || v < 0 || v > (cs_wide ? 65535 : 255))
+        {
+          MessageBoxA(dlg, cs_wide ? "Type a number from 0 to 65535." : "Type a number from 0 to 255 (a larger value needs Size 2 bytes).", "Change Value", MB_OK | MB_ICONINFORMATION);
+          SetFocus(GetDlgItem(dlg, IDC_CS_CHANGE_EDIT));
+          return TRUE;
+        }
+        lstrcpynA(text, buf, 16);
+        EndDialog(dlg, IDOK);
+        return TRUE;
+      }
+      if (LOWORD(wp) == IDCANCEL) { EndDialog(dlg, IDCANCEL); return TRUE; }
+      break;
+  }
+  return FALSE;
+}
+
+static void cs_change_value(int sel)
+{
+  HWND list = GetDlgItem(cs_dlg, IDC_CS_LIST);
+  LVITEMA it;
+  char text[16], t[16];
+  int val;
+
+  if (sel < 0 || !emu_running) return;
+  if (netplay_state() != NP_IDLE) { cs_set_text("Not while netplay is on: the other player would not see it."); return; }
+  ZeroMemory(&it, sizeof(it));
+  it.mask = LVIF_PARAM;
+  it.iItem = sel;
+  SendMessageA(list, LVM_GETITEMA, 0, (LPARAM)&it);
+  gui_snprintf(text, sizeof(text), "%u", cs_cur((uint32)it.lParam));
+  if (gui_modal(gui.large_ui ? IDD_CS_CHANGE_LARGE : IDD_CS_CHANGE, cs_dlg, cs_change_proc, (LPARAM)text) != IDOK) return;
+  val = atoi(text);
+  cs_put(cs_region, (uint32)it.lParam, cs_wide, (unsigned)val);
+  gui_snprintf(t, sizeof(t), "%u", cs_cur((uint32)it.lParam));
+  it.mask = LVIF_TEXT;
+  it.iSubItem = 1;
+  it.pszText = t;
+  SendMessageA(list, LVM_SETITEMTEXTA, (WPARAM)sel, (LPARAM)&it);
+  cs_set_text("Changed to %d. The game can change it again (Freeze holds it).", val);
+}
+
+static void cs_unfreeze_all(void)
+{
+  cs_frozen_count = 0;
+  cs_fill_list();
+  cs_set_text("Everything unfrozen.");
+}
+
 static void cs_add_cheat(void)
 {
   HWND list = GetDlgItem(cs_dlg, IDC_CS_LIST);
@@ -2740,7 +3016,7 @@ static void cs_add_cheat(void)
   GetDlgItemTextA(cs_dlg, IDC_CS_SETVAL, vtxt, sizeof(vtxt));
   if (!vtxt[0]) { cs_set_text("Type the value to hold in Set to."); return; }
   val = atoi(vtxt);
-  if (val < 0 || val > (cs_wide ? 65535 : 255)) { cs_set_text(cs_wide ? "Set to: 0 to 65535." : "Set to: 0 to 255."); return; }
+  if (val < 0 || val > (cs_wide ? 65535 : 255)) { cs_set_text(cs_wide ? "Set to: 0 to 65535." : "Set to: 0 to 255 (choose Size 2 bytes for larger values)."); return; }
 
   cs_addr_text((uint32)it.lParam, addr, sizeof(addr));
   GetDlgItemTextA(cs_dlg, IDC_CS_NAME, name, sizeof(name));
@@ -2804,11 +3080,14 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
       {
         { IDC_CS_REGION, "Memory:", "Which memory to search. Work RAM is where most games keep lives, health and score; a Mega CD game can also use the CD's own memory, and a 32X game its SDRAM (the memory of the two SH-2 processors, codes 06aaaaaa:dd). Word RAM is searched in whichever mode the game has it (in its 1M mode only the half the main CPU has at that moment is seen). Changing it starts a new search." },
         { IDC_CS_SIZE, "Size:", "How big the value is: 1 byte (0 to 255: lives, ammo) or 2 bytes (0 to 65535: score, money). A 2-byte value is saved as two cheats. Changing it starts a new search." },
-        { IDC_CS_MODE, "Compare:", "How to compare each remaining address with the last time you searched." },
-        { IDC_CS_VALUE, "Value:", "For \"Equal to Value\": the number the game shows now (lives, ammo ...)." },
+        { IDC_CS_MODE, "Find:", "What to look for among the remaining addresses, compared with the last time you searched." },
+        { IDC_CS_VALUE, "Value:", "For Find \"Equal to Value\": the number the game shows now (lives, ammo ...)." },
         { IDC_CS_NEW, NULL, "Start over: remember the memory as it is now (do this first)." },
         { IDC_CS_SEARCH, NULL, "Keep only the addresses that match; repeat until a few are left. Available after a First Scan." },
-        { IDC_CS_LIST, NULL, "The addresses left. The value is what is there now." },
+        { IDC_CS_UNDO, NULL, "Take back the last Next Scan: the addresses come back as they were before it (one step)." },
+        { IDC_CS_FREEZE, NULL, "Hold the selected address at the Set to value, each frame, so the game cannot change it (lives that do not go down ...). Click again (Unfreeze) to let it go. Works without adding a cheat, and ends when the game stops." },
+        { IDC_CS_UNFREEZEALL, NULL, "Let go of every frozen address." },
+        { IDC_CS_LIST, NULL, "The addresses left. The value is what is there now. Double-click a row to change its value." },
         { IDC_CS_NAME, "Name:", "A name for the cheat." },
         { IDC_CS_SETVAL, "Set to:", "The value the cheat keeps the address at (0 to 255, or up to 65535 with Size 2 bytes)." },
         { IDC_CS_ADD, NULL, "Add the selected address to the Cheats list as a RAM cheat." },
@@ -2820,8 +3099,8 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
       theme_apply_to_window(dlg);
       SetDlgItemTextA(dlg, IDC_CS_HELP,
         "Finds where a value (lives, health, ammo, or with Size 2 bytes a score) is kept. 1. First Scan. 2. Change it in the game "
-        "(lose a life ...). 3. Choose Compare (and Value), click Next Scan; repeat until a few addresses are left. "
-        "4. Select one, type the value to hold in Set to, Add Cheat.");
+        "(lose a life ...). 3. Choose what to Find (and the Value), click Next Scan (Undo Scan takes it back); repeat until a few addresses are left. "
+        "4. Select one, type the value to hold in Set to, then Add Cheat, or double-click it to change its value, or Freeze it, to try it at once.");
       for (i = 0; i < 2; i++) SendDlgItemMessageA(dlg, IDC_CS_SIZE, CB_ADDSTRING, 0, (LPARAM)sizes[i]);
       if (cs_started && lstrcmpiA(cs_scan_game, emu_rom_path())) cs_started = 0;       /* a scan of another game is gone */
       if (!cs_started) cs_wide = 0;
@@ -2840,12 +3119,14 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
       GetClientRect(list, &rc);
       ZeroMemory(&col, sizeof(col));
       col.mask = LVCF_TEXT | LVCF_WIDTH;
-      col.pszText = "Address";  col.cx = (rc.right - rc.left) * 36 / 100;
+      col.pszText = "Address";  col.cx = (rc.right - rc.left) * 28 / 100;
       SendMessageA(list, LVM_INSERTCOLUMNA, 0, (LPARAM)&col);
-      col.pszText = "Value now"; col.cx = (rc.right - rc.left) * 30 / 100;
+      col.pszText = "Value now"; col.cx = (rc.right - rc.left) * 24 / 100;
       SendMessageA(list, LVM_INSERTCOLUMNA, 1, (LPARAM)&col);
-      col.pszText = "Before";  col.cx = (rc.right - rc.left) * 30 / 100;
+      col.pszText = "Before";  col.cx = (rc.right - rc.left) * 24 / 100;
       SendMessageA(list, LVM_INSERTCOLUMNA, 2, (LPARAM)&col);
+      col.pszText = "Frozen";  col.cx = (rc.right - rc.left) * 22 / 100;
+      SendMessageA(list, LVM_INSERTCOLUMNA, 3, (LPARAM)&col);
       gui_list_header_menu(list);
       theme_apply_to_window(dlg);
       {
@@ -2856,6 +3137,10 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
       cs_fill_list();
       return TRUE;
     }
+
+    case WM_TIMER:
+      if (wp == CS_TIMER_NOTE) { cs_show_status(); return TRUE; }
+      break;
 
     case WM_CTLCOLORDLG:
     case WM_CTLCOLOREDIT:
@@ -2879,9 +3164,15 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
         SetWindowLongPtr(dlg, DWLP_MSGRESULT, hr);
         return TRUE;
       }
+      if (hdr->idFrom == IDC_CS_LIST && hdr->code == NM_DBLCLK)
+      {
+        cs_change_value(((NMITEMACTIVATE *)lp)->iItem);
+        return TRUE;
+      }
       if (hdr->idFrom == IDC_CS_LIST && hdr->code == LVN_ITEMCHANGED)
       {
         NMLISTVIEW *nm = (NMLISTVIEW *)lp;
+        if ((nm->uChanged & LVIF_STATE) && ((nm->uNewState ^ nm->uOldState) & LVIS_SELECTED)) cs_update_freeze_buttons();
         if ((nm->uChanged & LVIF_STATE) && (nm->uNewState & LVIS_SELECTED))
         {
           LVITEMA it;
@@ -2924,6 +3215,9 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
           return TRUE;
         case IDC_CS_NEW:    cs_new(); return TRUE;
         case IDC_CS_SEARCH: cs_search(); return TRUE;
+        case IDC_CS_UNDO:   cs_undo(); return TRUE;
+        case IDC_CS_FREEZE: cs_toggle_freeze(); return TRUE;
+        case IDC_CS_UNFREEZEALL: cs_unfreeze_all(); return TRUE;
         case IDC_CS_ADD:    cs_add_cheat(); return TRUE;
         case IDCANCEL:
         case IDOK:
@@ -2937,6 +3231,7 @@ static INT_PTR CALLBACK cheatsearch_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
       return TRUE;
 
     case WM_DESTROY:
+      KillTimer(dlg, CS_TIMER_NOTE);
       cs_mode_kept = (int)SendDlgItemMessage(dlg, IDC_CS_MODE, CB_GETCURSEL, 0, 0);
       if (cs_mode_kept < 0) cs_mode_kept = 0;
       GetDlgItemTextA(dlg, IDC_CS_VALUE, cs_value_kept, sizeof(cs_value_kept));
@@ -2956,7 +3251,33 @@ void dlg_cheat_search(HWND parent)
   }
   cs_dlg = CreateDialogParamA(g_inst, MAKEINTRESOURCEA(gui.large_ui ? IDD_CHEATSEARCH_LARGE : IDD_CHEATSEARCH),
                               parent, cheatsearch_proc, 0);
-  if (cs_dlg) { gui_center_window(cs_dlg); gui_window_icon(cs_dlg); ShowWindow(cs_dlg, SW_SHOW); }
+  if (cs_dlg)
+  {
+    /* Beside the program's window (to its right; to its left when there is no room; else at the screen's edge), so the game stays in view. */
+    RECT mr, cr, wa;
+    MONITORINFO mi;
+    int w, h, x, y;
+
+    gui_fit_window(cs_dlg);                      /* (a window taller than the screen is made smaller, and scrolls) */
+    GetWindowRect(parent, &mr);
+    GetWindowRect(cs_dlg, &cr);
+    w = cr.right - cr.left;
+    h = cr.bottom - cr.top;
+    ZeroMemory(&mi, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfo(MonitorFromWindow(parent, MONITOR_DEFAULTTONEAREST), &mi)) wa = mi.rcWork;
+    else SystemParametersInfo(SPI_GETWORKAREA, 0, &wa, 0);
+    x = mr.right + 4;
+    if (x + w > wa.right) x = mr.left - w - 4;
+    if (x < wa.left) x = wa.right - w;
+    if (x < wa.left) x = wa.left;
+    y = mr.top;
+    if (y + h > wa.bottom) y = wa.bottom - h;
+    if (y < wa.top) y = wa.top;
+    SetWindowPos(cs_dlg, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    gui_window_icon(cs_dlg);
+    ShowWindow(cs_dlg, SW_SHOW);
+  }
 }
 
 int cheat_search_message(MSG *msg)
@@ -2968,6 +3289,7 @@ int cheat_search_message(MSG *msg)
 void cheat_search_close(void)
 {
   cs_started = 0;
+  cs_frozen_count = 0;                        /* (frozen addresses belong to the game that ran) */
   if (cs_dlg) DestroyWindow(cs_dlg);
 }
 
@@ -2977,7 +3299,7 @@ void cheat_search_invalidate(void)
   cs_started = 0;
   if (!cs_dlg) return;
   cs_fill_list();
-  cs_set_text("The game was reset or a state was loaded: click First Scan to start again.");
+  cs_set_text_keep("The game was reset or a state was loaded: click First Scan to start again.");
 }
 
 /* While a modal window (Settings, Controls ...) is open the search window is switched off too, so

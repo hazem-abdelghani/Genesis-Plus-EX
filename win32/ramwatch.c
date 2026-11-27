@@ -408,7 +408,7 @@ static int rw_edit_dialog(HWND parent, watch_t *w, int is_new, int *set, unsigne
 {
   static int registered;
   edit_t e;
-  MSG msg;
+  MSG msg = { 0 };
   RECT pr, r;
   char t[64];
   DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
@@ -664,6 +664,7 @@ static LRESULT CALLBACK rw_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
       col.fmt = LVCFMT_LEFT; col.cx = S(100); col.pszText = (char *)"Address"; SendMessageA(rw_lv, LVM_INSERTCOLUMNA, 0, (LPARAM)&col);
       col.cx = S(110); col.pszText = (char *)"Value"; SendMessageA(rw_lv, LVM_INSERTCOLUMNA, 1, (LPARAM)&col);
       col.cx = S(220); col.pszText = (char *)"Note"; SendMessageA(rw_lv, LVM_INSERTCOLUMNA, 2, (LPARAM)&col);
+      gui_list_header_menu(rw_lv);
       for (i = 0; i < IDC_RW_BTNS; i++)
       {
         rw_btn[i] = CreateWindowExA(0, "BUTTON", rw_btn_text[i], WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 10, 10, h,

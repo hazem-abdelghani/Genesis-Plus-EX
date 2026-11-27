@@ -35,6 +35,8 @@ static void tmp_state_path(char *out, int n)
   snprintf(out, (size_t)n, "%sgpexmovie.tmp", d);
 }
 
+int movie_busy(void) { return rec != NULL || play != NULL; }       /* recording or playing an input recording */
+
 void movie_stop(void)
 {
   if (rec)

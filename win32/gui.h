@@ -14,7 +14,7 @@
 #define APP_NAME    "Genesis Plus EX"
 #define APP_NAME_W  L"Genesis Plus EX"
 #define APP_CLASS   "GenesisPlusEXWindow"
-#define APP_VERSION "3.2.0"
+#define APP_VERSION "3.3.0"
 #ifdef _WIN64
 #define APP_BITS    "64-bit"
 #else
@@ -77,6 +77,7 @@ extern void emu_apply_audio_settings(void);
 
 /* Writes to the status bar's message pane. */
 extern void gui_status(const char *fmt, ...);
+extern void gui_progress(int per_mille);   /* a progress bar beside the status bar message (0..1000), -1 takes it away */
 extern void gui_status_persistent(const char *fmt, ...);
 extern void gui_status_slot(const char *text);
 
@@ -92,6 +93,7 @@ extern int  cheats_count(void);
 extern void gui_diag_start(void);                  /* log the frame rate and sound queue for a few seconds (when logging is on) */
 extern void gui_pad_back(const char *name);        /* a pad is connected again: resumes a game paused by gui_pad_lost */
 extern void gui_pad_lost(const char *name);        /* Player 1's pad went away: pauses when asked to */
+extern void taskbar_button_created(void);                          /* Explorer made the taskbar button again (it restarted): the progress bar is said again */
 extern void taskbar_progress(HWND hwnd, int mode, int pct);   /* green bar on the taskbar button: 0 none, 1 pct, 2 moving */
 extern void gui_log(const char *fmt, ...);          /* one line in genesis-plus-ex.log, when logging is on */
 extern double video_display_aspect(void);          /* width over height the picture is drawn in, 0 = fills the window */
@@ -112,6 +114,7 @@ extern void  video_deinterlace(void);    /* Interlaced Mode > Double Field: remo
 extern void  video_repaint(HDC hdc);     /* redraw from WM_PAINT */
 extern void  video_set_ntsc(int mode);   /* 0 off, 1 composite, 2 s-video, 3 rgb */
 extern void  video_viewport_changed(void);
+extern void  video_picture_refresh(void);     /* draw the last picture again after a change of the render filter or the Scaling Filter (no clearing) */
 extern int  gui_list_header_width(HWND list, int col);   /* the width the title of a column needs (room for the sort arrow included) */
 extern const char *video_scaling_path(int *note);   /* what really scales the picture (Direct3D 11 shader, Bilinear fallback ...); *note: 1 when it is not what was chosen */
 extern int   gui_pico_unsupported(int id);     /* 1: does nothing for the 32X game that is running (grayed out) */
@@ -134,18 +137,22 @@ extern void  video_show_notice(const char *text, int ms);
 extern void  video_osd_font_changed(void);     /* Font Size under Settings > OSD */
 extern int   rewind_set_memory(int mb);                      /* the history's size; 0 = not enough memory */
 extern int  extras_make_shortcut(const char *rom_path, int start_menu);
+extern int  gui_pick_folder_window(HWND owner, const char *title, char *out, int out_len);   /* the folder picker in the window of Open ROM (Select button); -1: not available */
 extern int  gui_pick_folder(HWND parent, const char *title, char *out, int out_len);   /* the folder picker (Browse for Folder) */
 extern void emu_insert_disc(void);                    /* File > Change Disc... */
 extern void emu_save_state_file(const char *path);     /* a state in a file of the player's choice */
 extern void emu_load_state_file(const char *path);
 extern void browser_density_changed(void);
+#define WM_APP_EXCL_LEAVE (WM_APP + 44)     /* video.c: the true exclusive fullscreen window lost the focus / was closed: leave it */
 #define WM_APP_PICOSCAN (WM_APP + 43)       /* browser.c: the thread that looks for Sega Pico games has an answer */
 extern void browser_pico_done(LPARAM result);
 extern int   rewind_status(void);                            /* frames of history left */
 extern void  video_show_rewind(int permille, int tenths);   /* the rewind timeline bar, shown for a moment */
 extern void  video_get_output_rect(RECT *dest, int *src_w, int *src_h);
 extern void  video_set_fullscreen(int on);
+extern void  video_fullscreen_refit(void);      /* the screen changed (a monitor went, a mode changed): a fullscreen window takes the monitor's rectangle again */
 extern void  video_report_fps(int fps);
+extern void  video_timing_text(int whole, char *out, size_t n);   /* the log line for the frame timing: the last second (0) or the whole game (1) */
 
 /* Built-in render filters (filters.c). Filters are addressed by index into a
    fixed table; -1 means "no filter". */
@@ -174,6 +181,20 @@ extern int  waveout_list_devices(char names[][96], int max);
 extern unsigned video_bar_color(void);                      /* 0xRRGGBB of the bars around the picture */
 extern void video_adjust_changed(void);
 extern void video_restore_display_mode(void);
+extern int  video_monitor_list(char names[][96], int max);     /* the monitors, for Settings > Video > Fullscreen Monitor */
+extern int  video_monitor_chosen(void);                         /* position of the chosen one in that list, -1 = where the window is */
+extern void video_monitor_choose(int k);
+extern void video_exclusive_leave(void);        /* leave True Exclusive Fullscreen (the game stays borderless fullscreen) */
+extern int  video_exclusive_owns(HWND h);
+extern int  video_exclusive_active(void);
+extern int  video_vrr_wanted(void);
+extern int  video_renderer_working(void);       /* the chosen renderer is up (a renderer that could not start leaves the classic one drawing) */
+extern void video_vrr_changed(void);           /* Variable Refresh Rate switched: the swap chain is made again */
+extern int  video_dx_vrr_active(void);          /* ... and its swap chain was made for variable refresh */
+extern void video_dx_show_surface(int on);      /* hide (0) or show (1) the window the Direct3D picture is drawn in */
+extern int  video_dx_shader_device(void **dev); /* the device a shader chain is made for (an ID3D11Device or ID3D12Device); 0 when the renderer is not up */
+extern int  video_dx_load_shader(const char *path);   /* load the shader preset against it */              /* Variable Refresh Rate on and usable: it is off while Fullscreen Mode is True Exclusive Fullscreen */
+extern void video_match_refresh(void);          /* Exclusive Fullscreen + Match Screen Refresh Rate to the Game: switch the screen to 50 or 60 Hz for the running game */
 extern int  video_fullscreen_modes(int *ws, int *hs, int max);
 extern int  gui_slider_step(int id);                                /* how much one notch of a Picture Adjustments slider changes it */
 extern int  gui_slider_range(int id, int *lo, int *hi, int *def);   /* a Picture Adjustments slider: 1 if id is one */
@@ -227,6 +248,11 @@ extern int  dbgmem_get(int kind, int off);                 /* one byte of a memo
 extern void dbgmem_put(int kind, int off, int value);      /* changes one byte (the video memories the way the chip would) */
 extern HFONT dbg_ui_font(void);                            /* the look of the debug windows: the program's text font, */
 extern HFONT dbg_mono_font(void);                          /* and a fixed-width one of about the same size */
+extern int  archive_pick_window(HWND owner, const char *archive, const char *const *names, const unsigned *sizes, int n);   /* archivepick.c: which of the games of an archive to play (-1: none) */
+extern void gui_scroll_area(HWND area, int min_h);          /* scrollfit.c: a part of a window (a page of Settings) that scrolls by itself */
+extern int  gui_scroll_x(HWND w);                           /* how far such a part is scrolled (its painting needs it) */
+extern int  gui_scroll_y(HWND w);
+extern void gui_fit_window(HWND w);                          /* scrollfit.c: no bigger than the screen's work area, and scroll bars when controls lie outside the window */
 extern int  dbg_scale(int px);                             /* a size in pixels as it would be at the Classic style's normal text size, scaled to the text size now */
 extern HWND dbg_tips_new(HWND parent);                     /* tooltips of a debug window: one tooltip window, and a tip on a control by dbg_tip */
 extern void dbg_tip(HWND tt, HWND parent, HWND ctl, const char *text);
@@ -269,20 +295,20 @@ extern void ramsearch_enable(int on);
 extern void ramwatch_add(unsigned addr, int nbytes, int type);   /* a watch from the RAM Search */
 extern void ramwatch_open(HWND parent);                    /* Tools > Debug > RAM Watch (ramwatch.c) */
 extern int  ramwatch_message(MSG *msg);
-extern void picobook_show(int page);        /* Sega Pico: the window with the picture of the open page of the book (picobook.c) */
-extern void picobook_close(void);
-extern void picobook_show_closed(void);      /* a Sega Pico game was loaded: page 0 is shown if it has a picture */
-extern int  picobook_owns(HWND h);
-extern int  picobook_active(void);
-extern void picobook_main_minimized(int minimized);     /* the program's window was minimized (1) or brought back (0): the Storyware window goes with it */
-extern void picobook_retheme(void);
+extern void storyware_show(int page);        /* Sega Pico: the window with the picture of the open page of the book (storyware.c) */
+extern void storyware_close(void);
+extern void storyware_show_closed(void);      /* a Sega Pico game was loaded: page 0 is shown if it has a picture */
+extern int  storyware_owns(HWND h);
+extern int  storyware_active(void);
+extern void storyware_main_minimized(int minimized);     /* the program's window was minimized (1) or brought back (0): the Storyware window goes with it */
+extern void storyware_retheme(void);
 extern void picopcm_attach(void);           /* Sega Pico voices (picopcm.c): put in after system_init, reset with system_reset, run from render_line, mixed after audio_update */
 extern void picopcm_reset(void);
 extern int  picopcm_state_save(unsigned char *buf);                 /* the speech chip's state to add after the core's state (bytes added) */
 extern void picopcm_state_load(const unsigned char *buf, size_t len);   /* ... and read back from the end of a state of len bytes */
 extern void picopcm_line(int line);
 extern void picopcm_mix(short *out, int frames);
-extern int  picobook_pen(int *x, int *y, int *pen, int *red);   /* the pen pad: the mouse over the page picture */
+extern int  storyware_pen(int *x, int *y, int *pen, int *red);   /* the pen pad: the mouse over the page picture */
 extern void ramwatch_close(void);
 extern void ramwatch_enable(int on);
 extern void dlg_vdp_viewer(HWND parent);          /* Tools > VDP Viewer, Sound Viewer, CPU Viewer: windows that stay open while the game runs (debugwin.c) */
@@ -298,7 +324,6 @@ extern void video_get_area_rect(RECT *area);     /* the room the picture has in 
 extern int  gui_theme_for_ini(void);             /* the theme and style to write to the settings file (not the ones high-contrast mode put on) */
 extern int  gui_style_for_ini(void);
 extern int  gui_accent_for_ini(void);
-extern int  gui_hc_applied(void);
 extern COLORREF gui_xh_color_of(int i);                       /* the color of an entry of the Crosshair Color list */
 extern void gui_xh_preview(HDC dc, int x, int y, int size, int style);      /* a picture of a light gun crosshair shape (the Settings list) */
 extern int  gui_clean_window_on(void);           /* 1 while the window shows the game only (View > Toolbars > Hide All Bars) */
@@ -369,12 +394,14 @@ extern void cheats_apply(void);
 extern unsigned long emu_rom_crc32(void);       /* CRC32 of the running game's ROM as a database lists it; 0 = none */
 extern int  cheats_wordram_1m(void);
 extern void extras_shader_params(HWND parent);
+extern void extras_shader_browser(HWND parent);              /* Video > Shaders > Preset Browser */
 extern int  vgm_active(void);
 extern int  vgm_start(const char *path);
 extern void vgm_stop(void);
 extern void vgm_frame_end(void);
 extern void vgm_attach(void);          /* keeps the sound-write copy fed (see vgm.c) */
 extern int  vgm_restore_sound(void);   /* after the sound chips were set up anew: writes back what the game had set; 0 when it cannot */
+extern int  movie_busy(void);       /* an input recording is being made or played */
 extern void movie_stop(void);
 extern int  movie_record(const char *path);
 extern int  movie_play(const char *path, char *err, int err_len);
@@ -387,7 +414,7 @@ void browser_list_cache_clear(void);
 void browser_redraw_covers(void);
 extern void browser_covers_shutdown(void);          /* at exit: stops the cover threads */
 extern void browser_refilter(void);
-extern void browser_layout_changed(void);   /* the A-Z strip was switched on or off */
+extern void browser_layout_changed(void);   /* the Letter Strip was switched on or off */
 extern void dlg_rom_folders(HWND parent);
 extern void dlg_directories(HWND parent);        /* Settings > General > Data Folders... */
 extern void cheats_suspend(void);
@@ -524,6 +551,8 @@ extern int gui_save_file(HWND owner, const char *title, const char *filter, cons
                          const char *suggest, char *out, int out_len);   /* a "Save as" window; 1 = a name was chosen */
 extern int gui_pick_file(HWND owner, int which, const char *title, const char *filter,
                          const char *start_dir, char *out, int out_len);
+extern int gui_pick_filter_start;  /* set before gui_pick_file(): the file type (from 1) the dialog opens on; it is 1 again after the dialog */
+extern int gui_pick_filter;     /* after gui_pick_file(): the number (from 1) of the file type that was selected */
 extern void dlg_state_manager(HWND parent);
 extern void dlg_input(HWND parent, int player);
 extern void dlg_audio(HWND parent);
@@ -539,6 +568,8 @@ extern HMENU gui_main_menu(void);
 extern int  gui_shader_available(void);          /* librashader + Direct3D 11 present (says what is missing) */
 extern int  gui_shader_scales(void);              /* 1: a shader preset is chosen with Direct3D 11, so it scales the picture and the Scaling Filter is not used */
 extern int  gui_set_shader(const char *path);    /* a .slangp preset, or NULL / "" for none */
+extern int  gui_set_shader_quiet(const char *path, char *err, int errlen);   /* the same without a message box and without saving: for trying presets (err: why it failed) */
+extern void gui_shader_commit(void);                           /* keep the preset tried with gui_set_shader_quiet: saved, the menu follows */
 /* Tooltips for a dialog: a tip on a control by id and/or on the plain text label (a static with that
    text) beside it; they show after a short delay and hide after 30 seconds. */
 typedef struct { int id; const char *label; const char *tip; } GuiTip;
@@ -598,6 +629,13 @@ extern int  settings_tab_height(void);
 extern void settings_set_tabs(HWND tab, const char *const *titles, int n);
 #define GP_TABS_CHANGED 0x1000           /* WM_COMMAND code the tab strip sends; the selection is its GWLP_USERDATA */
 extern void dlg_rom_info(HWND parent);
+
+/* The file find calls of the program are the Unicode ones underneath (main.c): with the UTF-8 code page of the manifest, FindNextFileA gave up in the
+   middle of a folder (ERROR_MORE_DATA) at some names with Chinese letters, and every file after it was lost. The names come back in the program's own code page. */
+extern HANDLE gui_find_first(const char *pattern, WIN32_FIND_DATAA *fd);
+extern BOOL   gui_find_next(HANDLE h, WIN32_FIND_DATAA *fd);
+#define FindFirstFileA gui_find_first
+#define FindNextFileA  gui_find_next
 
 #include "i18n.h"      /* translations: from here on, the Windows calls that take text look it up in the language file */
 

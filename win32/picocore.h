@@ -20,6 +20,10 @@ int  pico_rom_is_32x(void);
 /* Starts the game in PicoDrive. Returns 1 on success; on failure 0, and err (if given) says why. */
 int  pico_load(const char *path, char *err, int err_len);
 
+/* File > Change Disc while a Mega CD (+ 32X) game runs in PicoDrive: the disc image (a .cue or .iso) takes the place of the current disc. 1 when it was taken; else err says why. */
+int  pico_change_disc(const char *path, char *err, int err_len);
+int  pico_take_tray_open(void);        /* 1 once after the game opened the disc tray (it asks for another disc) */
+
 /* Stops it and unloads the library. */
 void pico_unload(void);
 

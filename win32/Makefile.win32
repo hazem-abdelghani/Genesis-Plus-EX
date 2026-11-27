@@ -154,12 +154,15 @@ XBRZDIR   = $(GUIDIR)/xbrz
 # -mwindows produces a GUI subsystem binary, so no console window appears.
 LDFLAGS  += -mwindows -Wl,--wrap=psg_write -Wl,--wrap=system_init -Wl,--wrap=system_reset
 
+# Run-Ahead keeps the sound chain unbroken (raudio.c): the core's calls that feed the blip buffers go through it.
+LDFLAGS  += -Wl,--wrap=sound_reset -Wl,--wrap=sound_update -Wl,--wrap=psg_end_frame -Wl,--wrap=blip_add_delta -Wl,--wrap=blip_add_delta_fast
+
 # Paprium (paprium.c) is attached to the core from outside: these calls of the core go through it.
 LDFLAGS  += -Wl,--wrap=load_rom -Wl,--wrap=md_cart_init -Wl,--wrap=md_cart_reset -Wl,--wrap=md_cart_context_save \
             -Wl,--wrap=md_cart_context_load -Wl,--wrap=audio_init -Wl,--wrap=yx5200_update -Wl,--wrap=vdp_68k_ctrl_w -Wl,--wrap=render_line
 
 # fopen() goes through main.c (a .cue sheet that names its .bin without the extension; see __wrap_fopen).
-LDFLAGS  += -Wl,--wrap=fopen
+LDFLAGS  += -Wl,--wrap=fopen -Wl,--wrap=fread -Wl,--wrap=fseek -Wl,--wrap=ftell -Wl,--wrap=fclose -Wl,--wrap=fgets -Wl,--wrap=chd_open_file -Wl,--wrap=get_region
 
 # zlib is linked statically so the finished .exe does not need zlib1.dll
 # sitting next to it. XInput is absent on purpose: input.c loads it at
@@ -255,6 +258,7 @@ OBJECTS  += $(OBJDIR)/main.o \
             $(OBJDIR)/netplay.o \
             $(OBJDIR)/d3d9_video.o \
             $(OBJDIR)/d3d11_video.o \
+            $(OBJDIR)/d3d12_video.o \
             $(OBJDIR)/shader_chain.o \
             $(OBJDIR)/filters.o \
             $(OBJDIR)/xbr.o \
@@ -278,24 +282,28 @@ OBJECTS  += $(OBJDIR)/main.o \
             $(OBJDIR)/log.o \
             $(OBJDIR)/i18n.o \
             $(OBJDIR)/upnp.o \
+            $(OBJDIR)/disc.o \
             $(OBJDIR)/patches.o \
             $(OBJDIR)/movie.o \
             $(OBJDIR)/vgm.o \
+            $(OBJDIR)/raudio.o \
             $(OBJDIR)/paprium.o \
             $(OBJDIR)/memview.o \
             $(OBJDIR)/debugwin.o \
             $(OBJDIR)/debugger.o \
             $(OBJDIR)/deint.o \
+            $(OBJDIR)/scrollfit.o \
+            $(OBJDIR)/archivepick.o \
             $(OBJDIR)/ramwatch.o \
             $(OBJDIR)/dbgcpu.o \
             $(OBJDIR)/ramsearch.o \
             $(OBJDIR)/picocore.o \
-            $(OBJDIR)/picobook.o \
+            $(OBJDIR)/storyware.o \
             $(OBJDIR)/picopcm.o \
             $(OBJDIR)/eggs.o \
             $(OBJDIR)/gpex_res.o
 
-# Hidden extras (eggs.c), on in this test build; EGGS=0 compiles them out.
+# Hidden extras (eggs.c), on by default; EGGS=0 compiles them out.
 EGGS ?= 1
 ifeq ($(EGGS),1)
   DEFINES += -DGPEX_EGGS
@@ -411,6 +419,8 @@ $(OBJDIR)/d3d9_video.o: $(GUIDIR)/d3d9_video.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/d3d11_video.o: $(GUIDIR)/d3d11_video.c $(GUIDIR)/d3d11_video.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/d3d12_video.o: $(GUIDIR)/d3d12_video.c $(GUIDIR)/d3d12_video.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/shader_chain.o: $(GUIDIR)/shader_chain.c $(GUIDIR)/shader_chain.h $(GUIDIR)/librashader/librashader.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/filters.o: $(GUIDIR)/filters.c $(GUIDIR)/filters.h $(GUIDIR)/xbrz_glue.h $(GUIDIR)/xbr/libxbr.h
@@ -464,6 +474,8 @@ $(OBJDIR)/log.o: $(GUIDIR)/log.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/upnp.o: $(GUIDIR)/upnp.c $(GUIDIR)/upnp.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/disc.o: $(GUIDIR)/disc.c $(GUIDIR)/disc.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 
 $(OBJDIR)/extras.o: $(GUIDIR)/extras.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
@@ -479,11 +491,15 @@ $(OBJDIR)/debugwin.o: $(GUIDIR)/debugwin.c $(GUIDIR)/gui.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/deint.o: $(GUIDIR)/deint.c $(GUIDIR)/gui.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/archivepick.o: $(GUIDIR)/archivepick.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/scrollfit.o: $(GUIDIR)/scrollfit.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/debugger.o: $(GUIDIR)/debugger.c $(GUIDIR)/gui.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/ramwatch.o: $(GUIDIR)/ramwatch.c $(GUIDIR)/gui.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
-$(OBJDIR)/picobook.o: $(GUIDIR)/picobook.c $(GUIDIR)/gui.h
+$(OBJDIR)/storyware.o: $(GUIDIR)/storyware.c $(GUIDIR)/gui.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/picopcm.o: $(GUIDIR)/picopcm.c $(GUIDIR)/gui.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
@@ -493,12 +509,14 @@ $(OBJDIR)/ramsearch.o: $(GUIDIR)/ramsearch.c $(GUIDIR)/gui.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/vgm.o: $(GUIDIR)/vgm.c
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
+$(OBJDIR)/raudio.o: $(GUIDIR)/raudio.c $(GUIDIR)/gui.h
+	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/picocore.o: $(GUIDIR)/picocore.c $(GUIDIR)/picocore.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 $(OBJDIR)/sevenzip.o: $(GUIDIR)/sevenzip.c $(GUIDIR)/sevenzip.h
 	$(CC) -c $(CFLAGS) $(INCLUDES) $(DEFINES) $< -o $@
 
-$(OBJDIR)/gpex_res.o: $(GUIDIR)/gpex.rc $(GUIDIR)/resource.h $(GUIDIR)/gpex.manifest $(GUIDIR)/pad.bin $(GUIDIR)/genres.bin $(GUIDIR)/controllerdb.bin $(GUIDIR)/sega.wav $(GUIDIR)/ring_sfx.wav
+$(OBJDIR)/gpex_res.o: $(GUIDIR)/gpex.rc $(GUIDIR)/resource.h $(GUIDIR)/gpex.manifest $(GUIDIR)/pad.bin $(GUIDIR)/pad_sms.bin $(GUIDIR)/pad_md3.bin $(GUIDIR)/genres.bin $(GUIDIR)/controllerdb.bin $(GUIDIR)/sega.wav $(GUIDIR)/ring_sfx.wav
 	$(WINDRES) -I$(GUIDIR) $< -O coff -o $@
 
 # Core and shared sources
@@ -562,7 +580,13 @@ ifeq ($(PICO),1)
 picodrive:
 	@mkdir -p "$(PICOBUILD)"
 	cp -au "$(PICODIR)/." "$(PICOBUILD)/"
-	$(MAKE) -C "$(PICOBUILD)" -f Makefile.libretro platform=win use_libchdr=0 use_sh2drc=$(PICODRC) \
+ifeq ($(CHD),1)
+	# CHD discs (File > Open ROM with a Mega CD + 32X game kept as a .chd): PicoDrive's own makefile builds libchdr from pico/cd/libchdr,
+	# so the program's copy of libchdr (the core's, read only) is copied there.
+	mkdir -p "$(PICOBUILD)/pico/cd/libchdr"
+	cp -au "$(CHDLIBDIR)/." "$(PICOBUILD)/pico/cd/libchdr/"
+endif
+	$(MAKE) -C "$(PICOBUILD)" -f Makefile.libretro platform=win use_libchdr=$(CHD) use_sh2drc=$(PICODRC) \
 	  CC="$(CC)" CXX="$(CXX)" AS="$(CROSS)as" GIT_REVISION=-gpex
 	mkdir -p "$(OUTDIR)Plugins"
 	cp "$(PICOBUILD)/picodrive_libretro.dll" "$(OUTDIR)Plugins/$(PICONAME)"
@@ -582,6 +606,7 @@ pack: $(TARGET)
 	# but Shaders > Preset... needs it there to find it. picodrive_libretro lives in the same folder.
 	mkdir -p "$(OUTDIR)Plugins"
 	-cp $(GUIDIR)/librashader/librashader.dll "$(OUTDIR)Plugins/"
+	-cp $(GUIDIR)/librashader/dxcompiler.dll $(GUIDIR)/librashader/dxil.dll "$(OUTDIR)Plugins/"
 	-$(STRIP) "$(OUTDIR)Plugins/$(PICONAME)"
 
 clean:

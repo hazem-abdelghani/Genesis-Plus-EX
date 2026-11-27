@@ -22,6 +22,15 @@
 #include "unzip.h"
 #include "fileio.h"
 
+/* The sprite limit of a scanline can be taken off while the game runs (Settings > Emulation > Accuracy > Remove Sprite Limit): the core
+   leaves these four limits to the port when HAVE_NO_SPRITE_LIMIT is defined (core/vdp_render.c), as the libretro port does. */
+#define HAVE_NO_SPRITE_LIMIT
+#define MAX_SPRITES_PER_LINE 80
+#define TMS_MAX_SPRITES_PER_LINE (config.no_sprite_limit ? MAX_SPRITES_PER_LINE : 4)
+#define MODE4_MAX_SPRITES_PER_LINE (config.no_sprite_limit ? MAX_SPRITES_PER_LINE : 8)
+#define MODE5_MAX_SPRITES_PER_LINE (config.no_sprite_limit ? MAX_SPRITES_PER_LINE : (bitmap.viewport.w >> 4))
+#define MODE5_MAX_SPRITE_PIXELS (config.no_sprite_limit ? MAX_SPRITES_PER_LINE * 32 : max_sprite_pixels)
+
 /* The core calls this once per frame to sample the host input devices. */
 #define osd_input_update win32_input_update
 

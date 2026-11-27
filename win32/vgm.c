@@ -177,7 +177,13 @@ void vgm_attach(void)
 
 /* A game starts, or is reset: the chips are blank, and so is the copy. */
 void __wrap_system_init(void)  { __real_system_init();  shadow_clear(); vgm_attach(); picopcm_attach(); }
-void __wrap_system_reset(void) { __real_system_reset(); shadow_clear(); vgm_attach(); picopcm_reset(); }
+extern int ra_audio_keep;       /* raudio.c: Run-Ahead is loading its state, the sound chain stays as it is */
+void __wrap_system_reset(void)
+{
+  if (ra_audio_keep) { gen_reset(1); io_reset(); render_reset(); vdp_reset(); }       /* (what the core's system_reset() does, without sound_reset() and audio_reset()) */
+  else __real_system_reset();
+  shadow_clear(); vgm_attach(); picopcm_reset();
+}
 
 /* Writes the remembered registers into the freshly set-up FM chip and PSG.
    The chips take one write at a time (the Nuked FM chip loses a write that arrives before the previous one was processed),

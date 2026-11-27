@@ -238,8 +238,63 @@ static int vrr_want;       /* asked for by video.c (Video > Variable Refresh Rat
 int d3d11_vrr_active(void) { return vrr_active; }
 void d3d11_set_vrr(int on) { vrr_want = on ? 1 : 0; }
 
+static char adapter_want[96];      /* the graphics card asked for ("" = Auto) */
+
+void d3d11_set_adapter(const char *name) { lstrcpynA(adapter_want, name ? name : "", sizeof(adapter_want)); }
+
+static void adapter_name(const DXGI_ADAPTER_DESC1 *d, char *out, int n)
+{
+  if (!WideCharToMultiByte(CP_UTF8, 0, d->Description, -1, out, n, NULL, NULL)) lstrcpynA(out, "Graphics Adapter", n);
+}
+
+int d3d11_adapter_list(char names[][96], int max)
+{
+  IDXGIFactory1 *f = NULL;
+  IDXGIAdapter1 *a = NULL;
+  UINT i;
+  int n = 0;
+
+  if (FAILED(CreateDXGIFactory1(&IID_IDXGIFactory1, (void **)&f)) || !f) return 0;
+  for (i = 0; n < max && IDXGIFactory1_EnumAdapters1(f, i, &a) != DXGI_ERROR_NOT_FOUND; i++)
+  {
+    DXGI_ADAPTER_DESC1 d;
+    if (SUCCEEDED(IDXGIAdapter1_GetDesc1(a, &d)) && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) adapter_name(&d, names[n++], 96);
+    IDXGIAdapter1_Release(a);
+  }
+  IDXGIFactory1_Release(f);
+  return n;
+}
+
+/* The card asked for as an adapter to make the device on, or NULL (Auto, or the card is gone: Windows picks). Release it after use. */
+static IDXGIAdapter *pick_adapter(void)
+{
+  IDXGIFactory1 *f = NULL;
+  IDXGIAdapter1 *a = NULL;
+  IDXGIAdapter *found = NULL;
+  UINT i;
+
+  if (!adapter_want[0]) return NULL;
+  if (FAILED(CreateDXGIFactory1(&IID_IDXGIFactory1, (void **)&f)) || !f) return NULL;
+  for (i = 0; !found && IDXGIFactory1_EnumAdapters1(f, i, &a) != DXGI_ERROR_NOT_FOUND; i++)
+  {
+    DXGI_ADAPTER_DESC1 d;
+    char nm[96];
+    if (SUCCEEDED(IDXGIAdapter1_GetDesc1(a, &d)) && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE))
+    {
+      adapter_name(&d, nm, sizeof(nm));
+      if (!lstrcmpiA(nm, adapter_want) && SUCCEEDED(IDXGIAdapter1_QueryInterface(a, &IID_IDXGIAdapter, (void **)&found))) { /* found */ }
+    }
+    IDXGIAdapter1_Release(a);
+  }
+  IDXGIFactory1_Release(f);
+  return found;
+}
+
+static int excl_active;     /* the swap chain is on a window of its own in real (DXGI) exclusive fullscreen: see d3d11_exclusive_enter */
+
 static void release_device(void)
 {
+  if (excl_active && swapchain) { IDXGISwapChain_SetFullscreenState(swapchain, FALSE, NULL); excl_active = 0; }      /* (a swap chain must not be let go of while fullscreen) */
   shader_chain_unload();   /* holds GPU resources bound to this device */
   release_frame_resources();
   release_pipeline();
@@ -403,9 +458,16 @@ static int create_flip_swapchain(int w, int h, const D3D_FEATURE_LEVEL *levels, 
   IDXGISwapChain1 *sc1 = NULL;
   DXGI_SWAP_CHAIN_DESC1 sd;
   BOOL allow = FALSE;
+  IDXGIAdapter *pick;
+  HRESULT hr0;
   int ok = 0;
 
-  if (FAILED(D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, levels, (UINT)nlevels, D3D11_SDK_VERSION, &device, &got_level, &context)))
+  pick = pick_adapter();
+  hr0 = D3D11CreateDevice(pick, pick ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, NULL, 0, levels, (UINT)nlevels, D3D11_SDK_VERSION, &device, &got_level, &context);
+  if (pick) IDXGIAdapter_Release(pick);
+  if (FAILED(hr0) && pick)                    /* the chosen card cannot make it: Windows picks */
+    hr0 = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, levels, (UINT)nlevels, D3D11_SDK_VERSION, &device, &got_level, &context);
+  if (FAILED(hr0))
   {
     device = NULL; context = NULL;
     return 0;
@@ -485,9 +547,15 @@ static int create_device_and_swapchain(int w, int h)
 
   if (!vrr_active)
   {
-    hr = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0,
+    IDXGIAdapter *pick = pick_adapter();
+    hr = D3D11CreateDeviceAndSwapChain(pick, pick ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, NULL, 0,
            levels, sizeof(levels) / sizeof(levels[0]), D3D11_SDK_VERSION,
            &sd, &swapchain, &device, &got_level, &context);
+    if (pick) IDXGIAdapter_Release(pick);
+    if (FAILED(hr) && pick)                   /* the chosen card cannot make it: Windows picks */
+      hr = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0,
+             levels, sizeof(levels) / sizeof(levels[0]), D3D11_SDK_VERSION,
+             &sd, &swapchain, &device, &got_level, &context);
 
     if (FAILED(hr)) return 0;
   }
@@ -542,6 +610,137 @@ static int resize_swapchain(int w, int h)
 
   swap_w = w; swap_h = h;
   return create_rtv();
+}
+
+/* ---- real exclusive fullscreen ----
+   The picture's swap chain normally sits on a child window of the program's window, so the desktop compositor (DWM) draws it, which can make the
+   picture uneven when a second monitor runs at another refresh rate. For true exclusive fullscreen a new swap chain is made on a top-level window of its
+   own (the caller's, covering the monitor) and put into fullscreen with DXGI at the monitor's mode: nothing is composed for that monitor. Leaving makes
+   the windowed swap chain on the child window again. */
+static IDXGIFactory *device_factory(void)
+{
+  IDXGIDevice *dxgi_dev = NULL;
+  IDXGIAdapter *adapter = NULL;
+  IDXGIFactory *factory = NULL;
+
+  if (!device || FAILED(ID3D11Device_QueryInterface(device, &IID_IDXGIDevice, (void **)&dxgi_dev)) || !dxgi_dev) return NULL;
+  if (SUCCEEDED(IDXGIDevice_GetAdapter(dxgi_dev, &adapter)) && adapter)
+  {
+    if (FAILED(IDXGIAdapter_GetParent(adapter, &IID_IDXGIFactory, (void **)&factory))) factory = NULL;
+    IDXGIAdapter_Release(adapter);
+  }
+  IDXGIDevice_Release(dxgi_dev);
+  return factory;
+}
+
+int d3d11_exclusive_active(void) { return excl_active; }
+
+/* Puts the picture into exclusive fullscreen on `win` (a top-level window that covers the monitor, w x h, at about hz_num/hz_den Hz). Returns 0 when it
+   is done, else the HRESULT that stopped it (nothing is changed then). */
+int d3d11_exclusive_size(int *w, int *h)
+{
+  if (!excl_active || swap_w < 1 || swap_h < 1) return 0;
+  *w = swap_w; *h = swap_h;
+  return 1;
+}
+
+long d3d11_exclusive_enter(HWND win, int w, int h, int hz_num, int hz_den)
+{
+  IDXGIFactory *factory;
+  IDXGISwapChain *sc = NULL;
+  DXGI_SWAP_CHAIN_DESC sd;
+  DXGI_MODE_DESC md;
+  HRESULT hr;
+
+  if (!device_ok || !device || !swapchain || vrr_active || excl_active || !win || w < 1 || h < 1) return (long)E_FAIL;
+  factory = device_factory();
+  if (!factory) return (long)E_FAIL;
+
+  ZeroMemory(&sd, sizeof(sd));
+  sd.BufferCount = 1;
+  sd.BufferDesc.Width = (UINT)w;
+  sd.BufferDesc.Height = (UINT)h;
+  sd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  sd.BufferDesc.RefreshRate.Numerator = (UINT)hz_num;
+  sd.BufferDesc.RefreshRate.Denominator = (UINT)(hz_den > 0 ? hz_den : 1);
+  sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+  sd.OutputWindow = win;
+  sd.SampleDesc.Count = 1;
+  sd.Windowed = TRUE;
+  sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+  sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+  hr = IDXGIFactory_CreateSwapChain(factory, (IUnknown *)device, &sd, &sc);
+  if (FAILED(hr) || !sc) { IDXGIFactory_Release(factory); return (long)(FAILED(hr) ? hr : E_FAIL); }
+  IDXGIFactory_MakeWindowAssociation(factory, win, DXGI_MWA_NO_ALT_ENTER);     /* (the program has its own fullscreen keys) */
+  IDXGIFactory_Release(factory);
+
+  ZeroMemory(&md, sizeof(md));
+  md.Width = (UINT)w;
+  md.Height = (UINT)h;
+  md.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  md.RefreshRate.Numerator = (UINT)hz_num;
+  md.RefreshRate.Denominator = (UINT)(hz_den > 0 ? hz_den : 1);
+  hr = IDXGISwapChain_ResizeTarget(sc, &md);
+  if (SUCCEEDED(hr)) hr = IDXGISwapChain_SetFullscreenState(sc, TRUE, NULL);
+  if (FAILED(hr)) { IDXGISwapChain_Release(sc); return (long)hr; }
+
+  /* the old swap chain goes, the new one takes its place */
+  release_swapchain_views();
+  ID3D11DeviceContext_OMSetRenderTargets(context, 0, NULL, NULL);
+  IDXGISwapChain_Release(swapchain);
+  swapchain = sc;
+  hr = IDXGISwapChain_ResizeBuffers(swapchain, 1, (UINT)w, (UINT)h, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH);
+  excl_active = 1;
+  swap_w = w; swap_h = h;
+  if (FAILED(hr) || !create_rtv())
+  {
+    d3d11_exclusive_leave();
+    return (long)(FAILED(hr) ? hr : E_FAIL);
+  }
+  return 0;
+}
+
+/* Back to the windowed swap chain on the child window. */
+void d3d11_exclusive_leave(void)
+{
+  IDXGIFactory *factory;
+  IDXGISwapChain *sc = NULL;
+  DXGI_SWAP_CHAIN_DESC sd;
+  RECT rc;
+
+  if (!excl_active) return;
+  if (swapchain) IDXGISwapChain_SetFullscreenState(swapchain, FALSE, NULL);
+  excl_active = 0;
+  if (!device_ok || !device) return;
+  release_swapchain_views();
+  ID3D11DeviceContext_OMSetRenderTargets(context, 0, NULL, NULL);
+  if (swapchain) { IDXGISwapChain_Release(swapchain); swapchain = NULL; }
+
+  factory = device_factory();
+  GetClientRect(child_hwnd, &rc);
+  ZeroMemory(&sd, sizeof(sd));
+  sd.BufferCount = 1;
+  sd.BufferDesc.Width = (UINT)(rc.right > 0 ? rc.right : 1);
+  sd.BufferDesc.Height = (UINT)(rc.bottom > 0 ? rc.bottom : 1);
+  sd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  sd.BufferDesc.RefreshRate.Denominator = 1;
+  sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+  sd.OutputWindow = child_hwnd;
+  sd.SampleDesc.Count = 1;
+  sd.Windowed = TRUE;
+  sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+  if (!factory || FAILED(IDXGIFactory_CreateSwapChain(factory, (IUnknown *)device, &sd, &sc)) || !sc)
+  {
+    if (factory) IDXGIFactory_Release(factory);
+    release_device();           /* video.c makes the whole device again */
+    device_ok = 0;
+    return;
+  }
+  IDXGIFactory_MakeWindowAssociation(factory, child_hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
+  IDXGIFactory_Release(factory);
+  swapchain = sc;
+  swap_w = (int)sd.BufferDesc.Width; swap_h = (int)sd.BufferDesc.Height;
+  if (!create_rtv()) { release_device(); device_ok = 0; }
 }
 
 static void ensure_child_class(void)
@@ -791,6 +990,7 @@ int d3d11_render_frame(const uint16 *src_pixels, int src_pitch,
 
   if (!device_ok) return 0;
 
+  if (excl_active) { client_w = swap_w; client_h = swap_h; }       /* (the whole monitor: the mode's size, whatever the window says) */
   if (client_w < 1 || client_h < 1) return 0;
   /* Sanity bound, not a real hardware limit -- catches garbage input
      without hardcoding a max the render filter's own multiplier already
@@ -932,6 +1132,13 @@ static int present_sync;
 void d3d11_set_sync(int on)
 {
   present_sync = on ? 1 : 0;
+}
+
+/* The surface of the picture is hidden while no game runs: with a variable-refresh swap chain (the flip model that may tear) it stayed on
+   top of the game list, showing the last picture, after Stop. video_frame() shows it again with the next frame of a game. */
+void d3d11_show_surface(int on)
+{
+  if (child_hwnd) ShowWindow(child_hwnd, on ? SW_SHOWNA : SW_HIDE);
 }
 
 void d3d11_present(void)

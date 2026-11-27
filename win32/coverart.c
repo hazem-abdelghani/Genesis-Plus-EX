@@ -666,7 +666,7 @@ static HBITMAP thumb_read(const char *path, int size, int style)
       e->r.src_lo == want.src_lo && e->r.src_hi == want.src_hi && e->r.mt_lo == want.mt_lo && e->r.mt_hi == want.mt_hi)
   {
     clen = e->r.clen;
-    comp = (unsigned char *)malloc(clen);
+    comp = (clen && clen <= (unsigned)size * (unsigned)size * 4u + 1024u) ? (unsigned char *)malloc(clen) : NULL;      /* (a damaged cache file cannot ask for gigabytes) */
     pos.QuadPart = (LONGLONG)(e->off + sizeof(THUMBREC));
     if (comp && (!SetFilePointerEx(thumb_file, pos, NULL, FILE_BEGIN) || !ReadFile(thumb_file, comp, clen, &n, NULL) || n != clen))
     { free(comp); comp = NULL; }

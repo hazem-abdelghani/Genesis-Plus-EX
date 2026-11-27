@@ -23,6 +23,7 @@
 #include "theme.h"
 #include "shader_chain.h"
 #include "eggs.h"
+#include "netplay.h"
 #include "toolbar.h"     /* TBS(): sizes that follow the Large interface */
 
 enum { K_CHECK, K_CHOICE, K_BUTTON, K_FILTER, K_SHADER, K_BREAK, K_DYN, K_GROUP, K_GROUPEND };   /* K_BREAK: the next rows start a new column; K_GROUP .. K_GROUPEND: the rows between are drawn inside a frame */
@@ -49,10 +50,6 @@ static const char *const it_theme[]    = { "System", "Light", "Dark", "Sapphire"
 static const char *const it_style[]    = { "Classic", "Modern" };
 static const char *const it_scale[]    = { "1x", "2x", "3x", "4x", "5x", "6x", "7x", "8x", "9x", "10x" };
 static const char *const it_filtermode[] = { "Nearest", "Sharp Nearest", "Bilinear", "Sharp Bilinear", "Bicubic" };
-static const char *const it_lcd[]      = { "Off", "Light", "Medium", "Heavy" };
-static const char *const it_lcdcolor[] = { "Off", "Light", "Full" };
-static const char *const it_scan[]     = { "Off", "25%", "50%", "75%", "100%" };
-static const char *const it_ntsc[]     = { "Off", "Composite", "S-Video", "RGB" };
 static const char *const it_aspect[]   = { "Original Console Pixels", "1:1 (Square Pixels)", "4:3 (Standard)", "16:9 (Widescreen)" };
 static const char *const it_rotation[] = { "None", "90 Degrees Clockwise", "180 Degrees", "90 Degrees Counterclockwise" };
 static const char *const it_borders[]  = { "Hide All", "Top and Bottom", "Left and Right", "Show All" };
@@ -61,7 +58,7 @@ static const char *const it_interlace[] = { "Single Field", "Double Field" };
 static const char *const it_frameskip[] = { "Off", "Auto", "Manual (Below 25% Audio Buffer)",
                                             "Manual (Below 33% Audio Buffer)", "Manual (Below 50% Audio Buffer)",
                                             "Manual (Below 75% Audio Buffer)" };
-static const char *const it_renderer[] = { "GDI (Software)", "Direct3D 9", "Direct3D 11" };
+static const char *const it_renderer[] = { "GDI (Software)", "Direct3D 9", "Direct3D 11", "Direct3D 12" };
 static const char *const it_fm[]       = { "YM2612 (Nuked)", "YM3438 (Nuked)", "YM2612 (MAME, Discrete)",
                                            "YM3438 (MAME, ASIC)", "YM3438 (MAME, Enhanced)" };
 static const char *const it_backend[] = { "Windows Classic", "XAudio2", "WASAPI (Shared)", "WASAPI (Exclusive)" };
@@ -73,10 +70,11 @@ static const char *const it_shot[]     = { "Final", "Corrected", "Raw" };
 static const char *const it_shotsize[] = { "1x", "2x", "3x", "4x" };
 static const char *const it_recqual[]  = { "Automatic", "Low (4 Mbit/s)", "Medium (8 Mbit/s)", "High (16 Mbit/s)", "Very High (32 Mbit/s)" };
 static const char *const it_recshape[] = { "Console's Own", "4:3 (TV)", "16:9 (Widescreen)" };
-static const char *const it_region[]   = { "Detect from ROM", "USA", "Europe", "Japan (NTSC)", "Japan (PAL)" };
+static const char *const it_region[]   = { "Auto Detect", "USA", "Europe", "Japan (NTSC)", "Japan (PAL)" };
+static const char *const it_regorder[] = { "USA -> EUR -> JPN", "USA -> JPN -> EUR", "EUR -> USA -> JPN", "EUR -> JPN -> USA", "JPN -> USA -> EUR", "JPN -> EUR -> USA" };
 static const char *const it_rewmem[]   = { "128 MB", "256 MB", "512 MB", "768 MB" };
-static const char *const it_vdp[]      = { "Auto", "NTSC (60 Hz)", "PAL (50 Hz)" };
-static const char *const it_console[]  = { "Detect from ROM", "SG-1000", "SG-1000 II", "SG-1000 II + RAM Adapter",
+static const char *const it_vdp[]      = { "None", "NTSC (60 Hz)", "PAL (50 Hz)" };
+static const char *const it_console[]  = { "Auto Detect", "SG-1000", "SG-1000 II", "SG-1000 II + RAM Adapter",
                                            "Mark III", "Master System", "Master System II", "Game Gear",
                                            "Mega Drive / Genesis" };
 static const char *const it_stickshape[] = { "Classic", "Wide Straight Zones", "Even Eight Directions", "Wide Diagonal Zones" };
@@ -88,9 +86,9 @@ static const char *const it_stereo[]  = { "Narrow (50%)", "Normal (100%)", "Wide
 static const char *const it_msens[]   = { "50%", "75%", "100%", "150%", "200%" };
 static const char *const it_vslimit[] = { "2", "4", "6", "8", "10", "12", "14", "16" };
 static const char *const it_cpuspeed[] = { "50%", "75%", "100%", "125%", "150%", "200%", "300%", "400%" };
-static const char *const it_gunoff[]  = { "-12 px", "-8 px", "-4 px", "0 px", "+4 px", "+8 px", "+12 px" };
+static const char *const it_gunoff[]  = { "-12 px", "-10 px", "-8 px", "-6 px", "-4 px", "-2 px", "0 px", "+2 px", "+4 px", "+6 px", "+8 px", "+10 px", "+12 px" };
 static const char *const it_barcol[]  = { "Black", "Dark Gray", "Gray", "White", "Navy", "Dark Green", "Dark Red" };
-static const char *const it_fsmode[]  = { "Borderless Window", "Exclusive Fullscreen" };
+static const char *const it_fsmode[]  = { "Borderless Window", "Exclusive Fullscreen", "True Exclusive Fullscreen" };
 static const char *const it_accent[] = { "Default", "Blue", "Brown", "Crimson", "Gold", "Gray", "Green", "Indigo", "Lime", "Magenta", "Navy", "Olive", "Orange", "Pink", "Purple", "Red", "Sky Blue", "Teal", "Violet", "Yellow" };
 static const char *const it_tbsize[] = { "Small", "Normal", "Large" };
 static const char *const it_coversize[] = { "Tiny", "Extra Small", "Small", "Medium", "Medium Large", "Large", "Extra Large" };
@@ -99,7 +97,9 @@ static const char *const it_cursor[]  = { "Never", "Always", "After 2 Seconds", 
 static const char *const it_fcap[]    = { "Off", "30 per Second", "40 per Second", "50 per Second", "60 per Second" };
 static const char *const it_bass[]    = { "Off", "Light", "Medium", "Strong" };
 static const char *const it_abackup[] = { "Off", "Every Minute", "Every 2 Minutes", "Every 5 Minutes", "Every 10 Minutes" };
+static const char *const it_ffspeed[] = { "2x", "3x", "4x", "6x", "8x", "12x", "16x" };
 static const char *const it_rewspeed[] = { "Slow", "Normal", "Fast", "Very Fast" };
+static const char *const it_runahead[] = { "Off", "1 Frame", "2 Frames" };
 static const char *const it_skiplen[] = { "Off", "5 Seconds", "10 Seconds", "15 Seconds", "20 Seconds", "25 Seconds", "30 Seconds" };
 static const char *const it_osdpos[]  = { "Top Left", "Top Right", "Bottom Left", "Bottom Right" };
 static const char *const it_osdtime[] = { "1 Second", "2 Seconds", "3 Seconds", "4 Seconds", "5 Seconds", "6 Seconds", "7 Seconds" };
@@ -135,15 +135,15 @@ static const SRow rows_view[] =
   { K_BREAK, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Program Behavior", 0, 0, NULL, NULL },
   CHECK ("Pause When Inactive",   IDM_EMU_PAUSE_UNFOCUSED, "Pause the game while another window has focus."),
-  CHECK ("Mute When Inactive",    IDM_OPT_MUTEUNFOCUSED, "Silence the game while another window has focus (the game keeps running; see Pause When Inactive to stop it)."),
+  CHECK ("Mute When Inactive",    IDM_OPT_MUTEUNFOCUSED, "Silence the game while another window has focus (the game keeps running). Grayed while Pause When Inactive is on, because a paused game makes no sound (not grayed during netplay, which is never paused)."),
   CHECK ("Keep Only One Instance", IDM_OPT_SINGLEINSTANCE, "Starting the program again (or opening a game with it) brings the copy that is already running to the front, and opens the game there, instead of starting a second copy. Two copies share the same settings and save files and would overwrite each other. Takes effect the next time the program starts. Launches from a frontend (--exit-on-close) are not affected."),
   CHECK ("Always on Top",         IDM_VIDEO_ALWAYS_ON_TOP, "Keep the window above every other window (also in the View menu)."),
   CHECK ("Keep the PC Awake While Playing", IDM_OPT_KEEPAWAKE, "Stop Windows from sleeping, dimming the screen or starting the screen saver while a game is running."),
   CHECK ("Confirm Exit While Playing", IDM_OPT_CONFIRMEXIT, "Ask \"Exit?\" when you close the program while a game is running."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
-  { K_GROUP, "Directories", 0, 0, NULL, NULL },
-  BUTTON("Data Folders...",          IDM_FILE_DIRECTORIES, "Choose where each folder beside the program is: BIOS, Saves, States, Cheats, Covers, Recordings, Screenshots, Languages, Shaders, Bezels, Profiles and Logs. Files already in the old place are not moved."),
-  BUTTON("ROM Directories...",      IDM_FILE_ROMFOLDERS, "Choose the directories the game list is made of: add more or remove some, and exclude some from the scan."),
+  { K_GROUP, "Folders", 0, 0, NULL, NULL },
+  BUTTON("Data Folders...",          IDM_FILE_DIRECTORIES, "Choose where each folder beside the program is: BIOS, Cheats, Images (it holds the Bezels, Covers and Pico Storyware folders), Languages, Profiles, Recordings, Saves, Screenshots, Shaders and States. Files already in the old place are not moved."),
+  BUTTON("Game Folders...",      IDM_FILE_ROMFOLDERS, "Choose the folders the game list is made of: add more or remove some, and exclude some from the scan."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
 };
 
@@ -154,17 +154,18 @@ static const SRow rows_video[] =
   { K_GROUP, "Window and Screen", 0, 0, NULL, NULL },
   CHOICE("Window Size:",          IDM_VIDEO_SCALE_BASE, it_scale, "Size of the game window, 1x to 10x the console's picture."),
   CHECK ("Lock Window Shape When Resizing", IDM_OPT_KEEPASPECT, "When you drag an edge or a corner of the game window, keep it the shape of the picture (no black bars). Switch it off to drag the window to any shape; the picture inside is still drawn in its right shape (Aspect Ratio), with bars where the window is another shape."),
-  CHOICE("Fullscreen Mode:",      IDM_SET_FSMODE_BASE, it_fsmode, "How the game goes fullscreen.\nBorderless Window: fills the screen without changing it.\nExclusive Fullscreen: switches the screen to the Fullscreen Resolution while the game is fullscreen."),
+  CHOICE("Fullscreen Mode:",      IDM_SET_FSMODE_BASE, it_fsmode, "How the game goes fullscreen.\nBorderless Window: fills the screen without changing it.\nExclusive Fullscreen: switches the screen to the Fullscreen Resolution while the game is fullscreen.\nTrue Exclusive Fullscreen (Direct3D 11 and 12 only; Variable Refresh Rate is off while it is chosen): the game takes the screen for itself (real exclusive fullscreen) at the screen's own resolution, so Windows no longer composes the picture, which can smooth out uneven frames, especially with a second monitor at another refresh rate. The menu and toolbar are not reachable then: Alt+Enter or Esc leaves it, and so does anything that takes the focus (Alt+Tab, a dialog). Another renderer uses Exclusive Fullscreen instead."),
+  DYNCHOICE("Fullscreen Monitor:", IDM_SET_FSMON_BASE, "Which monitor the game goes fullscreen on (Exclusive Fullscreen and True Exclusive Fullscreen use it too). Current Monitor: the monitor the window is on now. Applies the next time you go fullscreen."),
   DYNCHOICE("Fullscreen Resolution:", IDM_SET_FSRES_BASE, "The screen size used in fullscreen when Fullscreen Mode is Exclusive Fullscreen: the screen is switched to it while the game is fullscreen and put back after. Desktop Resolution changes nothing."),
-  CHECK ("Start ROM in Fullscreen", IDM_VIDEO_FULLSCREEN_START, "Start every game in fullscreen. Esc or Alt+Enter toggles it."),
+  CHECK ("Start Game in Fullscreen", IDM_VIDEO_FULLSCREEN_START, "Start every game in fullscreen. Esc or Alt+Enter toggles it."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Scaling and Shape", 0, 0, NULL, NULL },
   { K_FILTER, "Render Filter:", 0, 0, NULL, "Pixel-art scalers and CRT looks (Scale2x, xBR, HQ2x, xBRZ, Scanlines, CRT...) applied before the picture is shown, at a fixed multiple (2x to 6x). For smooth resizing to the window use Scaling Filter below (Nearest, Bilinear, Sharp Bilinear, Bicubic). They run on the processor: xBRZ 5x and 6x and CRT Geom are very heavy and can make a game run below full speed (watch the frame rate); 2x to 4x are much lighter, and a shader below is lighter still." },
-  CHOICE("Scaling Filter:",       IDM_VIDEO_FILTER_MODE_BASE, it_filtermode, "How the picture is resized to the window, after the Render Filter.\nNearest: sharp pixels, but uneven ones at a size that is not a whole multiple (use Integer Scaling for even ones).\nSharp Nearest: the picture is first enlarged by a whole multiple with sharp pixels, then smoothed only for the rest of the way: crisp, even pixels without the borders of Integer Scaling. Looks close to Nearest.\nBilinear: soft edges everywhere.\nSharp Bilinear: like Bilinear with much less blur: the middle of each pixel stays sharp and only the seam between two pixels is blended, over about half a source pixel (a pixel shader with Direct3D 9 and 11, the processor with the classic renderer).\nBicubic: smoother than Bilinear with a little more edge contrast, Catmull-Rom (Direct3D 9 and 11; grayed with the classic renderer).\nGrayed while a shader runs (Direct3D 11): the shader scales the picture itself, and your choice comes back when it is off."),
+  CHOICE("Scaling Filter:",       IDM_VIDEO_FILTER_MODE_BASE, it_filtermode, "How the picture is resized to the window, after the Render Filter.\nNearest: sharp pixels, but uneven ones at a size that is not a whole multiple (use Integer Scaling for even ones).\nSharp Nearest: the picture is first enlarged by a whole multiple with sharp pixels, then smoothed only for the rest of the way: crisp, even pixels without the borders of Integer Scaling. Looks close to Nearest.\nBilinear: soft edges everywhere.\nSharp Bilinear: like Bilinear with much less blur: the middle of each pixel stays sharp and only the seam between two pixels is blended, over about half a source pixel (a pixel shader with Direct3D 9, 11 and 12, the processor with the classic renderer).\nBicubic: smoother than Bilinear with a little more edge contrast, Catmull-Rom (Direct3D 9, 11 and 12; grayed with the classic renderer).\nGrayed while a shader runs (Direct3D 11 or 12): the shader scales the picture itself, and your choice comes back when it is off."),
   CHECK ("Integer Scaling",       IDM_VIDEO_INTSCALE, "Enlarge the picture by whole multiples only (1x, 2x, 3x ...), so every pixel is the same size. It is centered, with borders, when the window is between two sizes."),
   CHOICE("Aspect Ratio:",         IDM_VIDEO_ASPECT_BASE, it_aspect, "The shape of the picture's pixels.\nConsole's Own (default): the Mega Drive's own pixels, 8:7 wide in the 256-pixel mode and 32:35 in the 320-pixel one; other consoles use square pixels.\n1:1: square pixels.\n4:3: as on a CRT television.\n16:9: stretches the picture to fill a widescreen window."),
   CHOICE("Rotation:",             IDM_VIDEO_ROTATE_BASE, it_rotation, "Turn the picture by a quarter, half or three quarters of a turn, for games and demos made to be played with the screen on its side. Only what is on the screen is turned: screenshots, recordings and light-gun aiming are not."),
-  CHOICE("Borders:",              IDM_VIDEO_OVERSCAN_BASE, it_borders, "Hide or show the overscan borders (top/bottom, left/right). This covers every console; the Master System side borders and the Game Gear screen have their own options in Settings > Options."),
+  CHOICE("Borders:",              IDM_VIDEO_OVERSCAN_BASE, it_borders, "Hide or show the overscan borders (top/bottom, left/right). This covers every console; the Master System side borders and the Game Gear screen have their own options in Settings > Emulation."),
   CHOICE("Interlaced Mode:",      IDM_VIDEO_INTERLACE_BASE, it_interlace, "For games that use the 448-line interlaced mode. Not used while Deinterlacing (Visual Effects) is on.\nSingle Field: shows the same half of the picture every frame, so it stays steady.\nDouble Field: shows both fields at once; where something moves, the older field's lines are rebuilt from the new ones (the new lines stay exactly as the game drew them), so there are hardly any comb teeth and a moving object stays sharp (a pattern that repeats and scrolls, such as blades of grass, is found too); a still picture keeps both fields."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Bezel and Border", 0, 0, NULL, NULL },
@@ -173,11 +174,7 @@ static const SRow rows_video[] =
   CHOICE("Border Color:",         IDM_SET_BARCOLOR_BASE, it_barcol, "The color of the bars around the picture when the window or screen is a different shape."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_BREAK, NULL, 0, 0, NULL, NULL },
-  { K_GROUP, "Filters and Effects", 0, 0, NULL, NULL },
-  CHOICE("NTSC Filter:",          IDM_VIDEO_NTSC_BASE, it_ntsc, "Composite, S-Video or RGB television look. For a 32X game it is the program's own version of the look (the picture keeps its size), not the Genesis Plus GX core's."),
-  CHOICE("Color Correction:",     IDM_VIDEO_LCDCOLOR_BASE, it_lcdcolor, "The colors of a handheld LCD screen instead of the raw ones, for every console: paler and a little dull, the colors bleeding into each other (as on the Game Gear screen).\nLight: half way between the raw colors and the LCD.\nFull: the LCD colors.\nHue, Saturation and the other Picture Adjustments still apply on top."),
-  CHOICE("LCD Ghosting:",         IDM_VIDEO_LCD_BASE, it_lcd, "Bright pixels fade slowly, like a handheld screen."),
-  CHOICE("Scanlines:",            IDM_VIDEO_SCANLINE_BASE, it_scan, "Dark lines between rows: Off, 25, 50, 75 or 100%."),
+  { K_GROUP, "Visual Effects", 0, 0, NULL, NULL },
   CHECK ("Deinterlacing",         IDM_VIDEO_DEINTERLACE, "For games that use the 448-line interlaced mode (Sonic the Hedgehog 2 in 2P Vs., Ys III, Air Strike Patrol ...): the graphics processor draws both fields of the picture from the same moment in every frame, so every frame is a whole picture and nothing that moves is combed. While it is on, Interlaced Mode is not used."),
   CHECK ("Dither Smoothing",      IDM_VIDEO_DITHER, "Smooths the checkerboard patterns many Genesis games use to fake extra colors."),
   CHECK ("Flicker Blending",      IDM_VIDEO_FLICKER, "Some games fake transparency by showing an object every other frame. This blends the two frames so it looks solid."),
@@ -185,31 +182,44 @@ static const SRow rows_video[] =
   BUTTON("Picture Adjustments...", IDM_VIDEO_PICTUREADJ, "Open the window with the Brightness, Contrast, Saturation, Gamma and Hue sliders (also in the Video menu)."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Speed and Smoothness", 0, 0, NULL, NULL },
-  CHOICE("Renderer:",             IDM_VIDEO_RENDERER_BASE, it_renderer, "GDI draws with the CPU; Direct3D 9 and 11 use the graphics card (each falls back to GDI if unavailable). Shaders need Direct3D 11."),
+  CHOICE("Renderer:",             IDM_VIDEO_RENDERER_BASE, it_renderer, "GDI draws with the CPU; Direct3D 9, 11 and 12 use the graphics card (each falls back to GDI if unavailable; Direct3D 12 needs Windows 10). Direct3D 11 and 12 have Variable Refresh Rate, True Exclusive Fullscreen and Shaders."),
+  DYNCHOICE("Adapter:",           IDM_SET_ADAPTER_BASE, "Which graphics card the Direct3D 9, 11 and 12 renderers use. Auto: Windows picks (normally the one set in Windows Graphics settings). Changing it makes the renderer again. A card that is not connected to the monitor the game is on can cost speed, and True Exclusive Fullscreen only works on a monitor of the chosen card (it uses Exclusive Fullscreen otherwise). If the card is gone, Auto is used."),
   CHECK ("VSync",                 IDM_VIDEO_VSYNC, "Wait for the screen's refresh after each frame so motion is even. Skipped for a frame whenever the sound buffer runs low, so it never causes crackle. Not used (grayed out) while Variable Refresh Rate is on."),
-  CHECK ("Variable Refresh Rate", IDM_VIDEO_VRR, "For a screen with variable refresh (G-Sync, FreeSync): each frame is shown the moment it is ready, with no tearing and no frame shown twice or skipped. Direct3D 11 only; needs Windows 10 and a driver that supports it; it takes the place of VSync while it is on."),
+  CHECK ("Smooth Motion", IDM_VIDEO_SYNCDISPLAY, "Makes motion even. With VSync on, runs the game at the exact refresh rate of the screen when that is within 2% of the game's own (a PAL game on a 50 Hz screen, a Mega Drive game on a 60 Hz one), so every picture is shown once and none is repeated every few seconds, which shows as a small stutter in steady scrolling. The speed and the pitch change by less than 1%. With Fullscreen Mode set to Exclusive Fullscreen it also switches the screen to 50 Hz for a PAL game and 60 Hz for an NTSC game while the game is fullscreen (in the size it has; only the monitor that shows the game changes; put back when you leave fullscreen or close the game; a screen without such a mode stays as it is, and the log says so). A PAL game on a 60 Hz screen cannot be matched (50 against 60). Not used with Variable Refresh Rate, in netplay, while recording, in Mega CD and 32X games, or at a Game Speed other than 100%."),
+  CHECK ("Use Alternate Timing", IDM_VIDEO_ALTTIMING, "Paces the game by the PC's precise clock instead of by the sound card (which is how it is paced normally). The frames then come at even times, which can make scrolling smoother on some PCs, but the sound card and the clock drift apart a little: the program nudges the pace to keep the sound going, and a very rare click or skip of the sound can happen. Try it if scrolling is uneven, mostly with a PAL game. Not used in netplay or at a Game Speed other than 100% (the clock paces those anyway)."),
+  CHECK ("Variable Refresh Rate", IDM_VIDEO_VRR, "For a screen with variable refresh (G-Sync, FreeSync): each frame is shown the moment it is ready, with no tearing and no frame shown twice or skipped. Direct3D 11 and 12 only; needs Windows 10 and a driver that supports it; it takes the place of VSync while it is on. Grayed while Fullscreen Mode is True Exclusive Fullscreen (it cannot be used with it)."),
   CHOICE("Limit Redraws:",        IDM_SET_FRAMECAP_BASE, it_fcap, "Draw the picture at most this many times a second while the game still runs at full speed. Helps a weak PC or a very fast monitor; Off draws every frame. Unlike Frameskip, which skips drawing only when the PC falls behind, this is a fixed cap on how often the picture is drawn."),
   CHOICE("Frameskip:",            IDM_VIDEO_FRAMESKIP_BASE, it_frameskip, "Skip drawing some frames on a slow PC so the game keeps up: Off, Auto, or Manual by audio-buffer level. Unlike Limit Redraws (a fixed cap), it skips drawing only when the PC falls behind, so the picture is choppier only then. Not used during netplay or recording."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
+  { K_GROUP, "Video Recording", 0, 0, NULL, NULL },
+  CHOICE("Recording Size:",       IDM_SET_RECSIZE_BASE, it_shotsize, "How big a video recording (Video + Audio) is, as a multiple of the console's own picture: 1x is, for example, 320x224, 2x (default) 640x448 and 4x 1280x896. Enlarged in whole pixels, so it stays sharp. Used for the next recording."),
+  CHOICE("Recording Quality:",    IDM_SET_RECQUAL_BASE, it_recqual, "How much data a second of video gets. Automatic (default) picks it from the size. A higher value keeps more detail and makes a bigger file. Used for the next recording."),
+  CHOICE("Recording Shape:",      IDM_SET_RECSHAPE_BASE, it_recshape, "The shape of the recorded video. Used for the next recording.\nConsole's Own: keeps the picture's pixels square.\n4:3 (TV): stretches it to the shape of a TV, as the game looks in the window.\n16:9 (Widescreen): stretches it over a widescreen video."),
+  { K_GROUPEND, NULL, 0, 0, NULL, NULL },
+  { K_GROUP, "Screenshots", 0, 0, NULL, NULL },
+  CHOICE("Screenshot Output:",    IDM_TOOLS_SHOT_BASE, it_shot, "What a screenshot contains.\nCorrected (default): the picture stretched to the 4:3 shape of a TV, 640x480.\nRaw: the console's own picture at its own size (for example 320x224), not stretched.\nFinal: like Corrected, but with the Render Filter applied (the same as Corrected when no filter is on).\nScanlines and Brighten are never included."),
+  CHOICE("Screenshot Size:",      IDM_TOOLS_SHOTSIZE_BASE, it_shotsize, "How big a screenshot is, as a multiple of the size the chosen output has.\n1x: 640x480 for Corrected, the console's own size for Raw and the filter's size for Final.\n2x, 3x, 4x: that many times larger (Raw is enlarged in whole pixels, so it stays sharp)."),
+  { K_GROUPEND, NULL, 0, 0, NULL, NULL },
 #ifdef _WIN64
-  { K_SHADER, "Shader:", 0, 0, NULL, "Run a librashader (.slangp) shader chain on top of the picture. Direct3D 11 only." },      /* along the bottom, under both columns */
-  BUTTON("Shader Parameters...",    IDM_VIDEO_SHADERPARAMS, "Adjust the loaded shader's own parameters (sharpness, curvature ...) while it runs, without editing its preset file. Grayed until a shader that has settings is loaded."),   /* inside the shader box, under its file */
+  { K_SHADER, "Shader:", 0, 0, NULL, "Run a librashader (.slangp) shader chain on top of the picture. Direct3D 11 and 12 only." },      /* a frame under the first column */
+  BUTTON("Shader Parameters...",    IDM_VIDEO_SHADERPARAMS, "Adjust the loaded shader's own parameters (sharpness, curvature ...) while it runs, without editing its preset file. Grayed until a shader that has settings is loaded."),   /* inside the shader box, under its file; the next row is beside it */
   CHECK ("Skip Render Filter with Shaders", IDM_VIDEO_SHADERNOFILTER, "While a shader runs, do not apply the Render Filter first. The shader then gets the game's own picture instead of one the filter already enlarged. Shaders that scale by whole multiples or place a bezel work out their sizes from the picture they receive, so one that looks too small or wrong with a Render Filter on may look right with this ticked. Has no effect without a shader or a Render Filter."),
 #endif
 };
 
 static const SRow rows_audio[] =
 {
-  { K_GROUP, "Mute", 0, 0, NULL, NULL },
+  { K_GROUP, "Mute Sounds", 0, 0, NULL, NULL },
   CHECK ("Mute All Sound",         IDM_AUDIO_ENABLE, "Silence the sound; untick to hear it again."),
   CHECK ("Mute FM Sound",         IDM_AUDIO_MUTE_FM, "Silence the FM chip (the main music) and keep the rest."),
   CHECK ("Mute PSG Sound",        IDM_AUDIO_MUTE_PSG, "Silence the PSG chip (the square-wave sound) and keep the rest."),
   CHECK ("Mute DAC Sound",        IDM_AUDIO_MUTE_DAC, "Silence the DAC, the sample channel of the Genesis FM chip (drums, voices and sound effects played as recorded sound), and keep the rest. The level is in Audio > Levels and Latency (DAC Volume)."),
-  CHECK ("Mute PWM Sound",        IDM_AUDIO_MUTE_PWM, "Silence the PWM sound of a 32X game (most of its music and effects) and keep the rest. Grayed out only while a game of another system is running. Its level is the PWM Preamp slider on the Levels and Latency window."),
+  CHECK ("Mute PWM Sound",        IDM_AUDIO_MUTE_PWM, "Silence the PWM sound of a 32X game (most of its music and effects) and keep the rest. Grayed out only while a game of another system is running. Its level is the PWM Preamp slider in the Levels and Latency window."),
+  CHECK ("Mute CD Audio",         IDM_AUDIO_MUTE_CDDA, "Silence the music of the disc of a Mega CD game (the CD audio) and keep the rest. Grayed out while a game that is not a Mega CD game runs (a cartridge, a 32X game, or a game with its sound on disc images: MD+ and MSU-MD). Its level is in Levels and Latency."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Tone", 0, 0, NULL, NULL },
   CHOICE("Headphone Crossfeed:",  IDM_SET_CROSSFEED_BASE, it_crossfeed, "For headphones: lets a little of each ear's sound, with the highs taken off, into the other ear, which softens the hard left and right of the Mega Drive's stereo. Off, Light, Medium or Strong."),
-  CHOICE("Stereo Width:",         IDM_SET_STEREO_BASE, it_stereo, "Narrow pulls the left and right sound toward the middle; wide spreads them apart."),
+  CHOICE("Stereo Width:",         IDM_SET_STEREO_BASE, it_stereo, "Narrow pulls the left and right sound toward the middle; Wide spreads them apart."),
   CHOICE("Bass Boost:",           IDM_SET_BASS_BASE, it_bass, "Lift the low notes so the music is fuller on laptop speakers and small headphones."),
   CHECK ("Low-Pass Filter",       IDM_AUDIO_LOWPASS, "A soft high-frequency roll-off. Only one of Low-Pass Filter and 3-Band EQ can be on."),
   CHECK ("3-Band EQ",             IDM_AUDIO_EQ, "A three-band equalizer: raise or lower the low, middle and high sounds. Set the gains and the two crossover frequencies in Levels and Latency. Only one of Low-Pass Filter and 3-Band EQ can be on."),
@@ -270,7 +280,7 @@ static const SRow rows_input[] =
   CHOICE("Mouse Speed:",          IDM_SET_MOUSESENS_BASE, it_msens, "How fast the Sega Mouse moves for the same hand movement."),
   CHOICE("Hide Mouse Pointer:",   IDM_SET_CURSORIDLE_BASE, it_cursor, "Hide the pointer over the game after it has not moved for this long (in a window and in fullscreen). Moving the mouse shows it again.\nAlways: hides it over the game all the time.\nIn Sega Pico games the pointer is always hidden whatever is chosen here (the game draws the pen itself)."),
   CHECK ("Invert Mouse Y Axis",   IDM_INPUT_INVERTMOUSE, "Flip the up/down movement of the Sega Mouse."),
-  CHECK ("Confine Mouse to the Picture", IDM_OPT_CONFINE, "While a Sega Mouse or light gun game runs, keep the pointer inside the picture. Pause the game, press the Windows key or press Alt+Tab to let it go; a click in the picture holds it again."),
+  CHECK ("Confine Mouse to the Picture", IDM_OPT_CONFINE, "While a Sega Mouse or light gun game runs, keep the pointer inside the picture. Pause the game, press the Windows key or Alt+Tab to let it go; a click in the picture holds it again."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_BREAK, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Light Gun", 0, 0, NULL, NULL },
@@ -280,14 +290,15 @@ static const SRow rows_input[] =
   CHOICE("Crosshair Shape:", IDM_SET_XHSTYLE_BASE, it_xhstyle, "The look of the light gun crosshair: the cross Windows has, or one of eight shapes drawn by the program: plus, plus with a gap, dot, circle with a dot, circle with ticks, crosshair target, diamond and diamond with a dot."),
   CHOICE("Crosshair Color:", IDM_SET_XHCOLOR_BASE, it_xhcolor, "The color of the crosshair (it has an outline of the opposite brightness, so it shows on a bright and a dark picture). Not for the Windows Cross."),
   CHOICE("Crosshair Size:", IDM_SET_XHSIZE_BASE, it_xhsize, "How big the crosshair is. Not for the Windows Cross."),
-  CHOICE("Light Gun Border:", IDM_SET_GUNBORDER_BASE, it_gunborder, "While a light gun is plugged in, draws a white frame round the picture (the picture is made smaller to leave room for it). Guns that see the screen with a camera, such as the Sinden Lightgun, need it to find the picture. The thickness is a share of the window's height."),
+  CHOICE("Light Gun Border:", IDM_SET_GUNBORDER_BASE, it_gunborder, "Draws a white frame around the picture while a light gun is plugged in (the picture is made smaller to leave room for it). Guns that see the screen with a camera, such as the Sinden Lightgun, need it to find the picture. The thickness is a share of the window's height."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
 };
 
 static const SRow rows_options[] =
 {
   { K_GROUP, "Console", 0, 0, NULL, NULL },
-  CHOICE("Region:",               IDM_EMU_REGION_BASE, it_region, "Which region the console reports to the game: detect from the ROM, USA, Europe or Japan."),
+  CHOICE("Region:",               IDM_EMU_REGION_BASE, it_region, "Which region the console reports to the game: Auto Detect (from the game), USA, Europe or Japan."),
+  CHOICE("Preferred Region Order:", IDM_EMU_REGORDER_BASE, it_regorder, "With Region on Auto Detect: which region a Mega Drive game gets when its header names several (such as UE or JUE). The first region in the order that the game supports is used. USA -> JPN -> EUR is the order the program has always used. A game with a wrong header that the core knows keeps the region the core gives it. Not used when a region is chosen above."),
   CHOICE("Force VDP Mode:",       IDM_EMU_VDPMODE_BASE, it_vdp, "Run the video timing at 60 Hz (NTSC) or 50 Hz (PAL) whatever the region says."),
   CHOICE("Console:",              IDM_EMU_SYSTEM_BASE, it_console, "Detect the console from the game, or force a specific model."),
   CHOICE("Lock-On Cartridge:",    IDM_EMU_LOCKON_BASE, it_lockon, "Attach a Game Genie, Action Replay or Sonic & Knuckles to the game."),
@@ -296,37 +307,34 @@ static const SRow rows_options[] =
   CHECK ("Show Master System Side Borders", IDM_VIDEO_SMSBORDER, "Show the 8-pixel columns at each side of the picture, which are otherwise cropped."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Accuracy", 0, 0, NULL, NULL },
-  CHECK ("Emulate Address Error Exceptions", IDM_EMU_ADDRERROR, "Hardware-accurate crashes on bad memory access; turn off only for a few hacked games."),
-  CHECK ("Enhanced Per-Tile Vertical Scroll", IDM_EMU_VSCROLL, "Lets each 8-pixel tile column scroll up and down on its own, instead of in 16-pixel pairs, by averaging with its neighbour: smooths the jagged edges some games make in 2-cell vertical scroll mode. It changes only the few games that use that mode, and can show glitches."),
-  CHOICE("Vertical Scroll Limit:", IDM_SET_VSLIMIT_BASE, it_vslimit, "Only with Enhanced Per-Tile Vertical Scroll: where the difference in scroll between two neighbouring tiles is this many pixels or more, the enhancement is not used there."),
+  CHECK ("Remove Per-Line Sprite Limit", IDM_EMU_NOSPRITELIMIT, "Takes off the limit on the sprites of a scanline (20 on a Mega Drive screen of 320 pixels, 16 on 256, 8 on a Master System, 4 on an SG-1000, and the pixels they cover). Games that flicker their sprites because of the limit show them all, steadily; a few games that use the limit on purpose to hide something may look wrong. Not used in 32X games."),
+  CHECK ("Enhanced Per-Tile Vertical Scroll", IDM_EMU_VSCROLL, "Lets each 8-pixel tile column scroll up and down on its own, instead of in 16-pixel pairs, by averaging with its neighbor: smooths the jagged edges some games make in 2-cell vertical scroll mode. It changes only the few games that use that mode, and can show glitches."),
+  CHOICE("Vertical Scroll Limit:", IDM_SET_VSLIMIT_BASE, it_vslimit, "Only with Enhanced Per-Tile Vertical Scroll: where the difference in scroll between two neighboring tiles is this many pixels or more, the enhancement is not used there."),
   CHECK ("System Lock-Ups", IDM_EMU_LOCKUPS, "Emulate the lock-ups the real console has when a game reads or writes an address that does not exist. Turn off only for a few demos and homebrew that rely on such accesses to work."),
   CHOICE("CPU Speed:", IDM_SET_CPUSPEED_BASE, it_cpuspeed, "Speed of the emulated main 68000 (and the Mega CD's second 68000): above 100% can reduce slowdown in games that slow down, but can cause glitches or break timing; below 100% slows the game's logic down. The sound chips are not changed. Always 100% during netplay. Applies at once."),
+  CHECK ("Emulate Address Error Exceptions", IDM_EMU_ADDRERROR, "Hardware-accurate crashes on bad memory access; turn off only for a few hacked games."),
   CHECK ("Emulate Mega CD Disc Latency", IDM_EMU_CDLATENCY, "Make the Mega CD drive seek slowly like the real one; some games need it; off makes loading instant."),
-  { K_GROUPEND, NULL, 0, 0, NULL, NULL },
-  { K_GROUP, "Video Recording", 0, 0, NULL, NULL },
-  CHOICE("Recording Size:",       IDM_SET_RECSIZE_BASE, it_shotsize, "How big a video recording (Video + Audio) is, as a multiple of the console's own picture: 1x is for example 320x224, 2x (default) 640x448, 4x 1280x896. Enlarged in whole pixels, so it stays sharp. Used for the next recording."),
-  CHOICE("Recording Quality:",    IDM_SET_RECQUAL_BASE, it_recqual, "How much data a second of video gets. Automatic (default) picks it from the size. A higher value keeps more detail and makes a bigger file. Used for the next recording."),
-  CHOICE("Recording Shape:",      IDM_SET_RECSHAPE_BASE, it_recshape, "The shape of the recorded video. Used for the next recording.\nConsole's Own: keeps the picture's pixels square.\n4:3 (TV): stretches it to the shape of a TV, as the game looks in the window.\n16:9 (Widescreen): stretches it over a widescreen video."),
-  { K_GROUPEND, NULL, 0, 0, NULL, NULL },
-  { K_GROUP, "Screenshots", 0, 0, NULL, NULL },
-  CHOICE("Screenshot Output:",    IDM_TOOLS_SHOT_BASE, it_shot, "What a screenshot contains.\nCorrected (default): the picture stretched to the 4:3 shape of a TV, 640x480.\nRaw: the console's own picture at its own size (for example 320x224), not stretched.\nFinal: like Corrected, but with the Render Filter applied (the same as Corrected when no filter is on).\nScanlines and Brighten are never included."),
-  CHOICE("Screenshot Size:",      IDM_TOOLS_SHOTSIZE_BASE, it_shotsize, "How big a screenshot is, as a multiple of the size the chosen output has.\n1x: 640x480 for Corrected, the console's own size for Raw and the filter's size for Final.\n2x, 3x, 4x: that many times larger (Raw is enlarged in whole pixels, so it stays sharp)."),
+  CHECK ("CD Image Cache", IDM_EMU_CDCACHE, "Reads a whole CHD disc image into memory when the disc is loaded, so the game never waits for the drive or the disk while it runs. Only for CHD images (they stay compressed in memory, so a disc takes about as much memory as its file does). It takes effect the next time a disc is loaded. Not used in 32X games."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_BREAK, NULL, 0, 0, NULL, NULL },
-  { K_GROUP, "Rewind and Resume", 0, 0, NULL, NULL },
+  { K_GROUP, "Rewind and Fast Forward", 0, 0, NULL, NULL },
   CHECK ("Enable Rewind",         IDM_EMU_REWIND, "Keep a history of recent play so holding Backspace runs it backwards. Uses 256 MB by default (Rewind History Size) and some CPU; not available during netplay."),
   CHOICE("Rewind Speed:",         IDM_SET_REWINDSPEED_BASE, it_rewspeed, "How fast Rewind runs backwards. Faster rewinds go through the history sooner.\nSlow: half the speed of Normal (the default).\nFast: twice as fast.\nVery Fast: four times as fast."),
   CHOICE("Rewind History Size:",  IDM_EMU_REWINDMEM_BASE, it_rewmem, "How much memory the Rewind history may use: the more, the further back you can go (how far depends on the game). Changing it starts the history again. Large sizes may not be available in the 32-bit program."),
-  CHECK ("Auto Resume", IDM_EMU_AUTOSAVE, "Save the game when you close it, and offer to carry on from there the next time you open it."),
+  CHOICE("Fast Forward Speed:",   IDM_SET_FFSPEED_BASE, it_ffspeed, "How fast Fast Forward runs (the Tab key, the pad hotkey or Emulation > Fast Forward): the game runs this many frames for each one shown. 4x is the default. A faster choice needs a faster PC to reach it; a slower PC runs as fast as it can."),
+  { K_GROUPEND, NULL, 0, 0, NULL, NULL },
+  { K_GROUP, "Input Lag", 0, 0, NULL, NULL },
+  CHOICE("Run-Ahead:", IDM_SET_RUNAHEAD_BASE, it_runahead, "Cuts the delay between a button press and the picture: each frame the game is run 1 or 2 frames ahead in secret, the picture shown is the one from ahead, and then the game goes back to where it really is (the same trick as RetroArch's Run-Ahead). A game that reacts 1 or 2 frames later than the console did feels like the console. It makes the PC work 2 or 3 times as hard per frame, so use it on a PC with room to spare; a game with a long built-in delay needs 2. Not used in netplay, while recording or logging VGM, or while an input recording is made or played, or at another game speed than 100%. A rare game can glitch. Off by default."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Start and Backup", 0, 0, NULL, NULL },
+  CHECK ("Auto Resume", IDM_EMU_AUTOSAVE, "Save the game when you close it, and offer to carry on from there the next time you open it."),
   CHOICE("Backup State:",         IDM_SET_AUTOSAVE_BASE, it_abackup, "While a game runs, quietly save its state every few minutes into a rolling backup (Emulation > Load State > Load Backup State), so a crash never loses much."),
   CHOICE("Skip Intro on Launch:", IDM_SET_SKIPLEN_BASE, it_skiplen, "When a game starts, run its first few seconds of game time at full speed to get past logos and intros; this takes much less real time than the seconds chosen. A press of a game button ends the skip early. Not used when resuming a game or during netplay."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
   { K_GROUP, "Troubleshooting", 0, 0, NULL, NULL },
-  CHECK ("Enable Log",      IDM_OPT_LOG, "Write genesis-plus-ex.log in the Logs folder next to the program (Settings > General > Data Folders can move it): the machine and the whole settings file at the start; for each game its file, ROM header, console set-up, picture and sound and, at the end, how it went (time, frames, slowest frame); resets, states, cheat codes and their timing, messages, errors and netplay events. Send it along with a bug report."),
+  CHECK ("Enable Log",      IDM_OPT_LOG, "Write genesis-plus-ex.log in the Logs folder next to the program: the machine and the whole settings file at the start; for each game its file, ROM header, console set-up, picture and sound and, at the end, how it went (time, frames, slowest frame); resets, states, cheat codes and their timing, messages, errors and netplay events. Send it along with a bug report."),
   CHECK ("Enable Crash Report", IDM_OPT_CRASHREPORT, "If the program crashes, write genesis-plus-ex-crash.txt and genesis-plus-ex-crash.dmp in the Logs folder next to the program (only the last crash is kept). Send both with a bug report."),
-  BUTTON("Factory Reset...", IDM_OPT_FACTORYRESET, "Delete the settings file (both copies, the one beside the program and the one in %LOCALAPPDATA%\\Genesis Plus EX, when each exists) and start the program again as a new copy would: every setting, the controls, the hotkeys, the picture adjustments, the audio levels, the folders and ROM directories, the favorites and the lists of recent and played games go back to their defaults. Your games, saves, save states, covers, cheat files and saved controller profiles are not touched. Restore Defaults (below) only puts back the settings of this window."),
+  BUTTON("Factory Reset...", IDM_OPT_FACTORYRESET, "Delete the settings file (both copies, the one beside the program and the one in %LOCALAPPDATA%\\Genesis Plus EX, when each exists) and start the program again as a new copy would: every setting, the controls, the hotkeys, the picture adjustments, the audio levels, the folders and game folders, the favorites and the lists of recent and played games go back to their defaults. Your games, saves, save states, covers, cheat files and saved controller profiles are not touched. Restore Defaults (below) only puts back the settings of this window."),
   { K_GROUPEND, NULL, 0, 0, NULL, NULL },
 };
 
@@ -337,7 +345,7 @@ static const SPage pages[] =
   PAGE("Video",     rows_video),
   PAGE("Audio",     rows_audio),
   PAGE("Input",     rows_input),
-  PAGE("Options",   rows_options),
+  PAGE("Emulation", rows_options),
   PAGE("OSD",       rows_osd),
 };
 #define NPAGES ((int)(sizeof(pages) / sizeof(pages[0])))
@@ -356,6 +364,7 @@ static int s_need_h;                /* the page height the tallest tab needs */
 static HWND s_lab[MAX_ROWS];       /* the label in front of a slider or a drop-down (grayed with it) */
 static HWND s_resume_btn;
 static HWND s_page[NPAGES];
+static int  s_page_need[NPAGES];                 /* the height each page needs (its rows and frames), for its scroll bar when the window is too short */
 static int  s_nrows;
 
 /****************************************************************************
@@ -385,7 +394,7 @@ static UINT find_state(HMENU menu, int id)
   return (UINT)-1;
 }
 
-static UINT menu_state(int id)
+static UINT menu_state_raw(int id)
 {
   if (gui_rate_locked(id)) return MF_GRAYED | MF_DISABLED;                  /* a 32X+ game runs at 44100 Hz */
   if (gui_pico_unsupported(id) || gui_pico_only(id)) return MF_GRAYED | MF_DISABLED;      /* a 32X game is running: nothing here applies to it */
@@ -396,6 +405,8 @@ static UINT menu_state(int id)
   if (id == IDM_OPT_CRASHREPORT) return gui.crash_report ? MF_CHECKED : 0;
   if (id == IDM_EMU_REWIND) return gui.rewind ? MF_CHECKED : 0;      /* no longer in a menu: asked here */
   if (id == IDM_OPT_COVERCACHE) return gui.cover_cache ? MF_CHECKED : 0;
+  if (id == IDM_VIDEO_ALTTIMING) return gui.alt_timing ? MF_CHECKED : 0;
+  if (id == IDM_VIDEO_SYNCDISPLAY) return (gui.sync_display ? MF_CHECKED : 0) | (gui.vsync ? 0 : (MF_GRAYED | MF_DISABLED));
   if (id == IDM_OPT_COVERCARD) return gui.cover_card ? MF_CHECKED : 0;
   if (id == IDM_OPT_CONSOLEBADGE) return gui.console_badge ? MF_CHECKED : 0;
   if (id == IDM_OPT_REGIONFLAGS) return gui.region_flags ? MF_CHECKED : 0;
@@ -408,12 +419,14 @@ static UINT menu_state(int id)
   if (id == IDM_OPT_NORMALIZE) return gui.normalize ? MF_CHECKED : 0;
   if (id == IDM_OPT_SINGLEINSTANCE) return gui.single_instance ? MF_CHECKED : 0;
   if (id == IDM_OPT_KEEPAWAKE) return gui.keep_awake ? MF_CHECKED : 0;
-  if (id == IDM_OPT_MUTEUNFOCUSED) return gui.mute_unfocused ? MF_CHECKED : 0;
+  if (id == IDM_OPT_MUTEUNFOCUSED) return (gui.mute_unfocused ? MF_CHECKED : 0) | ((gui.pause_on_focus_loss && !netplay_active()) ? (MF_GRAYED | MF_DISABLED) : 0);      /* (a paused game makes no sound; netplay is never paused) */
   if (id == IDM_EMU_BIOS) return config.bios ? MF_CHECKED : 0;                       /* no longer in the Options menu */
   if (id == IDM_EMU_ADDRERROR) return config.addr_error ? MF_CHECKED : 0;
   if (id == IDM_EMU_CDLATENCY) return config.cd_latency ? MF_CHECKED : 0;
+  if (id == IDM_EMU_CDCACHE) return config.cd_cache ? MF_CHECKED : 0;
   if (id == IDM_EMU_VSCROLL) return config.enhanced_vscroll ? MF_CHECKED : 0;
   if (id == IDM_EMU_LOCKUPS) return config.force_dtack ? 0 : MF_CHECKED;
+  if (id == IDM_EMU_NOSPRITELIMIT) return (config.no_sprite_limit ? MF_CHECKED : 0) | (gui_pico_unsupported(id) ? (MF_GRAYED | MF_DISABLED) : 0);
   if (id >= IDM_SET_VSLIMIT_BASE && id < IDM_SET_VSLIMIT_BASE + 8 && !config.enhanced_vscroll) return (gui.vs_limit == id - IDM_SET_VSLIMIT_BASE ? MF_CHECKED : 0) | (MF_GRAYED | MF_DISABLED);
   if (id == IDM_VIDEO_GGEXTRA) return config.gg_extra ? MF_CHECKED : 0;
   if (id == IDM_VIDEO_SMSBORDER) return gui.sms_show_border ? MF_CHECKED : 0;
@@ -446,10 +459,59 @@ static UINT menu_state(int id)
   return find_state(gui_main_menu(), id);
 }
 
+/* Rewind Speed and Rewind History Size are grayed while Enable Rewind is not ticked. */
+static UINT menu_state(int id)
+{
+  UINT s = menu_state_raw(id);
+
+  if (!gui.rewind && ((id >= IDM_SET_REWINDSPEED_BASE && id < IDM_SET_REWINDSPEED_BASE + 4) || (id >= IDM_EMU_REWINDMEM_BASE && id < IDM_EMU_REWINDMEM_BASE + 4)))
+    s = (s == (UINT)-1 ? 0 : s) | MF_GRAYED | MF_DISABLED;
+  return s;
+}
+
 static int menu_checked(int id)
 {
   UINT st = menu_state(id);
   return st != (UINT)-1 && (st & MF_CHECKED);
+}
+
+/* The lists of the drop-downs filled by the program (language, monitors, resolutions, sound devices, graphics cards) cost a few tens of milliseconds
+   each to make (Windows is asked for the display modes, the sound endpoints and the graphics cards), and sync_all() runs after every click and on a
+   timer. They are made once and kept while the window is open; a change that can alter one (a drop-down of these, the sound output, the Fullscreen Mode,
+   a button) makes them again. */
+typedef struct { int id, n, cur, valid; char names[64][96]; } dyn_cache_t;
+static dyn_cache_t s_dyn_cache[12];
+
+static void dyn_invalidate(void)
+{
+  int i;
+  for (i = 0; i < 12; i++) s_dyn_cache[i].valid = 0;
+}
+
+static int dyn_list(int id, char names[][96], int max, int *cur)
+{
+  int i, free_slot = -1, n;
+
+  for (i = 0; i < 12; i++)
+  {
+    if (s_dyn_cache[i].valid && s_dyn_cache[i].id == id)
+    {
+      n = s_dyn_cache[i].n;
+      if (n > max) n = max;
+      memcpy(names, s_dyn_cache[i].names, (size_t)n * 96);
+      *cur = s_dyn_cache[i].cur;
+      return n;
+    }
+    if (!s_dyn_cache[i].valid && free_slot < 0) free_slot = i;
+  }
+  *cur = 0;
+  n = gui_dyn_list(id, names, max, cur);
+  if (free_slot >= 0 && n <= 64)
+  {
+    s_dyn_cache[free_slot].id = id; s_dyn_cache[free_slot].n = n; s_dyn_cache[free_slot].cur = *cur; s_dyn_cache[free_slot].valid = 1;
+    memcpy(s_dyn_cache[free_slot].names, names, (size_t)n * 96);
+  }
+  return n;
 }
 
 static void sync_shader(void);
@@ -478,28 +540,28 @@ static void sync_all(void)
       for (k = 0; k < r->n; k++)
         if (menu_checked(r->id + k)) { sel = k; break; }
       if (r->id == IDM_SET_ACCENT_BASE && gui.accent >= r->n && gui.accent < (int)SendMessage(c, CB_GETCOUNT, 0, 0)) sel = gui.accent;   /* the hidden one, once it is in the list */
-      SendMessage(c, CB_SETCURSEL, (WPARAM)sel, 0);
+      if ((int)SendMessage(c, CB_GETCURSEL, 0, 0) != sel) SendMessage(c, CB_SETCURSEL, (WPARAM)sel, 0);       /* (only when it changed: each call repaints the box by itself, with a slightly different text rectangle than the full paint, and the text wobbled) */
       EnableWindow(c, st0 == (UINT)-1 || !(st0 & (MF_GRAYED | MF_DISABLED)));     /* a choice grayed in the menu is grayed here too */
       if (s_lab[i]) EnableWindow(s_lab[i], IsWindowEnabled(c));                  /* and so is its label */
-      if (r->id == IDM_VIDEO_FILTER_MODE_BASE) InvalidateRect(c, NULL, TRUE);    /* (its Direct3D 11 entries gray or not with the renderer) */
+      if (r->id == IDM_VIDEO_FILTER_MODE_BASE) InvalidateRect(c, NULL, TRUE);    /* (its pixel shader entries gray or not with the renderer) */
     }
     else if (r->kind == K_DYN)
     {
       char names[64][96];
       int n, cur = 0, k;
-      n = gui_dyn_list(r->id, names, 64, &cur);
+      n = dyn_list(r->id, names, 64, &cur);
       if ((int)SendMessage(c, CB_GETCOUNT, 0, 0) != n)
       {
         SendMessage(c, CB_RESETCONTENT, 0, 0);
         for (k = 0; k < n; k++) SendMessageA(c, CB_ADDSTRING, 0, (LPARAM)names[k]);
         theme_fit_dropdown(c);
       }
-      SendMessage(c, CB_SETCURSEL, (WPARAM)cur, 0);
+      if ((int)SendMessage(c, CB_GETCURSEL, 0, 0) != cur) SendMessage(c, CB_SETCURSEL, (WPARAM)cur, 0);
     }
     else if (r->kind == K_FILTER)
     {
       int cur = video_filter_current();
-      SendMessage(c, CB_SETCURSEL, (WPARAM)(cur >= 0 ? cur + 1 : 0), 0);
+      if ((int)SendMessage(c, CB_GETCURSEL, 0, 0) != (cur >= 0 ? cur + 1 : 0)) SendMessage(c, CB_SETCURSEL, (WPARAM)(cur >= 0 ? cur + 1 : 0), 0);
     }
     else if (r->kind == K_SHADER)
     {
@@ -524,6 +586,7 @@ static HWND s_shader_browse;       /* its ... button */
 static HWND s_shader_clear;        /* the x inside the file box */
 static HWND s_shader_check;
 static int  s_shader_want;         /* "Enable Shader" ticked while no file is chosen yet */
+static int s_sp_btn_w;              /* the width of the Shader Parameters button (the Skip Render Filter tick is laid out beside it) */
 static RECT s_frame_rc;            /* the shader box's frame, in its page's coordinates */
 #define GRP_MAX 32
 static RECT s_grp_rc[GRP_MAX];           /* frames around groups of rows, in their page's coordinates */
@@ -1096,8 +1159,11 @@ static LRESULT CALLBACK page_proc(HWND h, UINT m, WPARAM w, LPARAM l)
         DeleteObject(bb);
       }
 
-      {   /* frames around groups of rows */
+      {   /* frames around groups of rows (they scroll with the rows) */
         int g;
+        int sx = gui_scroll_x(h), sy = gui_scroll_y(h);      /* (moved relative to the origin the caller gave the DC: a control asks its page for its background with an origin of its own) */
+
+        OffsetViewportOrgEx((HDC)w, -sx, -sy, NULL);
         for (g = 0; g < s_grp_n; g++)
           if (h == s_grp_page[g])
           {
@@ -1109,16 +1175,21 @@ static LRESULT CALLBACK page_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 
             if (s_grp_title[g]) frame_title((HDC)w, h, &s_grp_rc[g], s_grp_title[g]);
           }
+        OffsetViewportOrgEx((HDC)w, sx, sy, NULL);
       }
 
       if (h == s_frame_page && !IsRectEmpty(&s_frame_rc))   /* the shader box's frame */
       {
+        int sx2 = gui_scroll_x(h), sy2 = gui_scroll_y(h);
+
+        OffsetViewportOrgEx((HDC)w, -sx2, -sy2, NULL);
         HPEN pen = CreatePen(PS_SOLID, 1, theme_is_dark() ? THEME_DARK_LINE : THEME_LIGHT_LINE);
         HGDIOBJ op = SelectObject((HDC)w, pen), ob = SelectObject((HDC)w, GetStockObject(NULL_BRUSH));
         RoundRect((HDC)w, s_frame_rc.left, s_frame_rc.top, s_frame_rc.right, s_frame_rc.bottom, TBS(6), TBS(6));
         SelectObject((HDC)w, op); SelectObject((HDC)w, ob);
         DeleteObject(pen);
         if (s_frame_title) frame_title((HDC)w, h, &s_frame_rc, s_frame_title);
+        OffsetViewportOrgEx((HDC)w, sx2, sy2, NULL);
       }
       return 1;
     }
@@ -1280,13 +1351,17 @@ static void add_tip(HWND dlg, HWND ctl, const char *text, HFONT font)
   SendMessageA(s_tip, TTM_ADDTOOLA, 0, (LPARAM)&ti);
 }
 
-static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
+/* dry: only the height the page needs is worked out (the rows are laid out, nothing is created): the window is made tall enough for the tallest tab
+   before any tab is built, and a tab is built when it is first shown (ensure_page). */
+static void build_page(HWND dlg, int p, const RECT *rc, HFONT font, int dry)
 {
   const SPage *pg = &pages[p];
   int w = rc->right - rc->left, h = rc->bottom - rc->top;
   int m = TBS(12), rowh = TBS(30), total = 0, cols, per_col;
   int colw, colw0, gw, ytop = m, lwp, i, col = 0, slot = 0, maxh = 0, ypad = 0, gstart = 0, inset = 0, breaks = 0;
   const char *gtitle = NULL;
+  int dry_frame_bottom = 0;
+  int colbot[8] = { 0 };               /* where each column's last frame ended: the shader box sits under the first column */
 
   for (i = 0; i < pg->count; i++) { total += row_span(&pg->rows[i]); if (pg->rows[i].kind == K_BREAK) breaks++; }
   cols = breaks ? 2 : (total > 8) ? 2 : 1;      /* (a page with its own column break lays the columns out itself) */
@@ -1297,6 +1372,7 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
 
   /* The label column is as wide as the longest label on the page (so none is clipped), but no more than 60%. */
   lwp = (colw0 - TBS(24)) * 2 / 5;
+  if (!dry)
   {
     HDC mdc = GetDC(dlg);
     HGDIOBJ of = SelectObject(mdc, theme_style_font(font));       /* (the labels have the style's font: Modern is wider) */
@@ -1313,11 +1389,12 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
     if (lwp > (colw0 - TBS(24)) * 3 / 5) lwp = (colw0 - TBS(24)) * 3 / 5;      /* (a translation may need all of it: the fit pass widens what is left cut) */
   }
 
-  s_page[p] = CreateWindowExA(WS_EX_CONTROLPARENT, "GPSettingsPage", "",
-                              WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | (p == 0 ? WS_VISIBLE : 0),
-                              rc->left, rc->top, w, h, dlg, NULL, g_inst, NULL);
+  if (!dry)
+    s_page[p] = CreateWindowExA(WS_EX_CONTROLPARENT, "GPSettingsPage", "",
+                                WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | (p == 0 ? WS_VISIBLE : 0),
+                                rc->left, rc->top, w, h, dlg, NULL, g_inst, NULL);
 
-  for (i = 0; i < pg->count && s_nrows < MAX_ROWS; i++)
+  for (i = 0; i < pg->count && (dry || s_nrows < MAX_ROWS); i++)
   {
     const SRow *r = &pg->rows[i];
     int span = row_span(r), x, y, idx;
@@ -1337,7 +1414,7 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
     }
     if (r->kind == K_GROUPEND)
     {
-      if (s_grp_n < GRP_MAX)
+      if (!dry && s_grp_n < GRP_MAX)
       {
         int gx = m + col * (colw0 + TBS(16));
         SetRect(&s_grp_rc[s_grp_n], gx, gstart, gx + gw, ytop + slot * rowh + ypad - TBS(2));
@@ -1346,9 +1423,18 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
       }
       ypad += TBS(12);
       if (ytop + slot * rowh + ypad > maxh) maxh = ytop + slot * rowh + ypad;
+      if (col >= 0 && col < 8) colbot[col] = ytop + slot * rowh + ypad;
       inset = 0;
       colw = colw0;
       gw = colw0;
+      continue;
+    }
+    if (dry)
+    {
+      if (!breaks && slot + span > per_col && slot > 0 && col + 1 < cols) { col++; slot = 0; }
+      slot += span;
+      if (ytop + slot * rowh + ypad > maxh) maxh = ytop + slot * rowh + ypad;
+      if (r->kind == K_SHADER) dry_frame_bottom = colbot[0] + TBS(4) + TBS(110);
       continue;
     }
     idx = s_nrows++;
@@ -1364,10 +1450,10 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
 
     if (r->kind == K_CHECK && r->id == IDM_VIDEO_SHADERNOFILTER)
     {
-      /* In the shader box, beside the Shader Parameters button. */
-      int bx = s_frame_rc.left + TBS(10) + colw * 3 / 4 + TBS(14);
-      c = CreateWindowExA(0, "BUTTON", r->label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                          bx, s_frame_rc.top + TBS(78), s_frame_rc.right - TBS(10) - bx, TBS(22), s_page[p],
+      /* In the shader box, beside the Shader Parameters button (its words go on a second line when the frame is narrow). */
+      int bx = s_frame_rc.left + TBS(10) + s_sp_btn_w + TBS(8);
+      c = CreateWindowExA(0, "BUTTON", r->label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX | BS_MULTILINE | BS_VCENTER,
+                          bx, s_frame_rc.top + TBS(72), s_frame_rc.right - TBS(10) - bx, TBS(34), s_page[p],
                           (HMENU)(INT_PTR)(ROW_ID_BASE + idx), g_inst, NULL);
     }
     else if (r->kind == K_CHECK)
@@ -1412,9 +1498,19 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
     }
     else if (r->kind == K_BUTTON && r->id == IDM_VIDEO_SHADERPARAMS)
     {
-      /* In the shader box, under the file box. */
+      /* In the shader box, under the file box: wide enough for its words (a translation may be longer), the tick goes beside it. */
+      s_sp_btn_w = TBS(116);
+      {
+        HDC mdc = GetDC(dlg);
+        HGDIOBJ of = SelectObject(mdc, theme_style_font(font));
+        SIZE sz;
+        if (GetTextExtentPoint32A(mdc, tr(r->label), lstrlenA(tr(r->label)), &sz) && sz.cx + TBS(24) > s_sp_btn_w) s_sp_btn_w = sz.cx + TBS(24);
+        SelectObject(mdc, of);
+        ReleaseDC(dlg, mdc);
+        if (s_sp_btn_w > (s_frame_rc.right - s_frame_rc.left) * 11 / 20) s_sp_btn_w = (s_frame_rc.right - s_frame_rc.left) * 11 / 20;
+      }
       c = CreateWindowExA(0, "BUTTON", r->label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                          s_frame_rc.left + TBS(10), s_frame_rc.top + TBS(76), colw * 3 / 4, TBS(24), s_page[p],
+                          s_frame_rc.left + TBS(10), s_frame_rc.top + TBS(77), s_sp_btn_w, TBS(24), s_page[p],
                           (HMENU)(INT_PTR)(ROW_ID_BASE + idx), g_inst, NULL);
     }
     else if (r->kind == K_BUTTON)
@@ -1424,13 +1520,13 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
     }
     else if (r->kind == K_SHADER)
     {
-      /* Under both columns: a frame with "Enable Shader" and, below it, the
-         file box and its ... button. */
-      int colw = w - 2 * m;                 /* (the full width, not a column's) */
-      int bh = TBS(108), bw = TBS(30);                 /* room for the Shader Parameters button under the file box */
+      /* Under the first column, as wide as it: a frame with "Enable Shader" and, below it, the
+         file box and its ... button, the Shader Parameters button and the Skip Render Filter tick. */
+      int colw = colw0;
+      int bh = TBS(110), bw = TBS(30);                 /* room for the Shader Parameters button and the tick beside it, under the file box */
 
       x = m;
-      y = maxh + TBS(4);
+      y = colbot[0] + TBS(4);
 
       /* The frame is painted by the page itself (see page_proc), so its line
          can be a quiet gray in dark mode; a group box draws it bright white. */
@@ -1511,8 +1607,10 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
 
   {
     int need = maxh + m;
-    if (s_frame_page == s_page[p] && s_frame_rc.bottom + m > need) need = s_frame_rc.bottom + m;
+    if (dry) { if (dry_frame_bottom && dry_frame_bottom + m > need) need = dry_frame_bottom + m; }
+    else if (s_frame_page == s_page[p] && s_frame_rc.bottom + m > need) need = s_frame_rc.bottom + m;
     if (need > s_need_h) s_need_h = need;
+    s_page_need[p] = need;
   }
 }
 
@@ -1523,7 +1621,32 @@ static void build_page(HWND dlg, int p, const RECT *rc, HFONT font)
 static void show_page(int p)
 {
   int i;
-  for (i = 0; i < NPAGES; i++) ShowWindow(s_page[i], i == p ? SW_SHOW : SW_HIDE);
+  for (i = 0; i < NPAGES; i++) if (s_page[i]) ShowWindow(s_page[i], i == p ? SW_SHOW : SW_HIDE);
+}
+
+static void sync_all(void);
+static void snapshot_range(int from, int to);
+static RECT s_pages_rc;               /* where the pages are, and the font of the rows: what a tab needs to be built when it is first shown */
+static HFONT s_pages_font;
+
+/* A tab is built when it is first shown, not when the window opens (about 30 ms each instead of 220 ms for all of them at once). */
+static void ensure_page(HWND dlg, int p)
+{
+  int first;
+
+  if (p < 0 || p >= NPAGES || s_page[p]) return;
+  first = s_nrows;
+  build_page(dlg, p, &s_pages_rc, s_pages_font, 0);
+  if (s_page[p]) gui_scroll_area(s_page[p], s_page_need[p]);
+  theme_apply_to_window(dlg);
+  sync_all();
+  snapshot_range(first, s_nrows);
+}
+
+static void ensure_all_pages(HWND dlg)
+{
+  int p;
+  for (p = 0; p < NPAGES; p++) ensure_page(dlg, p);
 }
 
 /* Puts every setting on these tabs back to its default. The defaults are read
@@ -1540,11 +1663,15 @@ static void restore_defaults(HWND dlg, int page)     /* page: the tab to restore
   uint8 os0 = input.system[0], os1 = input.system[1];
 
   if (MessageBoxA(dlg, page < 0 ? "Put every setting in this window back to its default?\n\n"
-                                  "Your controls, ROM folder and cheats are kept."
+                                  "Your controls, game folders and cheats are kept."
                                 : "Put every setting on this tab back to its default?\n\n"
                                   "The other tabs are left as they are.",
                   page < 0 ? "Restore Defaults" : "Restore Tab Defaults", MB_YESNO | MB_ICONQUESTION) != IDYES)
     return;
+  /* The window is held still while the settings change and the theme is applied again, and painted once at the end: a theme that changes
+     (Dark -> System) otherwise showed the tab blank for a moment, then the controls coming back one by one. */
+  LockWindowUpdate(dlg);
+  ensure_all_pages(dlg);                                           /* (every tab is built before the rows are walked: Restore Defaults reaches the tabs that were never opened too) */
 
   set_config_defaults();
   gui_update_menu();
@@ -1597,8 +1724,10 @@ static void restore_defaults(HWND dlg, int page)     /* page: the tab to restore
     }
   }
 
-  if (gui.theme_mode != theme_before || gui.ui_style != style_before) PostMessage(dlg, WM_APP + 1, 0, 0);
+  if (gui.theme_mode != theme_before || gui.ui_style != style_before) SendMessage(dlg, WM_APP + 1, 0, 0);    /* (now, while the window is held, not later) */
   sync_all();
+  LockWindowUpdate(NULL);
+  RedrawWindow(dlg, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 
 /* An option was changed here: the on-screen message names it and says what it is now, e.g. "Scanlines: 50%". */
@@ -1627,9 +1756,15 @@ static int row_snapshot_value(const SRow *r)
     for (k = 0; k < r->n; k++) if (menu_checked(r->id + k)) return k;
     return -1;
   }
-  if (r->kind == K_DYN) { char names[64][96]; int cur = 0; gui_dyn_list(r->id, names, 64, &cur); return cur; }
+  if (r->kind == K_DYN) { char names[64][96]; int cur = 0; dyn_list(r->id, names, 64, &cur); return cur; }
   if (r->kind == K_FILTER) return video_filter_current();
   return 0;
+}
+
+static void snapshot_range(int from, int to)
+{
+  int i;
+  for (i = from; i < to; i++) s_snap[i] = row_snapshot_value(s_row[i]);
 }
 
 static void snapshot_rows(void)
@@ -1677,7 +1812,7 @@ size_t settings_guide_text(char *out, size_t cap)
 
   GUIDE_ADD("\1SETTINGS WINDOW\r\n");                                /* (\1 a title, \2 an item: see guide_mark in dialogs.c) */
   GUIDE_ADD("\2  Where it is:\r\n");
-  GUIDE_ADD("   Options > Settings... or the Settings button on the toolbar: the options of the menus, and some more, on tabs. Hover over an option for the same description. Changes show at once while the window is open, so you can see their effect; OK keeps them and Cancel (also the X and Esc) puts every setting back as it was. Alt and the underlined letter of a tab (shown once Alt is pressed) opens it. Restore Defaults (bottom left) puts the settings of this tab, or of all tabs, back to their defaults, keeping your controls, ROM folder and cheats.\r\n");
+  GUIDE_ADD("   Options > Settings... or the Settings button on the toolbar: the options of the menus, and some more, on tabs. Hover over an option for the same description. Changes show at once while the window is open, so you can see their effect; OK keeps them and Cancel (also the X and Esc) puts every setting back as it was. Alt and the underlined letter of a tab (shown once Alt is pressed) opens it. Restore Defaults (bottom left) puts the settings of this tab, or of all tabs, back to their defaults, keeping your controls, game folders and cheats.\r\n");
   for (p = 0; p < NPAGES; p++)
   {
     const SPage *pg = &pages[p];
@@ -1742,10 +1877,14 @@ static INT_PTR CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       HFONT font = (HFONT)SendMessage(dlg, WM_GETFONT, 0, 0);
       RECT rc, trc;
       int p;
+      DWORD open_t0 = GetTickCount(), t_built, t_themed;
       s_nrows = 0;
+      dyn_invalidate();
       memset(s_lab, 0, sizeof(s_lab));
       s_shader_want = 0;
       s_resume_btn = NULL;
+      s_shader_edit = s_shader_browse = s_shader_clear = s_shader_check = NULL;
+      memset(s_page, 0, sizeof(s_page));
       s_tip = NULL;
       s_item_tip = NULL;
       tabs_hot = -1;
@@ -1847,7 +1986,7 @@ static INT_PTR CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
       }
 
       s_need_h = 0;
-      for (p = 0; p < NPAGES; p++) build_page(dlg, p, &rc, font);
+      for (p = 0; p < NPAGES; p++) build_page(dlg, p, &rc, font, 1);          /* (only the height each tab needs: the tabs are built when first shown) */
 
       /* A tab that needs more room than the window has makes the window taller (as far as the screen allows). */
       if (s_need_h > rc.bottom - rc.top)
@@ -1875,6 +2014,12 @@ static INT_PTR CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         }
       }
 
+      s_pages_rc = rc;
+      s_pages_font = font;
+      p = s_start_tab >= 0 && s_start_tab < NPAGES ? s_start_tab : 0;
+      build_page(dlg, p, &rc, font, 0);                                  /* the tab the window opens on */
+      if (s_page[p]) gui_scroll_area(s_page[p], s_page_need[p]);       /* (a short screen: the rows that do not fit scroll) */
+
       /* Restore Defaults sits at the left, level with Close. */
       {
         RECT btn;
@@ -1897,13 +2042,17 @@ static INT_PTR CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                              trc.left, btn.top, bw, btn.bottom - btn.top, dlg,
                              (HMENU)(INT_PTR)IDC_SETTINGS_DEFAULTS, g_inst, NULL);      /* drawn with an arrow: All Tabs or This Tab */
         SendMessage(rd, WM_SETFONT, (WPARAM)font, TRUE);
-        add_tip(dlg, rd, "Choose This Tab or All Tabs to put those settings back to their defaults. Controls, ROM folder and cheats are kept.", font);
+        add_tip(dlg, rd, "Choose This Tab or All Tabs to put those settings back to their defaults. Controls, game folders and cheats are kept.", font);
       }
       if (s_start_tab) { SetWindowLongPtr(tab, GWLP_USERDATA, s_start_tab); show_page(s_start_tab); }
 
+      t_built = GetTickCount();
       theme_apply_to_window(dlg);
+      t_themed = GetTickCount();
       sync_all();
       snapshot_rows();
+      gui_log("Settings: window made in %lu ms (the controls %lu, the theme %lu, the lists and values %lu)", (unsigned long)(GetTickCount() - open_t0),
+              (unsigned long)(t_built - open_t0), (unsigned long)(t_themed - t_built), (unsigned long)(GetTickCount() - t_themed));
       return TRUE;
     }
 
@@ -1959,9 +2108,13 @@ static INT_PTR CALLBACK settings_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
       if (id == IDC_SETTINGS_TAB && code == TABS_CHANGED)
       {
+        ensure_page(dlg, (int)GetWindowLongPtr((HWND)lp, GWLP_USERDATA));
         show_page((int)GetWindowLongPtr((HWND)lp, GWLP_USERDATA));
         return TRUE;
       }
+
+      if (id < ROW_ID_BASE || id >= ROW_ID_BASE + s_nrows) dyn_invalidate();                 /* (a button: it may change anything) */
+      else if (s_row[id - ROW_ID_BASE]->kind == K_DYN || s_row[id - ROW_ID_BASE]->id == IDM_SET_BACKEND_BASE || s_row[id - ROW_ID_BASE]->id == IDM_SET_FSMODE_BASE) dyn_invalidate();
 
       if (id >= ROW_ID_BASE && id < ROW_ID_BASE + s_nrows)
       {
@@ -2184,8 +2337,8 @@ void dlg_settings(HWND parent)
 
 static char dd_path[GUI_DIR_N][GUI_PATH_LEN];          /* what OK keeps: "" = beside the program */
 
-/* The folder beside the program, whatever has been chosen. */
-static void dd_default(int k, char *out, int len)
+/* The folder beside the program as a full path, whatever has been chosen. */
+static void dd_default_abs(int k, char *out, int len)
 {
   char keep[GUI_DIR_N][GUI_PATH_LEN];
 
@@ -2195,17 +2348,25 @@ static void dd_default(int k, char *out, int len)
   memcpy(gui.dir_path, keep, sizeof(keep));
 }
 
-/* The text of a box is the folder to use; the folder beside the program is kept as "" (so the program can still be moved). */
+/* The folder beside the program as the boxes show it: .\Name (relative to the program, so it can still be moved). */
+static void dd_default(int k, char *out, int len)
+{
+  gui_snprintf(out, len, ".\\%s", gui_dir_names[k]);
+}
+
+/* The text of a box is the folder to use; the folder beside the program (.\Name, ./Name, or its full path) is kept as "". */
 static void dd_commit(HWND dlg, int k)
 {
-  char path[GUI_PATH_LEN], def[GUI_PATH_LEN];
+  char path[GUI_PATH_LEN], def[GUI_PATH_LEN], defback[GUI_PATH_LEN], absdef[GUI_PATH_LEN];
   int n;
 
   GetDlgItemTextA(dlg, IDC_DIR_EDIT_BASE + k, path, sizeof(path));
   n = lstrlenA(path);
   while (n > 3 && (path[n - 1] == '\\' || path[n - 1] == '/' || path[n - 1] == ' ')) path[--n] = '\0';
   dd_default(k, def, sizeof(def));
-  lstrcpynA(dd_path[k], (!path[0] || !lstrcmpiA(path, def)) ? "" : path, GUI_PATH_LEN);
+  gui_snprintf(defback, sizeof(defback), "./%s", gui_dir_names[k]);
+  dd_default_abs(k, absdef, sizeof(absdef));
+  lstrcpynA(dd_path[k], (!path[0] || !lstrcmpiA(path, def) || !lstrcmpiA(path, defback) || !lstrcmpiA(path, absdef)) ? "" : path, GUI_PATH_LEN);
 }
 
 static INT_PTR CALLBACK directories_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
@@ -2218,7 +2379,7 @@ static INT_PTR CALLBACK directories_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
       int k;
 
       memcpy(dd_path, gui.dir_path, sizeof(dd_path));
-      SetDlgItemTextA(dlg, IDC_DIR_HELP, tr("Type a path or press ... to choose a folder. An empty box is the folder beside the program. Files in the old place are not moved. The languages use the new place after a restart. Images holds the Bezels, Covers and Pico-Storyware folders."));
+      SetDlgItemTextA(dlg, IDC_DIR_HELP, tr("Type a path or press ... to choose a folder. .\\Name (or an empty box) is the folder beside the program. Files in the old place are not moved. The languages use the new place after a restart. Images holds the Bezels, Covers and Pico-Storyware folders."));
       for (k = 0; k < GUI_DIR_N; k++)
       {
         char def[GUI_PATH_LEN];
@@ -2237,6 +2398,32 @@ static INT_PTR CALLBACK directories_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
         h = CreateWindowExA(0, "BUTTON", "...", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                             bt.left, bt.top, bt.right - bt.left, bt.bottom - bt.top, dlg, (HMENU)(INT_PTR)(IDC_DIR_BROWSE_BASE + k), g_inst, NULL);
         SendMessage(h, WM_SETFONT, (WPARAM)font, TRUE);
+      }
+      {
+        /* a tip on each folder's name, path box and ... button (the order of gui_dir_names) */
+        GuiTip tips[GUI_DIR_N * 3];
+        const char *what[GUI_DIR_N];
+        static char own[GUI_DIR_N][400];          /* (the tips point at these texts) */
+        int n = 0;
+
+        what[0] = tr("The optional BIOS and add-on ROMs (Sega CD, Master System, Game Gear and others) are looked for here.");
+        what[1] = tr("Cheat lists (.cht), one folder per console.");
+        what[2] = tr("Pictures: Covers (cover art, one folder per console), Bezels and the Pico Storyware pages.");
+        what[3] = tr("Translations (Name.po files). The language list uses the new place after a restart.");
+        what[4] = tr("Controller profiles saved from the Controls window.");
+        what[5] = tr("Video, Audio, GIF, VGM and Input recordings (a folder for each kind, and in it a folder per console).");
+        what[6] = tr("Battery saves (.srm) and the Mega CD backup RAM (.brm).");
+        what[7] = tr("PNG screenshots, one folder per console.");
+        what[8] = tr("Shader presets you can pick.");
+        what[9] = tr("Save states.");
+        for (k = 0; k < GUI_DIR_N; k++)
+        {
+          wsprintfA(own[k], "%s\n%s", what[k], tr("Type a path or press ... to choose a folder. Empty, or the name shown by default, is the folder beside the program. Files in the old place are not moved."));
+          tips[n].id = IDC_DIR_EDIT_BASE + k;  tips[n].label = NULL;                    tips[n].tip = own[k]; n++;
+          tips[n].id = IDC_DIR_BROWSE_BASE + k; tips[n].label = NULL;                   tips[n].tip = own[k]; n++;
+          tips[n].id = 0;                      tips[n].label = tr(gui_dir_names[k]);    tips[n].tip = own[k]; n++;
+        }
+        gui_dialog_tips(dlg, tips, n);
       }
       theme_apply_to_window(dlg);
       SendMessage(dlg, DM_SETDEFID, IDOK, 0);                   /* OK is the default button, and has the focus (not Defaults) */
@@ -2275,7 +2462,15 @@ static INT_PTR CALLBACK directories_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM l
         char path[GUI_PATH_LEN];
         int k = id - IDC_DIR_BROWSE_BASE;
 
-        if (gui_pick_folder(dlg, "Choose a folder", path, sizeof(path))) SetDlgItemTextA(dlg, IDC_DIR_EDIT_BASE + k, path);
+        if (gui_pick_folder(dlg, "Choose a folder", path, sizeof(path)))
+        {
+          char absdef[GUI_PATH_LEN], def[GUI_PATH_LEN];
+          int n = lstrlenA(path);
+          while (n > 3 && (path[n - 1] == '\\' || path[n - 1] == '/')) path[--n] = '\0';
+          dd_default_abs(k, absdef, sizeof(absdef));
+          dd_default(k, def, sizeof(def));
+          SetDlgItemTextA(dlg, IDC_DIR_EDIT_BASE + k, !lstrcmpiA(path, absdef) ? def : path);
+        }
         return TRUE;
       }
       if (id == IDOK)

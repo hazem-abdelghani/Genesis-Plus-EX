@@ -622,10 +622,10 @@ void emu_32x_startup(void)
 
 void lprintf(const char *fmt, ...)
 {
-   char buffer[256];
+   char buffer[1024];
    va_list ap;
    va_start(ap, fmt);
-   vsprintf(buffer, fmt, ap);
+   vsnprintf(buffer, sizeof(buffer), fmt, ap);        /* (was vsprintf into 256 bytes: the line of a track with a long file name overflowed it) */
    /* TODO - add 'level' param for warning/error messages? */
    if (log_cb)
       log_cb(RETRO_LOG_INFO, "%s", buffer);
@@ -909,6 +909,10 @@ extern void m68k_write16(uint32_t a, uint16_t d);
 /* Genesis Plus EX: the memory the cheat code of the program works on. what 0: the cartridge ROM (as the 68000 sees its
  * words, byte-swapped on a little-endian PC), 1: the 68000's 64 KB work RAM, 2: the 32X's 256 KB SDRAM (the SH-2s' work memory, the same swap). The program writes its Game Genie / Action
  * Replay patches itself (a byte code writes one byte, which the library's own cheat code does not do). */
+/* Genesis Plus EX: the version of this library, so the program can tell an older one in the Plugins folder (a library without this call is
+ * version 1; 2: long file names, changing the disc while a game runs, .chd discs). */
+RETRO_API int gpex_version(void);
+int gpex_version(void) { return 2; }
 RETRO_API void gpex_set_sound_log(void (*cb)(int, unsigned, unsigned, unsigned));
 RETRO_API void gpex_set_mute(int fm, int psg);
 RETRO_API void gpex_set_levels(int fm_pct, int psg_pct);
@@ -1262,8 +1266,9 @@ static bool disk_replace_image_index(unsigned index,
    if (index >= sizeof(disks) / sizeof(disks[0]))
       return false;
 
-   old_fname  = disks[index].fname;
-   old_flabel = disks[index].flabel;
+   /* (the old name and label are freed here, and were freed a second time at the end of this function: a crash when a disc was changed) */
+   old_fname  = NULL;
+   old_flabel = NULL;
 
    if (disks[index].fname != NULL)
       free(disks[index].fname);
@@ -1547,7 +1552,7 @@ static const char *find_bios(int *region, const char *cd_fname)
 
 static const char *find_msu(const char *cd_fname)
 {
-   static char path[256];
+   static char path[1024];
    FILE *f = NULL;
    int i;
 
@@ -1555,7 +1560,9 @@ static const char *find_msu(const char *cd_fname)
    static const char *md_exts[] = { "gen", "smd", "md", "32x" };
    char *ext = strrchr(cd_fname, '.');
    int extpos = ext ? ext-cd_fname : strlen(cd_fname);
-   strcpy(path, cd_fname);
+   if (extpos + 5 >= (int)sizeof(path))
+      return NULL;
+   snprintf(path, sizeof(path), "%s", cd_fname);
    path[extpos++] = '.';
    for (i = 0; i < ARRAY_SIZE(md_exts); i++) {
       strcpy(path+extpos, md_exts[i]);

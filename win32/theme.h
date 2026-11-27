@@ -41,7 +41,6 @@ void theme_init(void);
    caller already has whichever HWND makes sense to re-apply to). */
 void theme_set_mode(int mode);
 void theme_set_hc(int on);          /* Windows is in a high-contrast mode and the program follows it */
-int theme_hc(void);
 int  theme_get_mode(void);
 
 /* The effective state right now -- resolves THEME_AUTO against the last

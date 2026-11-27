@@ -1,4 +1,4 @@
-Genesis Plus EX v3.2.0
+Genesis Plus EX v3.3.0
 ===================
 
 Genesis Plus EX is a Windows emulator based on Genesis Plus GX (32X games run in PicoDrive).
@@ -10,6 +10,7 @@ Pico and 32X emulator.
 Genesis Plus EX front end by Hazem Abdelghani (2026).
 Core by Charles MacDonald (1998-2003) and Eke-Eke (2007-2026).
 PicoDrive (32X) by Dave, notaz, irixxxx and others (2004-2026).
+Controller pictures: Photoreal Controller Vectors by pineapple.graphics (launchbox forums).
 
 
 WHICH FILE TO RUN
@@ -20,15 +21,16 @@ WHICH FILE TO RUN
 
 No installation is needed. Both only use DLLs that ship with Windows.
 Keep the Plugins folder next to Genesis Plus EX.exe: librashader.dll in it gives you
-shaders, picodrive_libretro-64.dll / -32.dll (the 32X emulator) lets you play
+shaders (dxcompiler.dll and dxil.dll next to it are for the Direct3D 12 renderer's
+shaders), picodrive_libretro-64.dll / -32.dll (the 32X emulator) lets you play
 32X games. (The files also work next to the exe itself.)
 
 
 GETTING STARTED
 ---------------
   1. Run the exe.
-  2. Open a game: File > Open ROM (Ctrl+O), drag a ROM onto the window, or
-     pick your games folder with File > ROM Directory (Ctrl+R) and
+  2. Open a game: File > Open Game (Ctrl+O), drag a game onto the window, or
+     pick your games folder with File > Game Folder (Ctrl+R) and
      double-click a game in the list.
   3. .zip, .gz and .7z archives open directly.
 
@@ -38,7 +40,7 @@ to, for example in Program Files, it keeps them in %LOCALAPPDATA%\Genesis Plus E
 instead.) On first run these are created:
 
   genesis-plus-ex.ini  settings
-  ROMs/             a place for your games (add it with ROM Directories; any
+  ROMs/             a place for your games (add it with Game Folders; any
                     other folder works just as well)
   BIOS/             optional BIOS and add-on ROMs
   Saves/            battery saves and Mega CD backup RAM, a folder for each
@@ -67,7 +69,7 @@ THE GAME LIST
 -------------
 Above the list (and above the game, in a window) is the toolbar:
 
-  Open ROM, Refresh, Favorites | Play, Pause, Stop, Reset, Fullscreen,
+  Open Game, Refresh, Favorites | Play, Pause, Stop, Reset, Fullscreen,
   Screenshot | Settings, Video, Audio, Controls
 
 Play needs a game picked in the list; Pause, Stop, Reset, Fullscreen and
@@ -87,9 +89,9 @@ Screenshot act on the running game. The toolbar goes away in fullscreen
                 size runs from Tiny to Extra Large (Ctrl + mouse wheel);
                 shape, corners, captions and card frame are in Settings.
   Search words  region:usa  console:mega cd  genre:action  type:chd  fav:yes
-  Folders       Settings > General > ROM Directories adds several folders
+  Folders       Settings > General > Game Folders adds several folders
                 and excludes some from the scan.
-  A-Z strip     Jump to a letter; Group by Console groups the list.
+  Letter Strip  Jump to a letter; Group by Console groups the list.
   Favorites     Click a star (or right-click > Add to Favorites). The star
                 on the toolbar, or View > Show Favorites Only, shows only them.
   Recent        View > Show Recently Played puts the last few games you
@@ -99,13 +101,15 @@ Screenshot act on the running game. The toolbar goes away in fullscreen
   Names         View > Clean Game Names hides the (...) and [...] tags and
                 the extension in the list and in File > Recent Files.
   Lines         Thin lines separate the columns; View > Show Grid Lines
-                adds lines between the rows.
-  Scanning      The ROM directory and the folders inside it are searched
-                (Scan Subfolders in the ROM Directories window). Archives with
+                (on by default) adds lines between the rows.
+  Scanning      The game folder and the folders inside it are searched
+                (Scan Subfolders in the Game Folders window). Archives with
                 nothing playable in them, and discs of other systems (Saturn,
                 PlayStation...), are left out.
+                The list holds up to 10,000 games (past that its count says
+                "N+ games (capped)").
   Right-click   On a game: play it (or with a saved state), favorites, open,
-                refresh or change the ROM directory, ROM information, cheats
+                refresh or change the game folder, game information, cheats
                 and cover image.
   Covers        Right-click a game > Change Cover Image. Covers are
                 cached so they appear at once the next time.
@@ -125,14 +129,17 @@ PLAYING
   Game Speed    Ctrl++ / Ctrl+- steps the speed from 25 % to 400 %; the
                 sound follows (lower when slower).
   Fast Forward  Hold Tab, or tick Emulation > Fast Forward to keep it on.
-  Rewind        Enable it in Settings > Options, then hold Backspace (or
+                Its speed (2x to 16x, 4x by default) is Fast Forward Speed in
+                Settings > Emulation.
+  Rewind        Enable it in Settings > Emulation, then hold Backspace (or
                 choose Emulation > Rewind). The history is 128-768 MB and
                 Rewind Speed is Slow, Normal, Fast or Very Fast.
   Taskbar       A progress bar shows on the taskbar while rewinding, fast
                 forwarding or recording.
   Backups       Backup State saves quietly every 1-10 minutes into three
                 rolling backups (Load State > Load Backup State).
-  Sound         Audio > Mute (Ctrl+M), Mute FM (Ctrl+N), Mute PSG (Ctrl+B), Mute DAC (Ctrl+D).
+  Sound         Audio > Mute (Ctrl+M), Mute FM (Ctrl+N), Mute PSG (Ctrl+B), Mute DAC (Ctrl+L),
+                Mute PWM (Ctrl+K), Mute CD Audio (Ctrl+J).
                 Output: waveOut, XAudio2, WASAPI shared (default) or
                 exclusive. Also Stereo Width, Bass Boost, Overdrive,
                 Console Model and Levels and Latency (with a live Level meter).
@@ -155,7 +162,7 @@ PLAYING
                 no disc. Controls > Player 1 / Player 2: Allow Opposing Directions.
                 Video > Visual Effects > Deinterlacing draws both fields of an
                 interlaced game every frame (no comb teeth).
-  ROM info      File > ROM Information shows the game, its header, controllers,
+  Game info     File > Game Information shows the game, its header, controllers,
                 save RAM and CRC32 (also for a game picked in the list). Copy,
                 or right-click a row, puts it on the clipboard.
 
@@ -190,19 +197,20 @@ CHEATS, RECORDING AND NETPLAY
                 the Debugger: the CPU Debugger on top, and tabs under it for
                 Memory, VDP, Sound, CPU, RAM Search and RAM Watch (drag the bar
                 between them to resize). CPU Debugger stops the 68000
-                (breakpoints on execute, read and write; step into, over and
-                out; disassembly, registers, calls); in a 32X game also the
+                (breakpoints on execute, read and write, also on the Z80's
+                memory and the VDP's VRAM, CRAM and VSRAM; step into, over
+                and out; disassembly, registers, calls); in a 32X game also the
                 Master and Slave SH-2 (execute breakpoints). RAM Search covers a
                 32X game's SDRAM too. The debug tools are a port of
                 gpgx_debugger by Vladimir Kononovich (lab313ru,
                 https://github.com/lab313ru).
   Recording     Tools > Record: Video (.mp4), Audio (.wav), GIF and VGM,
                 each in its own folder under Recordings (and in it the
-                console's folder). They stop in the background. Settings > Options >
+                console's folder). They stop in the background. Settings > Emulation >
                 Video Recording: size, quality and shape of a video. Record
                 Input saves every button press to a .gpm file and Play Input
                 Recording replays it.
-  Screenshots   Settings > Options > Screenshot Output: Corrected
+  Screenshots   Settings > Video > Screenshot Output: Corrected
                 (the default, 4:3 at 640x480), Raw (the console's own
                 size) or Final (Corrected plus the render filter). Screenshot Size
                 makes it 1x to 4x that size.
@@ -268,27 +276,31 @@ underneath.
               Directories: Data Folders... (moves each folder beside the
                 program: BIOS, Cheats, Images, Languages, Profiles, Recordings,
                 Saves, Screenshots, Shaders, States) and
-                ROM Directories... (the folders of the game list, and Scan
+                Game Folders... (the folders of the game list, and Scan
                 Subfolders).
 
   Video       Window and Screen: Window Size (1x to 10x), Lock Window Shape When
                 Resizing, Fullscreen Mode (borderless or exclusive), Fullscreen
-                Resolution, Start ROM in Fullscreen.
-              Scaling and Shape: Render Filter, Integer Scaling, Aspect
-                Ratio, Rotation, Borders, Interlaced Mode.
+                Resolution, Start Game in Fullscreen.
+              Scaling and Shape: Render Filter, Scaling Filter (Nearest, Sharp
+                Nearest, Bilinear, Sharp Bilinear, Bicubic; grayed while a
+                Direct3D 11 or 12 shader runs), Integer Scaling, Aspect Ratio,
+                Rotation, Borders, Interlaced Mode.
               Bezel and Border: Bezel Image, Remove Bezel, Border Color.
-              Filters and Effects: NTSC Filter, LCD Ghosting, Scanlines,
-                Scaling Filter (Nearest, Sharp Nearest, Bilinear, Sharp Bilinear,
-                Bicubic; grayed while a Direct3D 11 shader runs),
-                Deinterlacing, Dither Smoothing, Flicker
+              Visual Effects: Deinterlacing, Dither Smoothing, Flicker
                 Blending, Brighten, Picture Adjustments (Brightness, Contrast,
-                Saturation, Gamma, Hue).
-              Speed and Smoothness: Renderer (GDI, Direct3D 9 or 11), VSync,
-                Variable Refresh Rate, Limit Redraws, Frameskip, Shader (a
-                .slangp preset, 64-bit only), Shader Parameters, Skip Render
+                Saturation, Gamma, Hue). (NTSC Filter, Color Correction, LCD
+                Ghosting and Scanlines are in the Video menu.)
+              Speed and Smoothness: Renderer (GDI, Direct3D 9, 11 or 12), Adapter, VSync,
+                Smooth Motion, Use Alternate Timing, Variable
+                Refresh Rate, Limit Redraws, Frameskip, Shader (a .slangp
+                preset, 64-bit only), Shader Parameters, Skip Render
                 Filter with Shaders.
+              Video Recording: Recording Size, Quality and Shape.
+              Screenshots: Screenshot Output (Corrected, Raw or Final) and
+                Screenshot Size.
 
-  Audio       Mute: All Sound, FM, PSG and PWM (the 32X).
+  Audio       Mute: All Sound, FM, PSG, DAC, PWM (the 32X) and CD Audio (Mega CD).
               Tone: Stereo Width, Bass Boost, Low-Pass Filter, 3-Band EQ,
                 Mono Output, Overdrive, Even Out Loudness, Levels and Latency.
               Sound chips: Mega Drive FM Chip and High-Quality FM Synthesis;
@@ -304,18 +316,18 @@ underneath.
                 Confine Mouse to the Picture.
               Light Gun: Gun Aim Offset X and Y, Show Light Gun Crosshair.
 
-  Options     Console: Region, Force VDP Mode, Console, Lock-On Cartridge,
-                Boot from BIOS When Available, Show Extended Game Gear Screen,
+  Emulation   Console: Region, Preferred Region Order, Force VDP Mode, Console,
+                Lock-On Cartridge, Boot from BIOS When Available, Show Extended Game Gear Screen,
                 Show Master System Side Borders.
-              Accuracy: Emulate Address Error Exceptions, Enhanced Per-Tile
-                Vertical Scroll and its Limit, System Lock-Ups, CPU Speed,
-                Emulate Mega CD Disc Latency.
-              Video Recording: Recording Size, Quality and Shape.
-              Screenshots: Screenshot Output (Corrected, Raw or Final) and
-                Screenshot Size.
-              Rewind and Resume: Enable Rewind, Rewind Speed, Rewind History
-                Size, Auto Resume (with a Restore Dialog button).
-              Start and Backup: Backup State (a rolling state backup,
+              Accuracy: Remove Per-Line
+                Sprite Limit, Enhanced Per-Tile Vertical Scroll and its Limit,
+                System Lock-Ups, CPU Speed, Emulate Address Error Exceptions,
+                Emulate Mega CD Disc Latency, CD Image Cache.
+              Rewind and Fast Forward: Enable Rewind, Rewind Speed, Rewind History
+                Size, Fast Forward Speed.
+              Input Lag: Run-Ahead.
+              Start and Backup: Auto Resume (with a Restore Dialog button),
+                Backup State (a rolling state backup,
                 restored with Load State > Load Backup State), Skip Intro on
                 Launch.
               Troubleshooting: Enable Log, Enable Crash Report, Factory Reset
@@ -332,9 +344,9 @@ The Video tab's shader switch needs the 64-bit program and librashader.dll
 
 CONTROLS (PLAYER 1 DEFAULTS)
 ----------------------------
-  Arrow keys        D-pad
-  Z, X, C           A, B, C
-  A, S, D           X, Y, Z
+  Arrow keys / WASD D-pad
+  Num 1, 2, 3       A, B, C
+  Num 4, 5, 6       X, Y, Z
   Enter             Start
   Right Shift       Mode
 
@@ -362,14 +374,15 @@ combos in the Profiles folder.
 Controls > Gamepad Hotkeys sets pad buttons for fast forward, rewind,
 save / load state and previous / next slot (the right stick by
 default). Every keyboard shortcut can be changed under Input > Hotkeys; a
-hotkey already in use asks whether to swap the two.
+hotkey already in use asks whether to swap the two. The Disable Hotkeys box turns
+all keyboard shortcuts off (not the gamepad hotkeys; Esc still leaves fullscreen).
 
 
 KEYBOARD SHORTCUTS
 ------------------
   F1                      Keyboard shortcuts
   Ctrl+O                  Open a ROM
-  Ctrl+R                  ROM Directory
+  Ctrl+R                  Game Folder
   Ctrl+W                  Close the ROM
   F2 / Pause              Pause and resume
   F3                      Stop the ROM
@@ -381,14 +394,15 @@ KEYBOARD SHORTCUTS
   Ctrl+F8 / Ctrl+F5       Undo the last state load / save
   Tab (hold)              Fast forward
   Ctrl++ / Ctrl+- / Ctrl+0  Game speed faster / slower / normal (25-400 %)
-  Backspace (hold)        Rewind (enable it in Settings > Options)
+  Backspace (hold)        Rewind (enable it in Settings > Emulation)
   \  or  Tab             Advance one frame while paused
   PgDn / PgUp             Sega Pico: previous / next page of the book (the Storyware
                           window shows its picture: Images\Pico-Storyware\<game>\<game>_1.png ...)
   Ctrl+F                  Show / hide the search bar
   Alt+Enter / Esc         Toggle fullscreen
   Ctrl+M / Ctrl+N / Ctrl+B  Mute / mute FM / mute PSG
-  Ctrl+D                    Mute DAC (drums and voices)
+  Ctrl+L                    Mute DAC (drums and voices)
+  Ctrl+K / Ctrl+J           Mute PWM (32X games) / mute CD audio (Mega CD games)
   Ctrl+C                  Cheats
   Shift+F11               Record video + audio (start / stop)
   Shift+F10               Record a VGM file (start; Alt+F11 stops)
@@ -451,7 +465,7 @@ and only for Mega CD games (the one matching the game's region).
   32X_S_BIOS.BIN     32X Slave SH-2 BIOS: not needed, not used
                      (32X games start without these three)
 
-Turn the BIOS on under Settings > Options > Boot from BIOS When Available.
+Turn the BIOS on under Settings > Emulation > Boot from BIOS When Available.
 BIOS files are not included.
 A Mega CD game without its BIOS does not start: the message names the file it
 needs (by the game's region) and the BIOS folder it belongs in.

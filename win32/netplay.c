@@ -429,7 +429,7 @@ static void check_start_hash(void)
     {
       fail("The two games did not start out in the same state, so the session was ended.\n\n"
            "Close the program on both PCs, start it again, load the same game and try again.\n\n"
-           "If it keeps happening: switch on Settings > Options > Enable Log on both, try again, and keep both genesis-plus-ex.log files.", 1);
+           "If it keeps happening: switch on Settings > Emulation > Enable Log on both, try again, and keep both genesis-plus-ex.log files.", 1);
     }
   }
 }
@@ -618,7 +618,7 @@ static int check_info(const u8 *p, int plen, int *peer_delay, char *reason, int 
   if (!const_time_equal(p, mine.rom_sha, 32))
   {
     lstrcpynA(reason, "The two players have different game files loaded.\n"
-                      "Both must load the same ROM.", rlen);
+                      "Both must open the same game.", rlen);
     return 0;
   }
   if (n != mine.n_settings)

@@ -2,7 +2,7 @@
  *  Genesis Plus EX -- Win32 GUI frontend
  *  Copyright (c) 2026 Hazem Abdelghani
  *
- *  picobook.c -- the "Storyware" window: the picture of the page of a Sega Pico storybook that is open.
+ *  storyware.c -- the "Storyware" window: the picture of the page of a Sega Pico storybook that is open.
  *
  *  A Sega Pico game comes with a book; the console knows which page is open and the game follows it. The program turns the
  *  page with the keys Page Up and Page Down (see IDM_EMU_PICO_PAGEPREV / NEXT in main.c) and this window shows a picture of that page,
@@ -24,7 +24,7 @@
 #include "theme.h"
 #include "stb_image.h"
 
-#define PB_CLASS "GPEXPicoBook"
+#define PB_CLASS "GPEXStoryware"
 
 static HWND    pb_win;
 static int     pb_page;
@@ -275,7 +275,7 @@ static void pb_fit_window(void)
 /* The Sega Pico's pen pad: the pen is where the mouse is over the picture of the page (x 0x03C - 0x17C, y 0x1FC - 0x2F7: the
    numbers the console reads) and the left and right mouse buttons are the pen and the red button, when the mouse is in this window.
    Returns 0 when the mouse is not over this window (the pen is then where the mouse is over the game's picture). */
-int picobook_pen(int *x, int *y, int *pen, int *red)
+int storyware_pen(int *x, int *y, int *pen, int *red)
 {
   POINT pt;
   RECT cr, d;
@@ -298,7 +298,7 @@ int picobook_pen(int *x, int *y, int *pen, int *red)
 }
 
 /* Shows the window (opening it when it is not open) with the picture of this page of the open game. */
-void picobook_show(int page)
+void storyware_show(int page)
 {
   pb_page = page;
   pb_load(page);
@@ -348,29 +348,29 @@ void picobook_show(int page)
 
 /* A Sega Pico game has just been loaded: the closed book (page 0) is shown when there is a picture for it (the window is not opened
    with only its "no picture" text). */
-void picobook_show_closed(void)
+void storyware_show_closed(void)
 {
-  if (pb_win) { picobook_show(0); return; }
+  if (pb_win) { storyware_show(0); return; }
   pb_load(0);
   if (!pb_bmp) return;
-  picobook_show(0);
+  storyware_show(0);
 }
 
 /* Closes the window (the game was stopped). */
-void picobook_close(void)
+void storyware_close(void)
 {
   if (pb_win) DestroyWindow(pb_win);
 }
 
 /* The theme or the style was changed: the window's frame follows. */
-void picobook_retheme(void)
+void storyware_retheme(void)
 {
   if (pb_win) { theme_apply_to_window(pb_win); RedrawWindow(pb_win, NULL, NULL, RDW_INVALIDATE | RDW_FRAME); }
 }
 
 /* The program's window was minimized or brought back (from the taskbar or by a click): this window goes with it. One that was
    minimized by hand is left alone. */
-void picobook_main_minimized(int minimized)
+void storyware_main_minimized(int minimized)
 {
   static int hid_by_main;
 
@@ -387,13 +387,13 @@ void picobook_main_minimized(int minimized)
 }
 
 /* 1 when the window is the one in front (the program's input is then the game's, as in the main window). */
-int picobook_active(void)
+int storyware_active(void)
 {
   return pb_win && GetForegroundWindow() == pb_win;
 }
 
 /* 1 when h is the window (so the main message loop leaves its keys to it). */
-int picobook_owns(HWND h)
+int storyware_owns(HWND h)
 {
   return h && pb_win == h;
 }

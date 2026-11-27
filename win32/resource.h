@@ -38,6 +38,7 @@
 #define IDM_EMU_STOP              203
 #define IDM_EMU_RESET             201
 #define IDM_EMU_HARDRESET         202
+#define IDM_EMU_REGORDER_BASE     4120  /* .. 4125: Region > Preferred Order of the regions of a ROM that has several (USA -> EUR -> JAP and so on) */
 #define IDM_EMU_REGION_BASE       210   /* auto, US, EU, JP NTSC, JP PAL */
 #define IDM_EMU_SYSTEM_BASE       220   /* .. 228 */
 #define IDM_EMU_LOCKON_BASE       230   /* .. 233 */
@@ -51,14 +52,21 @@
 #define IDM_TOOLS_DEBUGGER        2802  /* Tools > Debugger... (the Debugger window, debugger.c) */
 #define IDM_EMU_PICO_PAGEPREV     2804  /* Sega Pico: the book's previous page (hotkey) */
 #define IDM_EMU_PICO_PAGENEXT     2805  /* Sega Pico: the book's next page (hotkey) */
+#define IDM_FILE_OPENDISC         2816  /* File > Open Disc from Drive: a Sega CD disc played from the optical drive (disc.c); the only entry when one disc is found (none: it says so) */
+#define IDM_FILE_OPENDISC_BASE    4110  /* .. 4117: File > Open Disc from Drive > one entry for each disc found, when there are two or more */
 #define IDM_TOOLS_FIXCHECKSUM     2803  /* Tools > Fix Checksum...: a copy of the game with the checksum of its header made right */
 #define IDM_EMU_CDLATENCY         244   /* Mega CD disc access delay */
-#define IDM_EMU_VSCROLL           3925  /* enhanced per-tile vertical scroll (Settings > Options > Accuracy) */
-#define IDM_EMU_LOCKUPS           3926  /* system lock-ups on illegal address access (Settings > Options > Accuracy) */
+#define IDM_EMU_VSCROLL           3925  /* enhanced per-tile vertical scroll (Settings > Emulation > Accuracy) */
+#define IDM_EMU_LOCKUPS           3926  /* system lock-ups on illegal address access (Settings > Emulation > Accuracy) */
+#define IDM_EMU_NOSPRITELIMIT     3927  /* remove the per-scanline sprite limit (Settings > Emulation > Accuracy) */
+#define IDM_EMU_CDCACHE           3928  /* load a CHD disc image into memory (Settings > Emulation > Accuracy) */
+#define IDM_VIDEO_SYNCDISPLAY     3929  /* match the game's speed to the screen's refresh (Settings > Video) */
 #define IDM_SET_VSLIMIT_BASE      3930  /* 8: enhanced vertical scroll limit, 2 to 16 */
 #define IDM_SET_CPUSPEED_BASE     3940  /* 8: CPU speed 50% to 400% */
 #define IDM_INPUT_INVERTMOUSE     245   /* Mega Mouse vertical axis */
 #define IDM_INPUT_GUNCURSOR       246   /* crosshair over the picture for light guns */
+#define IDM_EMU_RUNAHEAD          4132  /* hotkey: Run-Ahead Off -> 1 Frame -> 2 Frames -> Off */
+#define IDM_VIDEO_ALTTIMING       247   /* Use Alternate Timing: pace the game by the PC's clock, not the sound card (Settings > Video) */
 #define IDM_EMU_PAUSE_UNFOCUSED   242
 #define IDM_EMU_CHEATS            243
 
@@ -83,7 +91,7 @@
 #define IDM_VIDEO_FULLSCREEN      310
 #define IDM_VIDEO_FULLSCREEN_START 311
 #define IDM_VIDEO_ALWAYS_ON_TOP   312
-#define IDM_VIDEO_RENDERER_BASE   313   /* .. 315: GDI, Direct3D 9, Direct3D 11 */
+#define IDM_VIDEO_RENDERER_BASE   313   /* .. 316: GDI, Direct3D 9, Direct3D 11, Direct3D 12 */
 #define IDM_VIDEO_ASPECT_BASE     320   /* 4: original console pixels, square, 4:3, 16:9 */
 #define IDM_VIDEO_FILTER_MODE_BASE 3915   /* 5: scaling filter: Nearest, Sharp Nearest, Bilinear, Sharp Bilinear, Bicubic (Video menu, Settings > Video) */
 #define IDM_VIDEO_SCANLINE_BASE   331   /* .. 335, 0/25/50/75/100% */
@@ -177,6 +185,8 @@
 #define IDC_INPUT_PORTB          1613
 #define IDC_INPUT_PORTS_HINT     1614
 #define IDR_PADIMG               7001
+#define IDR_PADIMG_SMS           7040   /* pad_sms.bin: the Master System pad, shown for the 2-Button model of Controls */
+#define IDR_PADIMG_MD3           7041   /* pad_md3.bin: the Mega Drive 3-button pad */
 #define IDR_RING                 7004
 #define IDR_RINGBLINK            7005
 #define IDR_LOGO                 7006
@@ -356,6 +366,7 @@
 #define IDM_AUDIO_MUTE_PSG         2504   /* Audio > Mute > PSG Sound */
 #define IDM_AUDIO_MUTE_DAC         2515   /* Audio > Mute > DAC Sound (the YM2612's sample channel: drums and voices) */
 #define IDM_AUDIO_MUTE_PWM         2509   /* Audio > Mute > PWM Sound (32X games) */
+#define IDM_AUDIO_MUTE_CDDA        2516   /* Audio > Mute > CD Audio (Mega CD games: the music of the disc) */
 #define IDM_EMU_AUTOSAVE           2505   /* Emulation > Auto Resume */
 #define IDM_OPTIONS_OSD            2506   /* Options > Show On-Screen Display */
 #define IDM_VIEW_COL_EXTRA        2510   /* List Columns > Genre, Region, File Size, File Type (.. 2513) */
@@ -364,10 +375,9 @@
 #define IDD_HOTKEYS               940
 #define IDD_HOTKEYS_LARGE         941
 #define IDC_HK_LIST                1500
-#define IDC_HK_ASSIGN              1501
-#define IDC_HK_CLEAR               1502
 #define IDC_HK_DEFAULTS            1503
 #define IDC_HK_HINT                1504
+#define IDC_HK_DISABLE             1505   /* Disable Hotkeys check box above the list */
 #define IDM_FILE_LOADSLOT_BASE    2540   /* .. 2549: Load State > Load State from Slot */
 #define IDM_FILE_SAVESLOT_BASE    2550   /* .. 2559: Save State > Save State to Slot */
 #define IDM_VIEW_GRIDLINES        2561   /* View > Game List > Show Grid Lines */
@@ -398,6 +408,10 @@
 #define IDC_CS_ADD                 1609
 #define IDC_CS_REGION              1610
 #define IDC_CS_SIZE                1611
+#define IDC_CS_UNDO                1660   /* Undo Scan: back to the addresses before the last Next Scan */
+#define IDC_CS_FREEZE              1661   /* Freeze / Unfreeze the selected address at the Set to value */
+#define IDC_CS_UNFREEZEALL         1662
+#define IDC_CS_CHANGE_EDIT         1663   /* the Change Value window (a double click on a row of the list) */
 #define IDC_CHEATS_CONVERT         1743
 #define IDC_CC_IN                  1720
 #define IDC_CC_OUT                 1721
@@ -427,6 +441,8 @@
 #define IDC_RF_HELP                1756
 #define IDD_DIRECTORIES            976   /* Settings > General > Data Folders... */
 #define IDD_DIRECTORIES_LARGE      977
+#define IDD_CS_CHANGE              978   /* Cheat Search: Change Value */
+#define IDD_CS_CHANGE_LARGE        979
 #define IDC_DIR_HELP               1760
 #define IDC_DIR_DEFAULT            1761
 #define IDC_RF_SCANSUB             1762
@@ -439,7 +455,18 @@
 #define IDC_SP_VALUE               1782
 #define IDC_SP_RESET               1783
 #define IDC_SP_RESETALL            1784
+#define IDC_SP_SEARCH              1785
 #define IDM_VIDEO_SHADERPARAMS     2695
+#define IDM_VIDEO_SHADERBROWSER    2866   /* Video > Shaders > Preset Browser: the presets of the Shaders folder in a list, tried on the running game */
+#define IDD_SHADERBROWSER          980
+#define IDD_SHADERBROWSER_LARGE    981
+#define IDC_SB_SEARCH              1830
+#define IDC_SB_LIST                1831
+#define IDC_SB_INFO                1832
+#define IDC_SB_PARAMS              1833
+#define IDC_SB_NONE                1834
+#define IDC_SB_FOLDER              1835
+#define IDC_SB_NOW                 1837
 #define IDM_VIDEO_SHADERNOFILTER   2836   /* the Render Filter is skipped while a shader runs */
 #define IDD_CHEATCONV              964
 #define IDD_CHEATCONV_LARGE        965
@@ -485,7 +512,7 @@
 #define IDM_FILE_APPLYPATCH        2664   /* File > Apply Patch... */
 #define IDM_INPUT_PAUSEMENU        2665   /* in-game pause menu */
 #define IDM_VIEW_GROUPCONSOLE      2631   /* View > Game List > Group by Console */
-#define IDM_VIEW_AZSTRIP           2632   /* View > Game List > Show A-Z Strip */
+#define IDM_VIEW_LETTERSTRIP           2632   /* View > Game List > Show Letter Strip */
 #define IDM_FILE_ROMFOLDERS        2633   /* File > ROM Directory... */
 #define IDM_FILE_DIRECTORIES       2634   /* Settings > General > Data Folders... (the folders beside the program) */
 #define IDM_SET_COVERSHAPE_BASE    2840   /* 3: grid cover frame shape */
@@ -493,11 +520,13 @@
 #define IDM_OPT_COVERCAP           2828   /* grid covers: show the game name under each cover */
 #define IDM_OPT_COVERROUND         2827   /* grid covers: rounded corners */
 #define IDM_SET_DEVICE_BASE        2900   /* up to 40: sound device (0 = the Windows default) */
+#define IDM_SET_ADAPTER_BASE       3040   /* up to 9: video adapter (0 = Auto, Windows picks) */
+#define IDM_SET_FSMON_BASE         3010   /* up to 9: fullscreen monitor (0 = where the window is) */
 #define IDM_SET_FSRES_BASE         2940   /* up to 60: fullscreen resolution (0 = the desktop's) */
 #define IDM_SET_STEREO_BASE        2700   /* 4: stereo width */
 #define IDM_SET_MOUSESENS_BASE     2720   /* 5: mouse / light gun speed */
-#define IDM_SET_GUNX_BASE          2730   /* 7: light gun aim offset X */
-#define IDM_SET_GUNY_BASE          2740   /* 7: light gun aim offset Y */
+#define IDM_SET_GUNX_BASE          4200   /* 13: light gun aim offset X (-12 .. +12 pixels, steps of 2) */
+#define IDM_SET_GUNY_BASE          4230   /* 13: light gun aim offset Y */
 #define IDM_SET_CONTRAST_BASE      2750   /* 7 */
 #define IDM_SET_SATUR_BASE         2760   /* 7 */
 #define IDM_SET_GAMMA_BASE         2770   /* 7 */
@@ -519,6 +548,7 @@
 #define IDM_OPT_PAUSEPAD           3531   /* pause when Player 1's pad disconnects */
 #define IDM_OPT_NORMALIZE          3533   /* even out loud and quiet games */
 #define IDM_SET_AUTOSAVE_BASE      3540   /* 5: save a state every: off, 1, 2, 5, 10 minutes */
+#define IDM_SET_RUNAHEAD_BASE      3030   /* 3: Run-Ahead: off, 1 frame, 2 frames */
 #define IDM_SET_SKIPLEN_BASE       3600   /* 7: Skip Intro on Launch: off, 5, 10, 15, 20, 25, 30 s */
 #define IDM_FILE_LOADBACKUP_BASE   3560   /* 3: Load State > Load Backup State (the rolling backups) */
 #define IDM_OPT_OVERDRIVE          3556   /* Audio: push the sound into a soft limiter */
@@ -526,12 +556,13 @@
 #define IDM_SET_OSDTIME_BASE       3591   /* 7: how long a message stays: 1 - 7 s */
 #define IDM_SET_OSDSIZE_BASE       3580   /* 4: on-screen text size */
 #define IDM_SET_FPSPOS_BASE        3585   /* 4: where the frame rate appears */
-#define IDM_SET_MODEL_BASE         2860   /* Audio menu > Console Model: 3: Default, Genesis Model 1 (duller), Model 2 (cleaner) */
+#define IDM_SET_MODEL_BASE         2860   /* Audio menu > Console Model: 3: Default, Model 1 (duller), Model 2 (cleaner) */
 #define IDM_SET_BACKEND_BASE       3610   /* 4: sound output: Windows Classic (waveOut), XAudio2, WASAPI shared, WASAPI exclusive */
 #define IDM_SET_OSDCOLOR_BASE      3620   /* 8: color of on-screen text */
 #define IDM_SET_OSDLINES_BASE      3630   /* 7: how many messages show at once, 1 - 7 */
 #define IDM_AUDIO_EQ               3655   /* 3-Band EQ on / off (Settings only; the bands are in Levels and Latency) */
 #define IDM_SET_STYLE_BASE         3662   /* 2: look of the windows: Classic, Modern */
+#define IDM_SET_FFSPEED_BASE       3850   /* 7: Fast Forward Speed (Settings only): 2x, 3x, 4x, 6x, 8x, 12x, 16x (frames run for each one shown) */
 #define IDM_SET_REWINDSPEED_BASE   3760   /* 4: how fast a rewind runs backwards (Settings only): slow, normal, fast, very fast */
 #define IDM_SET_STICKSHAPE_BASE    3765   /* 4: how the left stick makes diagonals (Settings > Input only): classic, wide straight, even 8 ways, wide diagonal */
 #define IDM_SET_CROSSFEED_BASE     3770   /* 4: headphone crossfeed: off, light, medium, strong (Settings > Audio only) */
@@ -542,7 +573,7 @@
 #define IDM_SET_XHSIZE_BASE        3790   /* 4: light gun crosshair size */
 #define IDM_OPT_FOLLOWHC           3794   /* follow Windows high-contrast mode (Settings > General) */
 #define IDM_OPT_KEEPASPECT         3797   /* the window keeps the picture's shape while its edge is dragged (Settings > Video) */
-#define IDM_OPT_FACTORYRESET       3798   /* delete the settings file and start again with the factory defaults (Settings > Options > Troubleshooting) */
+#define IDM_OPT_FACTORYRESET       3798   /* delete the settings file and start again with the factory defaults (Settings > Emulation > Troubleshooting) */
 #define IDM_VIEW_CLEANWINDOW       3795   /* View > Toolbars > Hide All Bars (a window with the game only; hotkey) */
 #define IDM_SET_UISIZE_BASE        3660   /* 2: interface size (Settings only): Normal, Large */
 #define IDM_AUDIO_HQFM             3640   /* High-Quality FM Synthesis (Settings only) */

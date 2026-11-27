@@ -11,6 +11,7 @@
  ****************************************************************************/
 
 #include <windows.h>
+#include <dwmapi.h>
 #include <wincrypt.h>
 #include <commctrl.h>
 #include <shellapi.h>
@@ -24,6 +25,7 @@
 #include "resource.h"
 #include "theme.h"
 #include "recorder.h"
+#include "disc.h"
 #include "netplay.h"
 #include "sevenzip.h"
 #include "toolbar.h"
@@ -124,7 +126,8 @@ static void dpi_changed(HWND hwnd, int dpi)
 static int auto_paused_by_focus;
 static int paused_by_pad;          /* the game was paused because Player 1's pad went away: it carries on when a pad is back */
 static int pm_open, pm_was_paused, pm_sel;      /* the in-game pause menu */
-static const char *const pm_items[] = { "Resume", "Save State", "Load State", "Reset", "Quit to the List" };
+static const char *const pm_items[] = { "Resume", "Save State", "Load State", "Save Screenshot", "Sound On / Off", "Fullscreen", "Reset", "Quit" };
+#define PM_N ((int)(sizeof(pm_items) / sizeof(pm_items[0])))
 static int speed_pct = 100;          /* Game Speed: 25 - 400 percent (not saved) */
 static int model_current(void);
 static int fast_osd_state;           /* the Fast Forward on-screen message last shown (1 = fast) */
@@ -366,6 +369,49 @@ static void ensure_dir(const char *name)
   gui_make_dirs(osd_path(name));
 }
 
+/* The find calls (see gui.h): Unicode underneath, the names given back in the program's code page. A name too long for the ANSI structure is given as
+   its short name, or skipped. */
+static int find_copy(const WIN32_FIND_DATAW *w, WIN32_FIND_DATAA *a)
+{
+  ZeroMemory(a, sizeof(*a));
+  a->dwFileAttributes = w->dwFileAttributes;
+  a->ftCreationTime   = w->ftCreationTime;
+  a->ftLastAccessTime = w->ftLastAccessTime;
+  a->ftLastWriteTime  = w->ftLastWriteTime;
+  a->nFileSizeHigh    = w->nFileSizeHigh;
+  a->nFileSizeLow     = w->nFileSizeLow;
+  if (WideCharToMultiByte(CP_ACP, 0, w->cFileName, -1, a->cFileName, MAX_PATH, NULL, NULL) <= 0)
+  {
+    a->cFileName[0] = '\0';
+    if (!w->cAlternateFileName[0] || WideCharToMultiByte(CP_ACP, 0, w->cAlternateFileName, -1, a->cFileName, MAX_PATH, NULL, NULL) <= 0) return 0;
+  }
+  WideCharToMultiByte(CP_ACP, 0, w->cAlternateFileName, -1, a->cAlternateFileName, (int)sizeof(a->cAlternateFileName), NULL, NULL);
+  return 1;
+}
+
+HANDLE gui_find_first(const char *pattern, WIN32_FIND_DATAA *fd)
+{
+  WCHAR wp[4096];
+  WIN32_FIND_DATAW w;
+  HANDLE h;
+
+  if (!pattern || MultiByteToWideChar(CP_ACP, 0, pattern, -1, wp, (int)(sizeof(wp) / sizeof(wp[0]))) <= 0) { SetLastError(ERROR_INVALID_NAME); return INVALID_HANDLE_VALUE; }
+  h = FindFirstFileW(wp, &w);
+  if (h == INVALID_HANDLE_VALUE) return h;
+  while (!find_copy(&w, fd))
+    if (!FindNextFileW(h, &w)) { FindClose(h); SetLastError(ERROR_FILE_NOT_FOUND); return INVALID_HANDLE_VALUE; }
+  return h;
+}
+
+BOOL gui_find_next(HANDLE h, WIN32_FIND_DATAA *fd)
+{
+  WIN32_FIND_DATAW w;
+
+  while (FindNextFileW(h, &w))
+    if (find_copy(&w, fd)) return TRUE;
+  return FALSE;
+}
+
 /* A text cut at a number of bytes can end in the middle of a character (UTF-8: 2 to 4 bytes): this takes that half character off. */
 void gui_utf8_trim(char *s)
 {
@@ -600,6 +646,39 @@ void gui_status_slot(const char *text)
   SendMessageA(g_status, SB_SETTEXTA, 1, (LPARAM)text);
 }
 
+/* A progress bar in the status bar, beside the message (the unpacking of a big archive): per_mille 0..1000, or -1 to take it away. */
+static HWND g_progress;
+
+void gui_progress(int per_mille)
+{
+  RECT pr;
+  char buf[512] = "";
+  int left, width;
+
+  if (!g_status) return;
+  if (per_mille < 0) { if (g_progress && IsWindowVisible(g_progress)) ShowWindow(g_progress, SW_HIDE); return; }
+  if (per_mille > 1000) per_mille = 1000;
+  if (!SendMessage(g_status, SB_GETRECT, 0, (LPARAM)&pr)) return;
+  SendMessageA(g_status, SB_GETTEXTA, 0, (LPARAM)buf);
+  left = pr.left + status_px(buf) + DPIS(16);
+  width = pr.right - left - DPIS(10);
+  if (width > DPIS(200)) width = DPIS(200);
+  if (width < DPIS(50)) { if (g_progress) ShowWindow(g_progress, SW_HIDE); return; }       /* no room beside the message */
+  if (!g_progress)
+  {
+    g_progress = CreateWindowExA(0, PROGRESS_CLASSA, "", WS_CHILD | PBS_SMOOTH, 0, 0, 10, 10, g_status, NULL, GetModuleHandleA(NULL), NULL);
+    if (!g_progress) return;
+    SetWindowTheme(g_progress, L"", L"");                       /* (flat, so the colors below are the ones drawn) */
+    SendMessage(g_progress, PBM_SETRANGE32, 0, 1000);
+  }
+  SendMessage(g_progress, PBM_SETBARCOLOR, 0, (LPARAM)theme_accent_edge());
+  SendMessage(g_progress, PBM_SETBKCOLOR, 0, (LPARAM)(theme_is_dark() ? RGB(58, 58, 58) : RGB(208, 208, 208)));
+  SetWindowPos(g_progress, HWND_TOP, left, pr.top + DPIS(4), width, pr.bottom - pr.top - DPIS(8), SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  SendMessage(g_progress, PBM_SETPOS, (WPARAM)per_mille, 0);
+  InvalidateRect(g_progress, NULL, FALSE);
+  UpdateWindow(g_progress);
+}
+
 static int status_last_fps;
 
 static void status_set_fps(int fps)
@@ -636,6 +715,7 @@ static void status_set_fps(int fps)
  * position) and while minimized (GetWindowRect would just capture the
  * taskbar-parked position, overwriting the last real one for no reason).
  */
+static int user_win_w, user_win_h;       /* the outer size of a window the player dragged (0: none) */
 static void capture_window_geometry(void)
 {
   if (gui.fullscreen) return;
@@ -649,6 +729,11 @@ static void capture_window_geometry(void)
     GetWindowRect(g_hwnd, &r);
     gui.window_x = r.left;
     gui.window_y = r.top;
+    if (user_win_w > 0)                              /* the size too, when the player dragged the window to one: it opens like that next time */
+    {                                                /* (Window Size in the menu clears it) */
+      gui.window_w = user_win_w;
+      gui.window_h = user_win_h;
+    }
   }
 }
 
@@ -705,7 +790,7 @@ static void get_content_rect(RECT *out)
 
 /* Lets browser.c (which can't see the static get_content_rect above)
    trigger a relayout of its own controls -- needed after picking a folder
-   from the "Choose ROM Directory" button, which switches the panel from that
+   from the "Choose Game Folder" button, which switches the panel from that
    button to the normal search+list view without a window resize to
    otherwise trigger it. */
 void browser_relayout(void)
@@ -780,6 +865,100 @@ static void clear_menu(HMENU menu)
   }
 }
 
+/* File > Open Disc from Drive: no disc found, or one: the entry itself starts it; two or more: a sub-menu with an entry for each. The drives are looked at
+   the first time the File menu opens and again after a drive or a disc came or went (Windows says so), not at every opening (a real drive spins up). */
+static disc_found disc_list[8];
+static int disc_list_n;
+static int disc_dirty = 1;
+
+static void disc_menu_update(HMENU file_menu)
+{
+  int i, n, pos = -1;
+  HMENU old_sub;
+  MENUITEMINFOA mii;
+
+  if (!disc_dirty || !file_menu) return;
+  disc_dirty = 0;
+  {
+    HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+
+    disc_list_n = disc_scan_sega(disc_list, 8);
+    SetCursor(old);
+  }
+  n = GetMenuItemCount(file_menu);
+  for (i = 0; i < n && pos < 0; i++)
+  {
+    HMENU sub = GetSubMenu(file_menu, i);
+
+    if (sub ? (GetMenuItemID(sub, 0) >= (UINT)IDM_FILE_OPENDISC_BASE && GetMenuItemID(sub, 0) < (UINT)IDM_FILE_OPENDISC_BASE + 8) : (int)GetMenuItemID(file_menu, i) == IDM_FILE_OPENDISC)
+      pos = i;
+  }
+  if (pos < 0) return;
+
+  old_sub = GetSubMenu(file_menu, pos);
+  if (old_sub) clear_menu(old_sub);                         /* (its texts, in the Large interface) */
+  memset(&mii, 0, sizeof(mii));
+  mii.cbSize = sizeof(mii);
+  mii.fMask = MIIM_FTYPE | MIIM_DATA;
+  if (GetMenuItemInfoA(file_menu, (UINT)pos, TRUE, &mii) && (mii.fType & MFT_OWNERDRAW) && mii.dwItemData)
+    { theme_menu_forget(mii.dwItemData); free((void *)mii.dwItemData); }
+  DeleteMenu(file_menu, (UINT)pos, MF_BYPOSITION);
+
+  if (disc_list_n >= 2)
+  {
+    HMENU sub = CreatePopupMenu();
+
+    for (i = 0; i < disc_list_n; i++)
+    {
+      char label[160], *o = label;
+      const char *q;
+
+      *o++ = disc_list[i].letter; *o++ = ':'; *o++ = ' ';
+      for (q = disc_list[i].title; *q && o < label + sizeof(label) - 3; q++) { if (*q == '&') *o++ = '&'; *o++ = *q; }       /* (an & in a name is not a shortcut) */
+      *o = '\0';
+      AppendMenuA(sub, MF_STRING, (UINT_PTR)(IDM_FILE_OPENDISC_BASE + i), label);
+    }
+    InsertMenuA(file_menu, (UINT)pos, MF_BYPOSITION | MF_POPUP, (UINT_PTR)sub, "Open &Disc from Drive");
+  }
+  else
+    InsertMenuA(file_menu, (UINT)pos, MF_BYPOSITION | MF_STRING, (UINT_PTR)IDM_FILE_OPENDISC, "Open &Disc from Drive");
+  i18n_menu(file_menu);
+  if (theme_menus_owner()) theme_ownerdraw_menu(file_menu);
+  theme_menu_icons(g_menu);
+}
+
+/* which: an entry of the list, or -1 for the single entry (the drives are looked at again, so the disc just put in is there). */
+static void open_disc_item(int which)
+{
+  if (which < 0)
+  {
+    HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+
+    disc_list_n = disc_scan_sega(disc_list, 8);
+    SetCursor(old);
+    if (disc_list_n == 0)
+    {
+      {
+        char report[4096];
+
+        disc_report(report, (int)sizeof(report));      /* what is in each drive, to the log (Settings > Emulation > Enable Log) */
+      }
+      MessageBoxA(g_hwnd, "No Sega CD disc was found in an optical drive.", APP_NAME, MB_OK | MB_ICONINFORMATION);
+      return;
+    }
+    which = 0;
+    if (disc_list_n >= 2) { disc_dirty = 1; MessageBoxA(g_hwnd, "More than one Sega CD disc was found: open the File menu again and choose one from the list.", APP_NAME, MB_OK | MB_ICONINFORMATION); return; }
+  }
+  if (which >= disc_list_n) return;
+  if (!disc_open(disc_list[which].letter))
+  {
+    MessageBoxA(g_hwnd, "The disc could not be opened.", APP_NAME, MB_OK | MB_ICONWARNING);
+    disc_dirty = 1;
+    return;
+  }
+  emu_load_rom(disc_path());
+}
+
 static void rebuild_recent_menu(void)
 {
   HMENU file_menu = GetSubMenu(g_menu, 0);
@@ -788,7 +967,10 @@ static void rebuild_recent_menu(void)
   int i, added = 0;
 
   for (i = 0; file_menu && i < GetMenuItemCount(file_menu) && !recent; i++)
+  {
     recent = GetSubMenu(file_menu, i);
+    if (recent && GetMenuItemID(recent, 0) >= (UINT)IDM_FILE_OPENDISC_BASE && GetMenuItemID(recent, 0) < (UINT)IDM_FILE_OPENDISC_BASE + 8) recent = NULL;      /* (the Open Disc from Drive list is not it) */
+  }
 
   if (!recent) return;
 
@@ -1246,7 +1428,7 @@ int gui_pico_unsupported(int id)
 
   /* (Force VDP Mode, Console, Borders, Interlaced Mode and High-Quality PSG stay available: they are kept for the games of the other systems.) */
   if (id >= IDM_EMU_LOCKON_BASE && id < IDM_EMU_LOCKON_BASE + 4) return 1;
-  if (id == IDM_EMU_BIOS || id == IDM_EMU_ADDRERROR || id == IDM_EMU_CDLATENCY) return 1;
+  if (id == IDM_EMU_BIOS || id == IDM_EMU_ADDRERROR || id == IDM_EMU_CDLATENCY || id == IDM_EMU_CDCACHE || id == IDM_EMU_NOSPRITELIMIT) return 1;
   if (id >= IDM_SET_FMUNIT_BASE && id < IDM_SET_FMUNIT_BASE + 3) return 1;
   if (id >= IDM_SET_OPLL_BASE && id < IDM_SET_OPLL_BASE + 2) return 1;
   if (id == IDM_VIDEO_SMSBORDER || id == IDM_VIDEO_GGEXTRA) return 1;
@@ -1254,8 +1436,8 @@ int gui_pico_unsupported(int id)
   if (id >= IDM_INPUT_PORTB_BASE && id < IDM_INPUT_PORTB_BASE + PORT_CHOICES) return 1;
   if (id == IDM_INPUT_GUNCURSOR || id == IDM_INPUT_INVERTMOUSE) return 1;
   if (id >= IDM_SET_MOUSESENS_BASE && id < IDM_SET_MOUSESENS_BASE + 5) return 1;
-  if (id >= IDM_SET_GUNX_BASE && id < IDM_SET_GUNX_BASE + 7) return 1;
-  if (id >= IDM_SET_GUNY_BASE && id < IDM_SET_GUNY_BASE + 7) return 1;
+  if (id >= IDM_SET_GUNX_BASE && id < IDM_SET_GUNX_BASE + 13) return 1;
+  if (id >= IDM_SET_GUNY_BASE && id < IDM_SET_GUNY_BASE + 13) return 1;
   if (id >= IDM_SET_GUNBORDER_BASE && id < IDM_SET_GUNBORDER_BASE + 5) return 1;
   if (id >= IDM_SET_XHSTYLE_BASE && id < IDM_SET_XHSTYLE_BASE + 9) return 1;
   if (id >= IDM_SET_XHCOLOR_BASE && id < IDM_SET_XHCOLOR_BASE + 6) return 1;
@@ -1263,12 +1445,15 @@ int gui_pico_unsupported(int id)
   return 0;
 }
 
-/* The option only a 32X game uses (Mute PWM Sound): it means nothing while a game of another system runs. With no game open it stays
-   available. */
+/* The options only one kind of game uses: Mute PWM Sound (a 32X game) and Mute CD Audio (a Mega CD game: not a Mega Drive game with its music on
+   a disc image of MD+ or MSU-MD, which the core plays another way, and not one of PicoDrive's). They mean nothing while a game of another kind
+   runs. With no game open they stay available. */
 int gui_pico_only(int id)
 {
-  if (!emu_running || pico_active()) return 0;
-  return id == IDM_AUDIO_MUTE_PWM;
+  if (!emu_running) return 0;
+  if (id == IDM_AUDIO_MUTE_PWM) return !pico_active();
+  if (id == IDM_AUDIO_MUTE_CDDA) return !(system_hw == SYSTEM_MCD && !pico_active());
+  return 0;
 }
 
 static void apply_clean_window(void);
@@ -1287,7 +1472,7 @@ void gui_update_menu(void)
     /* The whole Game List menu is for the list, which is not showing while a game runs. */
     static const int ids[] = { IDM_VIEW_DENSITY_BASE, IDM_VIEW_DENSITY_BASE + 1, IDM_VIEW_DENSITY_BASE + 2, IDM_VIEW_COL_FAV,
       IDM_VIEW_COL_BASE, IDM_VIEW_COL_BASE + 1, IDM_VIEW_COL_EXTRA, IDM_VIEW_COL_EXTRA + 1, IDM_VIEW_COL_EXTRA + 2, IDM_VIEW_COL_EXTRA + 3,
-      IDM_VIEW_FAVONLY, IDM_VIEW_SORT_RECENT, IDM_VIEW_CLEANNAMES, IDM_VIEW_GRIDLINES, IDM_VIEW_GROUPCONSOLE, IDM_VIEW_AZSTRIP };
+      IDM_VIEW_FAVONLY, IDM_VIEW_SORT_RECENT, IDM_VIEW_CLEANNAMES, IDM_VIEW_GRIDLINES, IDM_VIEW_GROUPCONSOLE, IDM_VIEW_LETTERSTRIP };
     size_t gi;
     int k;
     for (gi = 0; gi < sizeof(ids) / sizeof(ids[0]); gi++) EnableMenuItem(g_menu, ids[gi], MF_BYCOMMAND | browsing_state);
@@ -1356,9 +1541,11 @@ void gui_update_menu(void)
   update_slot_menu_labels(find_slot_menu(IDM_FILE_SAVESLOT_BASE), IDM_FILE_SAVESLOT_BASE);
   check_radio(g_menu, IDM_FILE_SLOT_BASE, GUI_SLOT_MAX, gui.state_slot);
   check_radio(g_menu, IDM_EMU_REGION_BASE, 5, config.region_detect);
+  check_radio(g_menu, IDM_EMU_REGORDER_BASE, 6, config.region_order);
+  { int k; for (k = 0; k < 6; k++) EnableMenuItem(g_menu, IDM_EMU_REGORDER_BASE + k, MF_BYCOMMAND | (config.region_detect == 0 ? MF_ENABLED : (MF_GRAYED | MF_DISABLED))); }      /* (only used with Auto Detect) */
   check_radio(g_menu, IDM_EMU_VDPMODE_BASE, 3, config.vdp_mode);
   check_radio(g_menu, IDM_VIEW_DENSITY_BASE, 3, gui.row_density);
-  check_radio(g_menu, IDM_SET_FSMODE_BASE, 2, gui.fs_exclusive);
+  check_radio(g_menu, IDM_SET_FSMODE_BASE, 3, gui.fs_mode);
   { int k; for (k = 0; k < 3; k++) EnableMenuItem(g_menu, IDM_VIEW_DENSITY_BASE + k, MF_BYCOMMAND | ((emu_running || gui.browser_grid_view) ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED)); }
   check_radio(g_menu, IDM_EMU_REWINDMEM_BASE, 4, gui.rewind_memory);
   check_radio(g_menu, IDM_EMU_SYSTEM_BASE, 9, system_menu_index());
@@ -1402,7 +1589,7 @@ void gui_update_menu(void)
   EnableMenuItem(g_menu, IDM_TOOLS_MOVIE_PLAY, MF_BYCOMMAND | rom_state);
   EnableMenuItem(g_menu, IDM_TOOLS_MOVIE_STOP, MF_BYCOMMAND | rom_state);
   CheckMenuItem(g_menu, IDM_VIEW_GROUPCONSOLE, MF_BYCOMMAND | (gui.group_console ? MF_CHECKED : MF_UNCHECKED));
-  CheckMenuItem(g_menu, IDM_VIEW_AZSTRIP, MF_BYCOMMAND | (gui.az_strip ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(g_menu, IDM_VIEW_LETTERSTRIP, MF_BYCOMMAND | (gui.letter_strip ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_VIEW_GRIDLINES, MF_BYCOMMAND | (gui.browser_gridlines ? MF_CHECKED : MF_UNCHECKED));
   EnableMenuItem(g_menu, IDM_VIEW_GRIDLINES, MF_BYCOMMAND | ((gui.browser_grid_view || emu_running) ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED));
   CheckMenuItem(g_menu, IDM_VIEW_CLEANNAMES, MF_BYCOMMAND | (gui.clean_names ? MF_CHECKED : MF_UNCHECKED));
@@ -1414,7 +1601,7 @@ void gui_update_menu(void)
   CheckMenuItem(g_menu, IDM_VIEW_SEARCHBAR, MF_BYCOMMAND | (browser_search_shown() ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_VIEW_STATUSBAR, MF_BYCOMMAND | (gui.hide_statusbar ? MF_UNCHECKED : MF_CHECKED));
   CheckMenuItem(g_menu, IDM_VIEW_FILTERBAR, MF_BYCOMMAND | (gui.hide_filterbar ? MF_UNCHECKED : MF_CHECKED));
-  /* The search and filter bars belong to the ROM browser: nothing to switch while a game runs. */
+  /* The search and filter bars belong to the game browser: nothing to switch while a game runs. */
   EnableMenuItem(g_menu, IDM_VIEW_SEARCHBAR, MF_BYCOMMAND | (emu_running ? MF_GRAYED : MF_ENABLED));
   EnableMenuItem(g_menu, IDM_VIEW_FILTERBAR, MF_BYCOMMAND | (emu_running ? MF_GRAYED : MF_ENABLED));
   browser_toolbar_update();
@@ -1442,16 +1629,16 @@ void gui_update_menu(void)
   CheckMenuItem(g_menu, IDM_VIDEO_DEINTERLACE, MF_BYCOMMAND | (gui.deinterlace ? MF_CHECKED : MF_UNCHECKED));
   EnableMenuItem(g_menu, IDM_VIDEO_INTERLACE_BASE + 0, MF_BYCOMMAND | (gui.deinterlace ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED));      /* (Interlaced Mode is not used while Deinterlacing is on) */
   EnableMenuItem(g_menu, IDM_VIDEO_INTERLACE_BASE + 1, MF_BYCOMMAND | (gui.deinterlace ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED));
-  check_radio(g_menu, IDM_VIDEO_RENDERER_BASE, 3, gui.renderer);
+  check_radio(g_menu, IDM_VIDEO_RENDERER_BASE, 4, gui.renderer);
   CheckMenuItem(g_menu, IDM_VIDEO_VSYNC,
                 MF_BYCOMMAND | (gui.vsync ? MF_CHECKED : MF_UNCHECKED));
-  CheckMenuItem(g_menu, IDM_VIDEO_VRR, MF_BYCOMMAND | (gui.vrr ? MF_CHECKED : MF_UNCHECKED));
-  EnableMenuItem(g_menu, IDM_VIDEO_VSYNC, MF_BYCOMMAND | ((gui.vrr && gui.renderer == RENDERER_D3D11 && d3d11_vrr_active()) ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED));      /* (VSync is not used while the display follows the game: it keeps its tick) */
-  EnableMenuItem(g_menu, IDM_VIDEO_VRR, MF_BYCOMMAND | (gui.renderer == RENDERER_D3D11 ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));       /* (only the Direct3D 11 renderer has it) */
+  CheckMenuItem(g_menu, IDM_VIDEO_VRR, MF_BYCOMMAND | (video_vrr_wanted() ? MF_CHECKED : MF_UNCHECKED));
+  EnableMenuItem(g_menu, IDM_VIDEO_VSYNC, MF_BYCOMMAND | ((gui.vrr && RENDERER_IS_DX(gui.renderer) && video_dx_vrr_active()) ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED));      /* (VSync is not used while the display follows the game: it keeps its tick) */
+  EnableMenuItem(g_menu, IDM_VIDEO_VRR, MF_BYCOMMAND | (RENDERER_IS_DX(gui.renderer) && gui.fs_mode != 2 ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));       /* (the Direct3D 11 and 12 renderers have it) */
   { int k; for (k = 0; k < 5; k++)         /* (a shader scales the picture itself: the Scaling Filter is not used while one runs) */
       EnableMenuItem(g_menu, IDM_VIDEO_FILTER_MODE_BASE + k, MF_BYCOMMAND | (gui_shader_scales() ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED)); }
   if (!gui_shader_scales())
-  EnableMenuItem(g_menu, IDM_VIDEO_FILTER_MODE_BASE + 4, MF_BYCOMMAND | (gui.renderer != RENDERER_GDI ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));       /* Bicubic is a pixel shader: Direct3D 9 and 11 have it, the classic renderer does not */
+  EnableMenuItem(g_menu, IDM_VIDEO_FILTER_MODE_BASE + 4, MF_BYCOMMAND | (gui.renderer != RENDERER_GDI ? MF_ENABLED : (MF_GRAYED | MF_DISABLED)));       /* Bicubic is a pixel shader: Direct3D 9, 11 and 12 have it, the classic renderer does not */
   check_radio(g_menu, IDM_VIDEO_SCANLINE_BASE, 5, gui.scanline_pct / 25);
   check_radio(g_menu, IDM_VIDEO_THEME_BASE, THEME_COUNT, gui_theme_for_ini());
   check_radio(g_menu, IDM_SET_STYLE_BASE, 2, gui_style_for_ini());
@@ -1505,8 +1692,11 @@ void gui_update_menu(void)
   CheckMenuItem(g_menu, IDM_AUDIO_MUTE_PSG, MF_BYCOMMAND | (gui.mute_psg ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_AUDIO_MUTE_DAC, MF_BYCOMMAND | (gui.mute_dac ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_AUDIO_MUTE_PWM, MF_BYCOMMAND | (gui.mute_pwm ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(g_menu, IDM_AUDIO_MUTE_CDDA, MF_BYCOMMAND | (gui.mute_cdda ? MF_CHECKED : MF_UNCHECKED));
+  EnableMenuItem(g_menu, IDM_AUDIO_MUTE_CDDA, MF_BYCOMMAND | (gui_pico_only(IDM_AUDIO_MUTE_CDDA) ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED));      /* (grayed while a game that has no CD audio of the core's runs) */
   EnableMenuItem(g_menu, IDM_AUDIO_MUTE_PWM, MF_BYCOMMAND | (gui_pico_only(IDM_AUDIO_MUTE_PWM) ? (MF_GRAYED | MF_DISABLED) : MF_ENABLED));      /* (grayed only while a game of another system runs) */
   CheckMenuItem(g_menu, IDM_VIDEO_INTSCALE, MF_BYCOMMAND | (gui.integer_scale ? MF_CHECKED : MF_UNCHECKED));
+  check_radio(g_menu, IDM_SET_RUNAHEAD_BASE, 3, gui.run_ahead);
   CheckMenuItem(g_menu, IDM_EMU_AUTOSAVE, MF_BYCOMMAND | (gui.autosave ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_OPTIONS_OSD, MF_BYCOMMAND | (gui.osd ? MF_CHECKED : MF_UNCHECKED));
   CheckMenuItem(g_menu, IDM_AUDIO_LOWPASS,
@@ -1623,7 +1813,6 @@ static int menu_bar_min_width(HMENU menu)
   return needed;
 }
 
-static int user_win_w, user_win_h;       /* the outer size of a window the player dragged (0: none) */
 static int drag_w0, drag_h0;             /* its size when the drag began */
 
 /* The window size for a game that starts or ends: the size the player dragged the window to, if any (until Window Size is picked again),
@@ -1646,7 +1835,7 @@ void gui_resize_to_scale(int scale)
   video_preferred_size(scale, &w, &h);
   w0 = w;
 
-  /* With no game running the ROM browser is what is shown: wide enough for
+  /* With no game running the game browser is what is shown: wide enough for
      its toolbar. A game's window is the size asked for: when that is narrower than the toolbar the toolbar goes onto more rows (it does so for
      any narrow window). Widening it to the toolbar made 1x, 2x and 3x of a Game Gear game (160x144) all come out the same, and the picture larger
      than the Window Size chosen. */
@@ -1734,14 +1923,98 @@ void apply_always_on_top(void)
  ****************************************************************************/
 
 
+#ifdef USE_LIBCHDR
+/* CD Image Cache: the core opens a .chd disc with chd_open_file(); the linker sends that call here. With the option on, libchdr reads the whole
+   file into memory (chd_precache: it stays compressed there, as in the file) and serves the reads of the disc from it. If there is not
+   enough memory the disc is used from the file as usual. */
+chd_error __real_chd_open_file(FILE *file, int mode, chd_file *parent, chd_file **chd);
+
+chd_error __wrap_chd_open_file(FILE *file, int mode, chd_file *parent, chd_file **chd)
+{
+  chd_error err = __real_chd_open_file(file, mode, parent, chd);
+  if (err == CHDERR_NONE && config.cd_cache && !pico_active())
+  {
+    if (chd_precache(*chd) == CHDERR_NONE) gui_log("CD Image Cache: the disc image is in memory");
+    else gui_log("CD Image Cache: not enough memory, the disc is read from the file");
+  }
+  return err;
+}
+#endif
+
+/* Region > Preferred Order: the core's own pick for a Mega Drive cartridge that names several regions is the USA, then Japan, then Europe. The
+   linker sends get_region() here (the core calls it when a ROM is loaded, and the program when the region is changed): with Auto Detect and
+   another order chosen, the region is taken from the ROM's header again in that order. A game the core gave a region of its own (a few whose
+   header is wrong) keeps it. */
+void __real_get_region(char *romheader);
+
+void __wrap_get_region(char *romheader)
+{
+  __real_get_region(romheader);
+
+  if (config.region_detect == 0 && config.region_order != 1 && system_hw == SYSTEM_MD && cart.romsize > 0x200)
+  {
+    int country = 0, i, def, k;
+    static const unsigned char order[6][3] = { { 4, 8, 1 }, { 4, 1, 8 }, { 8, 4, 1 }, { 8, 1, 4 }, { 1, 4, 8 }, { 1, 8, 4 } };    /* the bits of the header's country: 4 USA, 8 Europe, 1 Japan */
+
+    /* the header's country as the core reads it */
+    if (!memcmp(rominfo.country, "eur", 3) || !memcmp(rominfo.country, "EUR", 3) || !memcmp(rominfo.country, "Europe", 3)) country |= 8;
+    else if (!memcmp(rominfo.country, "jap", 3) || !memcmp(rominfo.country, "JAP", 3)) country |= 1;
+    else if (!memcmp(rominfo.country, "usa", 3) || !memcmp(rominfo.country, "USA", 3)) country |= 4;
+    else
+      for (i = 0; i < 4; i++)
+      {
+        char c = (char)toupper((int)rominfo.country[i]);
+
+        if (c == 'U') country |= 4;
+        else if (c == 'J') country |= 1;
+        else if (c == 'E') country |= 8;
+        else if (c == 'K') country |= 1;
+        else if (c < 16) country |= c;
+        else if (c >= '0' && c <= '9') country |= c - '0';
+        else if (c >= 'A' && c <= 'F') country |= c - 'A' + 10;
+      }
+
+    def = (country & 4) ? REGION_USA : (country & 1) ? REGION_JAPAN_NTSC : (country & 8) ? REGION_EUROPE : (country & 2) ? REGION_JAPAN_PAL : REGION_USA;
+    if (region_code != def || !(country & 13)) return;            /* (a region the core chose for a special game, or no region in the header) */
+    for (k = 0; k < 3; k++)
+      if (country & order[config.region_order][k])
+      {
+        region_code = order[config.region_order][k] == 4 ? REGION_USA : order[config.region_order][k] == 8 ? REGION_EUROPE : REGION_JAPAN_NTSC;
+        break;
+      }
+    vdp_pal = (region_code >> 6) & 0x01;
+    system_clock = vdp_pal ? MCLOCK_PAL : MCLOCK_NTSC;
+    if (config.vdp_mode == 1) vdp_pal = 0;
+    else if (config.vdp_mode == 2) vdp_pal = 1;
+    if (config.master_clock == 1) system_clock = MCLOCK_NTSC;
+    else if (config.master_clock == 2) system_clock = MCLOCK_PAL;
+  }
+}
+
 /* fopen() of the whole program (the core opens the tracks of a disc with it). A .cue sheet whose FILE line names its data file with no
    extension (FILE "Game" BINARY, for Game.bin: some rippers write it so) names a file that does not exist; the core then finds no data track
    and the disc shows a black screen. A name with no extension that is not found is tried with .bin and .iso after it. */
 FILE *__real_fopen(const char *path, const char *mode);
 
+/* The disc in a drive (disc.c) looks like a .cue sheet and one file for each track: these wrappers hand such a file to it. */
+size_t __real_fread(void *buf, size_t size, size_t n, FILE *f);
+int __real_fseek(FILE *f, long off, int whence);
+long __real_ftell(FILE *f);
+int __real_fclose(FILE *f);
+char *__real_fgets(char *s, int n, FILE *f);
+
+size_t __wrap_fread(void *buf, size_t size, size_t n, FILE *f) { return disc_owns(f) ? disc_fread(buf, size, n, f) : __real_fread(buf, size, n, f); }
+int __wrap_fseek(FILE *f, long off, int whence) { return disc_owns(f) ? disc_fseek(f, off, whence) : __real_fseek(f, off, whence); }
+long __wrap_ftell(FILE *f) { return disc_owns(f) ? disc_ftell(f) : __real_ftell(f); }
+int __wrap_fclose(FILE *f) { return disc_owns(f) ? disc_fclose(f) : __real_fclose(f); }
+char *__wrap_fgets(char *s, int n, FILE *f) { return disc_owns(f) ? disc_fgets(s, n, f) : __real_fgets(s, n, f); }
+
 FILE *__wrap_fopen(const char *path, const char *mode)
 {
-  FILE *f = __real_fopen(path, mode);
+  FILE *f;
+
+  if (disc_is_path(path)) return (FILE *)disc_fopen(path);
+  f = __real_fopen(path, mode);
 
   if (!f && path && mode && mode[0] == 'r')
   {
@@ -1999,9 +2272,21 @@ static uint32 backup_ram_hash(void)
 static uint32 bram_saved_hash;
 static int    bram_hash_valid;      /* bram_saved_hash matches what is on disk */
 
-static void save_backup_ram(void)
+/* How a failed write of the save files is told: 0 = a message on the screen at most once a minute (the autosave tries again in 5 seconds),
+   1 = a box (the game is closing or changing: the person must know), 2 = the log only (Windows is shutting down: nothing may wait). */
+static void bram_save_failed(int mode)
+{
+  static DWORD last_note;
+  DWORD now = GetTickCount();
+
+  if (mode == 1) MessageBoxA(g_hwnd, "The game's save data could not be written. Check that the Saves folder exists, is not read-only, is not full and that no other program holds the file.", APP_NAME, MB_OK | MB_ICONWARNING);
+  else if (mode == 0 && (!last_note || now - last_note > 60000)) { last_note = now ? now : 1; gui_notify("The save data could not be written (check the Saves folder)"); }
+}
+
+static void save_backup_ram_mode(int mode)
 {
   char path[GUI_PATH_LEN];
+  int ok = 1;
 
   if (np_no_save) return;   /* see np_no_save */
 
@@ -2016,10 +2301,10 @@ static void save_backup_ram(void)
     if (p)
     {
       emu_data_path("Saves", ".srm", 0, path, sizeof(path));
-      write_file_atomic(path, p, n);
+      if (!write_file_atomic(path, p, n)) { ok = 0; gui_log("The save file %s could not be written", path); }
     }
-    bram_saved_hash = backup_ram_hash();
-    bram_hash_valid = 1;
+    if (ok) { bram_saved_hash = backup_ram_hash(); bram_hash_valid = 1; }
+    else bram_save_failed(mode);
     return;
   }
 
@@ -2028,26 +2313,28 @@ static void save_backup_ram(void)
     if (!memcmp(scd.bram + 0x2000 - 0x20, brm_format + 0x20, 0x20))
     {
       emu_data_path("Saves", ".brm", 0, path, sizeof(path));
-      write_file_atomic(path, scd.bram, 0x2000);
+      if (!write_file_atomic(path, scd.bram, 0x2000)) { ok = 0; gui_log("The save file %s could not be written", path); }
     }
 
     if (scd.cartridge.id &&
         !memcmp(scd.cartridge.area + scd.cartridge.mask + 1 - 0x20, brm_format + 0x20, 0x20))
     {
       cart_brm_path(path, (int)sizeof(path), 0);
-      write_file_atomic(path, scd.cartridge.area, (size_t)scd.cartridge.mask + 1);
+      if (!write_file_atomic(path, scd.cartridge.area, (size_t)scd.cartridge.mask + 1)) { ok = 0; gui_log("The save file %s could not be written", path); }
     }
   }
 
   if (sram.on)
   {
     emu_data_path("Saves", ".srm", 0, path, sizeof(path));
-    write_file_atomic(path, sram.sram, 0x10000);
+    if (!write_file_atomic(path, sram.sram, 0x10000)) { ok = 0; gui_log("The save file %s could not be written", path); }
   }
 
-  bram_saved_hash = backup_ram_hash();
-  bram_hash_valid = 1;
+  if (ok) { bram_saved_hash = backup_ram_hash(); bram_hash_valid = 1; }      /* (a failed write is not counted as saved: the autosave tries again) */
+  else bram_save_failed(mode);
 }
+
+static void save_backup_ram(void) { save_backup_ram_mode(1); }
 
 /* Called about every 5 seconds while a game runs: if the game has changed its
    save data since the last write, write it now, so a crash, a power cut or
@@ -2062,7 +2349,7 @@ static void backup_ram_autosave(DWORD now)
   last_check = now;
 
   if (!emu_running || np_no_save) return;
-  if (!bram_hash_valid || backup_ram_hash() != bram_saved_hash) save_backup_ram();
+  if (!bram_hash_valid || backup_ram_hash() != bram_saved_hash) save_backup_ram_mode(0);
 }
 
 /* Reads a save file into memory. A file shorter than the memory is still used as far as it goes (the rest keeps what
@@ -2230,11 +2517,16 @@ static int host_state_save(uint8 *buf)
   return n;
 }
 
+extern int  ra_audio_keep;                                             /* raudio.c */
+extern int  ra_audio_usable(void);
+extern void ra_audio_snapshot(void), ra_audio_ahead_done(void), ra_audio_restore(void);
+static int ra_keep_history;      /* Run-Ahead is loading its own state back: the picture shown is the one from ahead, so the deinterlacer's history stays */
+
 static int host_state_load(uint8 *buf, size_t len)
 {
   int r;
 
-  video_deinterlace_reset();       /* the picture is not the one after the last frame */
+  if (!ra_keep_history) video_deinterlace_reset();       /* the picture is not the one after the last frame */
   if (pico_active()) return pico_state_load(buf, len);
   r = state_load(buf);
   if (r && system_hw == SYSTEM_PICO) picopcm_state_load(buf, len);
@@ -2548,7 +2840,7 @@ void emu_save_state_file(const char *path)
   free(buffer);
 }
 
-/* Backup States: while a game runs, a state is saved every few minutes (Settings > Options > Backup State) into three
+/* Backup States: while a game runs, a state is saved every few minutes (Settings > Emulation > Backup State) into three
    rolling files, newest first, so a crash or a mistake never costs much. */
 static void backup_path(int k, char *out, int len)
 {
@@ -2816,6 +3108,9 @@ static void load_boot_rom(void)
 }
 
 /* The machine: processor, memory, display adapters and screens, sound devices. */
+static void log_display_paths(void);
+static void fmt_hz(char *out, double v);
+
 static void log_machine(void)
 {
   char cpu[128] = "";
@@ -2840,6 +3135,7 @@ static void log_machine(void)
           "32-bit",
 #endif
           si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 ? "64-bit" : (si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64 ? "ARM64" : "32-bit"));
+  gui_log("Code page: ANSI %u, OEM %u (65001 is the Unicode UTF-8 setting of Windows; it takes a restart of Windows to apply)", (unsigned)GetACP(), (unsigned)GetOEMCP());
 
   ZeroMemory(&dd, sizeof(dd));
   dd.cb = sizeof(dd);
@@ -2854,6 +3150,7 @@ static void log_machine(void)
     dd.cb = sizeof(dd);
   }
 
+  log_display_paths();
   count = waveout_list_devices(names, 16);
   for (i = 0; (int)i < count && i < 16; i++) gui_log("Sound device %lu: %s", (unsigned long)i, names[i]);
   gui_log("Sound: %s, rate %d Hz, latency %d, backend %d", gui.sound_enabled ? "on" : "off", gui.sample_rate, gui.latency, gui.audio_backend);
@@ -2896,7 +3193,7 @@ static void log_game_report(void)
           pico_active() ? "32X in PicoDrive" : "Genesis Plus GX core", system_hw == SYSTEM_MCD ? "on" : "off", (int)cdd.loaded, (unsigned)system_bios, (unsigned)scd.cartridge.boot,
           (unsigned)cart.special, cheats_count(), sram.on ? "on" : "off");
   gui_log("Video: renderer %d, filter '%s', %s, window scale %d, fullscreen %d, vsync %d, variable refresh %d (in use %d)", gui.renderer, gui.render_filter[0] ? gui.render_filter : "none",
-          config.render ? "interlaced Double Field" : "normal", gui.scale, gui.fullscreen, gui.vsync, gui.vrr, d3d11_vrr_active());
+          config.render ? "interlaced Double Field" : "normal", gui.scale, gui.fullscreen, gui.vsync, gui.vrr, video_dx_vrr_active());
   gui_log("Sound: rate %d Hz (chosen %d), FM %s, backend %d, latency %d, volume %d%%, queue %d", snd.sample_rate, gui.sample_rate, config.ym3438 ? "Nuked" : "YM2612", gui.audio_backend,
           gui.latency, gui.volume, gui.sound_enabled ? waveout_pending() : -1);
   gui_log("Input: Player 1 device %d, Player 2 device %d", gui.pad[0].device, gui.pad[1].device);
@@ -2909,6 +3206,12 @@ static void log_game_summary(void)
 
   gui_log("Played %lu:%02lu: %lu frames (%lu fps on average), slowest frame %d ms, %lu frames over 25 ms, %d messages shown", (unsigned long)(secs / 60), (unsigned long)(secs % 60),
           session_frames, secs ? (unsigned long)(session_frames / secs) : 0UL, (int)(session_work_max * 1000.0), session_slow, notify_count);
+  {
+    char tt[400];
+
+    video_timing_text(1, tt, sizeof(tt));
+    gui_log("Frame timing over the whole game: %s", tt);
+  }
 }
 
 /* For the log: the window's size when it changes. While the edge is dragged a line comes at most four times a second; the size the drag ends with is
@@ -2991,6 +3294,59 @@ static void log_program_hash(const char *exe)
 
 /* The program and machine, and the settings that matter most: written when the log starts and when it is switched on, so a
    log sent with a bug report says what it came from. */
+/* Every active monitor as Windows' display configuration tells it: the name of the monitor, its exact refresh rate and its signal timing (the picture's
+   size with the blanking, the pixel clock): two monitors of the same rate can differ in these, which changes how Windows composes a window between them. */
+static void log_display_paths(void)
+{
+  UINT32 np = 0, nm = 0, i, k;
+  DISPLAYCONFIG_PATH_INFO *paths;
+  DISPLAYCONFIG_MODE_INFO *modes;
+
+  if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &np, &nm) != ERROR_SUCCESS || np == 0) return;
+  paths = (DISPLAYCONFIG_PATH_INFO *)calloc(np, sizeof(*paths));
+  modes = (DISPLAYCONFIG_MODE_INFO *)calloc(nm ? nm : 1, sizeof(*modes));
+  if (paths && modes && QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &np, paths, &nm, modes, NULL) == ERROR_SUCCESS)
+  {
+    for (i = 0; i < np; i++)
+    {
+      DISPLAYCONFIG_SOURCE_DEVICE_NAME sn;
+      DISPLAYCONFIG_TARGET_DEVICE_NAME tn;
+      char src[40] = "", mon[80] = "", rate[48] = "", sig[160] = "";
+
+      ZeroMemory(&sn, sizeof(sn));
+      sn.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+      sn.header.size = sizeof(sn);
+      sn.header.adapterId = paths[i].sourceInfo.adapterId;
+      sn.header.id = paths[i].sourceInfo.id;
+      if (DisplayConfigGetDeviceInfo(&sn.header) == ERROR_SUCCESS) WideCharToMultiByte(CP_ACP, 0, sn.viewGdiDeviceName, -1, src, sizeof(src), NULL, NULL);
+      ZeroMemory(&tn, sizeof(tn));
+      tn.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+      tn.header.size = sizeof(tn);
+      tn.header.adapterId = paths[i].targetInfo.adapterId;
+      tn.header.id = paths[i].targetInfo.id;
+      if (DisplayConfigGetDeviceInfo(&tn.header) == ERROR_SUCCESS) WideCharToMultiByte(CP_ACP, 0, tn.monitorFriendlyDeviceName, -1, mon, sizeof(mon), NULL, NULL);
+      if (paths[i].targetInfo.refreshRate.Denominator > 0)
+        fmt_hz(rate, (double)paths[i].targetInfo.refreshRate.Numerator / (double)paths[i].targetInfo.refreshRate.Denominator);
+      for (k = 0; k < nm; k++)
+        if (modes[k].infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET && modes[k].id == paths[i].targetInfo.id &&
+            modes[k].adapterId.LowPart == paths[i].targetInfo.adapterId.LowPart && modes[k].adapterId.HighPart == paths[i].targetInfo.adapterId.HighPart)
+        {
+          const DISPLAYCONFIG_VIDEO_SIGNAL_INFO *v = &modes[k].targetMode.targetVideoSignalInfo;
+          char vs[32] = "";
+          if (v->vSyncFreq.Denominator > 0) fmt_hz(vs, (double)v->vSyncFreq.Numerator / (double)v->vSyncFreq.Denominator);
+          wsprintfA(sig, ", signal %lux%lu in a frame of %lux%lu, pixel clock %lu kHz, vertical sync %s Hz",
+                    (unsigned long)v->activeSize.cx, (unsigned long)v->activeSize.cy, (unsigned long)v->totalSize.cx, (unsigned long)v->totalSize.cy,
+                    (unsigned long)(v->pixelRate / 1000), vs);
+          break;
+        }
+      gui_log("Display %s: monitor %s, refresh rate %s Hz%s", src, mon[0] ? mon : "(no name)", rate[0] ? rate : "unknown", sig);
+    }
+  }
+  free(paths);
+  free(modes);
+}
+
+
 static void log_system_info(void)
 {
   typedef LONG (WINAPI *rtl_version_fn)(OSVERSIONINFOW *);
@@ -3018,12 +3374,13 @@ void emu_close_rom(void)
   if (!emu_running) return;
 
   log_game_summary();
+  if (disc_is_path(rom_path)) disc_log_stats();
   gui_log("Game closed: %s", rom_base);
 
   cheat_search_close();
   memview_close();
   debugwin_close();
-  picobook_close();
+  storyware_close();
   fast_osd_state = 0;
   speed_pct = 100;
   movie_stop();
@@ -3059,6 +3416,7 @@ void emu_close_rom(void)
   emu_running = 0;
   emu_paused = 0;
   auto_paused_by_focus = 0;
+  video_viewport_changed();            /* (the last picture is gone: a later change of the filter has none to draw again) */
 
   /* Closing from fullscreen: back to the windowed size first. */
   if (gui.fullscreen) video_set_fullscreen(0);
@@ -3074,7 +3432,7 @@ void emu_close_rom(void)
   update_title();
   gui_update_menu();
   status_set_fps(0);                       /* no frame rate or speed once nothing runs */
-  gui_status_persistent("Open a ROM to start, or drop one on this window");
+  gui_status_persistent("Open a game to start, or drop one on this window");
 
   /* Back to the window size the Video > Window Size setting asks for, rather
      than leaving the window at whatever size the game's own picture (a
@@ -3087,6 +3445,8 @@ void emu_close_rom(void)
   {
     RECT content;
     get_content_rect(&content);
+    video_exclusive_leave();
+    if (RENDERER_IS_DX(gui.renderer)) video_dx_show_surface(0);
     browser_panel_layout(&content);
     browser_panel_show(1);
   }
@@ -3112,6 +3472,118 @@ static int write_temp_rom(const char *prefix, const char *ext, const unsigned ch
   return ok;
 }
 
+/* An archive (.zip or .7z) that holds more than one game: a window asks which to play (archivepick.c). The answer is kept for the archive, so the
+   unpacking below (and File > Apply Patch, which unpacks the game again) takes that game. */
+static char pick_archive[GUI_PATH_LEN], pick_name[GUI_PATH_LEN];
+
+static const char *archive_want(const char *archive)
+{
+  return pick_archive[0] && !lstrcmpiA(archive, pick_archive) ? pick_name : "";
+}
+
+typedef struct { char name[GUI_PATH_LEN]; unsigned size; } agame_t;
+#define AGAMES_MAX 512
+
+static int is_7z_path(const char *path);
+
+/* A disc image or sheet: an archive that has one holds a Mega CD disc (its .bin tracks are not games of their own), or an MD+ game with its sheet. */
+static int is_disc_name(const char *name)
+{
+  const char *dot = strrchr(name, '.');
+
+  return dot && (!lstrcmpiA(dot, ".cue") || !lstrcmpiA(dot, ".chd") || !lstrcmpiA(dot, ".iso"));
+}
+
+/* The games (by their file names) of a .zip or .7z archive, at most max of them; *disc says the archive has a disc image or sheet among its files. */
+static int archive_games(const char *path, agame_t *g, int max, int *disc)
+{
+  int n = 0;
+
+  *disc = 0;
+  if (is_7z_path(path))
+  {
+#ifdef USE_LIBCHDR
+    sevenzip_t *sz = sevenzip_open(path);
+    int i, count;
+
+    if (!sz) return 0;
+    count = sevenzip_count(sz);
+    for (i = 0; i < count && n < max; i++)
+    {
+      char nm[GUI_PATH_LEN];
+
+      if (sevenzip_entry_is_dir(sz, i)) continue;
+      sevenzip_entry_name(sz, i, nm, sizeof(nm));
+      if (is_disc_name(nm)) *disc = 1;
+      if (!browser_is_game_name(nm)) continue;
+      lstrcpynA(g[n].name, nm, sizeof(g[n].name));
+      g[n].size = sevenzip_entry_size(sz, i);
+      n++;
+    }
+    sevenzip_close(sz);
+#endif
+  }
+  else
+  {
+    unzFile zf = unzOpen(path);
+    int r;
+
+    if (!zf) return 0;
+    for (r = unzGoToFirstFile(zf); r == UNZ_OK && n < max; r = unzGoToNextFile(zf))
+    {
+      char nm[GUI_PATH_LEN];
+      unz_file_info info;
+
+      if (unzGetCurrentFileInfo(zf, &info, nm, sizeof(nm), NULL, 0, NULL, 0) != UNZ_OK) continue;
+      if (nm[0] && nm[lstrlenA(nm) - 1] == '/') continue;
+      if (is_disc_name(nm)) *disc = 1;
+      if (!browser_is_game_name(nm)) continue;
+      lstrcpynA(g[n].name, nm, sizeof(g[n].name));
+      g[n].size = (unsigned)info.uncompressed_size;
+      n++;
+    }
+    unzClose(zf);
+  }
+  return n;
+}
+
+static char patch_override[GUI_PATH_LEN];     /* a patched copy of the game to load instead of the file (File > Apply Patch) */
+
+/* Before a game is loaded: when the file is a .zip or .7z with more than one game in it, asks which. Returns 0 when the window was closed
+   (nothing is loaded, and the game that runs goes on). */
+static int pick_archive_game(const char *path)
+{
+  const char *dot = strrchr(path, '.');
+  agame_t *g;
+  int n, disc = 0;
+
+  if (patch_override[0]) return 1;                       /* (the patched copy of the game that was picked) */
+  pick_archive[0] = '\0';
+  if (!is_7z_path(path) && !(dot && !lstrcmpiA(dot, ".zip"))) return 1;
+  g = (agame_t *)calloc(AGAMES_MAX, sizeof(agame_t));
+  if (!g) return 1;
+  n = archive_games(path, g, AGAMES_MAX, &disc);
+  if (n >= 2 && !disc)                                    /* (a disc with several .bin tracks, or an MD+ game, is one game: it is not asked about) */
+  {
+    const char **names = (const char **)malloc((size_t)n * sizeof(char *));
+    unsigned *sizes = (unsigned *)malloc((size_t)n * sizeof(unsigned));
+    int i, r = -1;
+
+    if (names && sizes)
+    {
+      for (i = 0; i < n; i++) { names[i] = g[i].name; sizes[i] = g[i].size; }
+      r = archive_pick_window(g_hwnd, path, names, sizes, n);
+    }
+    free(names); free(sizes);
+    if (r < 0) { free(g); gui_log("Archive: %d games, none picked", n); return 0; }
+    lstrcpynA(pick_archive, path, sizeof(pick_archive));
+    lstrcpynA(pick_name, g[r].name, sizeof(pick_name));
+    gui_log("Archive: %d games, picked '%s'", n, pick_name);
+  }
+  free(g);
+  return 1;
+}
+
 /* A .zip archive: the core loads its first file. When that is not a game (a soundtrack beside the ROM, "BIN+MP3"), the game's
    entry is unpacked to a temporary file named with its own extension. Returns 1 (out_path is the copy), 2 (the zip itself can be
    loaded as it is) or 0 (cannot be read). */
@@ -3124,6 +3596,7 @@ static int extract_zip_rom(const char *archive_path, char *out_path, int out_len
   unsigned char *buffer;
   const char *dot;
   int ok = 0;
+  const char *want = archive_want(archive_path);
 
   if (!zf) return 2;                                  /* (not a zip: the core says what is wrong) */
   for (r = unzGoToFirstFile(zf); r == UNZ_OK; r = unzGoToNextFile(zf), first = 0)
@@ -3132,6 +3605,7 @@ static int extract_zip_rom(const char *archive_path, char *out_path, int out_len
 
     if (unzGetCurrentFileInfo(zf, &info, nm, sizeof(nm), NULL, 0, NULL, 0) != UNZ_OK) continue;
     if (!browser_is_game_name(nm)) continue;
+    if (want[0] && lstrcmpiA(nm, want)) continue;       /* (the game that was picked from several) */
     if (first) { unzClose(zf); return 2; }              /* the first file is a game already */
     lstrcpynA(name, nm, sizeof(name));
     found = 1;
@@ -3179,6 +3653,7 @@ static int extract_7z_rom(const char *archive_path, char *out_path, int out_len)
   unsigned char *buffer;
   unsigned int size;
   int got, ok = 0;
+  const char *want = archive_want(archive_path);
 
   sz = sevenzip_open(archive_path);
   if (!sz) return 0;
@@ -3191,7 +3666,7 @@ static int extract_7z_rom(const char *archive_path, char *out_path, int out_len)
     {
       char nm[GUI_PATH_LEN];
       sevenzip_entry_name(sz, i, nm, sizeof(nm));
-      if (browser_is_game_name(nm)) { index = i; break; }       /* a game among music and pictures: that one */
+      if (browser_is_game_name(nm) && (!want[0] || !lstrcmpiA(nm, want))) { index = i; break; }       /* a game among music and pictures: that one */
     }
   }
   if (index < 0) { sevenzip_close(sz); return 0; }
@@ -3543,6 +4018,7 @@ static int extract_mdplus(const char *archive, char *out_path, int out_len)
   if (rom >= 0 && GetTempPathA(sizeof(tmp), tmp))
   {
     int total = 0, done = 0;
+    unsigned long long total_b = 0, done_b = 0;
 
     wsprintfA(dir, "%sgpexmdp%lu", tmp, (unsigned long)GetCurrentProcessId());
     delete_tree(dir);                                          /* (what an earlier game of this run left) */
@@ -3550,7 +4026,7 @@ static int extract_mdplus(const char *archive, char *out_path, int out_len)
     ok = 1;
     t_start = GetTickCount();
     old_cursor = SetCursor(LoadCursor(NULL, IDC_WAIT));
-    for (i = 0; i < n; i++) if (!e[i].dir) total++;
+    for (i = 0; i < n; i++) if (!e[i].dir) { total++; total_b += e[i].size; }
 
     if (is7z)
     {
@@ -3565,11 +4041,14 @@ static int extract_mdplus(const char *archive, char *out_path, int out_len)
         if (paired == 2 && !disc && i == cue) mdplus_cue_name(nm, sizeof(nm), e[rom].name);
         gui_status("Unpacking the game (%d of %d)...", ++done, total);
         if (g_status) UpdateWindow(g_status);
+        gui_progress(total_b ? (int)(done_b * 1000 / total_b) : 0);
         if (!mdplus_safe_name(nm)) { ok = 0; why = "the name is not accepted"; lstrcpynA(why_name, e[i].name, sizeof(why_name)); break; }
         fp = mdplus_open(dir, nm);
         if (!fp) { ok = 0; why = "it could not be created in the temporary folder"; lstrcpynA(why_name, e[i].name, sizeof(why_name)); break; }
         wrote = e[i].size ? sevenzip_extract_to_file(sz, i, fp) : 0;
         if (fclose(fp) != 0 || wrote != (long long)e[i].size) { ok = 0; why = "it could not be unpacked or written (memory or disk space?)"; lstrcpynA(why_name, e[i].name, sizeof(why_name)); }
+        done_b += e[i].size;
+        gui_progress(total_b ? (int)(done_b * 1000 / total_b) : 1000);
       }
 #endif
     }
@@ -3587,6 +4066,7 @@ static int extract_mdplus(const char *archive, char *out_path, int out_len)
         if (paired == 2 && !disc && k == cue) mdplus_cue_name(nm, sizeof(nm), e[rom].name);
         gui_status("Unpacking the game (%d of %d)...", ++done, total);
         if (g_status) UpdateWindow(g_status);
+        gui_progress(total_b ? (int)(done_b * 1000 / total_b) : 0);
         if (!mdplus_safe_name(nm)) { ok = 0; why = "the name is not accepted"; lstrcpynA(why_name, e[k].name, sizeof(why_name)); break; }
         fp = mdplus_open(dir, nm);
         if (!fp) { ok = 0; why = "it could not be created in the temporary folder"; lstrcpynA(why_name, e[k].name, sizeof(why_name)); break; }
@@ -3597,7 +4077,9 @@ static int extract_mdplus(const char *archive, char *out_path, int out_len)
           int got = unzReadCurrentFile(zf, chunk, want);
           if (got <= 0 || fwrite(chunk, 1, (size_t)got, fp) != (size_t)got) { ok = 0; why = "it could not be unpacked or written (disk space?)"; lstrcpynA(why_name, e[k].name, sizeof(why_name)); break; }
           left -= (unsigned long)got;
+          if (total_b) gui_progress((int)((done_b + (e[k].size - left)) * 1000 / total_b));
         }
+        done_b += e[k].size;
         unzCloseCurrentFile(zf);
         if (fclose(fp) != 0 && ok) { ok = 0; why = "it could not be written (disk space?)"; lstrcpynA(why_name, e[k].name, sizeof(why_name)); }
       }
@@ -3611,6 +4093,7 @@ static int extract_mdplus(const char *archive, char *out_path, int out_len)
       if ((int)lstrlenA(tmp) < out_len) { lstrcpynA(out_path, tmp, out_len); lstrcpynA(mdplus_dir, dir, sizeof(mdplus_dir)); gui_log("Archive: unpacked whole into %s", dir); }
       else ok = 0;
     }
+    gui_progress(-1);
     SetCursor(old_cursor);
     if (ok) gui_log("Archive: unpacked in %lu ms", (unsigned long)(GetTickCount() - t_start));
     if (!ok) { gui_log("Archive: unpacking stopped at '%s': %s (folder %s)", why_name, why, dir); delete_tree(dir); }
@@ -3721,8 +4204,8 @@ static int resume_ask(void)
   return answer == IDYES;
 }
 
+static int force_32xcd;                        /* File > Open Game with the file type Mega CD 32X / Sega CD 32X: the disc being opened goes to PicoDrive with its 32X (a Mega CD with a 32X attached) */
 static int bios_only_run;                      /* the Mega CD BIOS is being started with no disc (File > Run Mega CD BIOS): it is not a game for the lists */
-static char patch_override[GUI_PATH_LEN];     /* a patched copy of the game to load instead of the file (File > Apply Patch) */
 
 /* A game with a "SEGA 32X" header that Genesis Plus GX has just loaded: PicoDrive is started for it (the file may be
    the extracted copy of an archive, so this runs before that is deleted). Returns 0, after telling the player why, when
@@ -3763,6 +4246,81 @@ static int start_32x_if_needed(const char *file)
   return 0;
 }
 
+/* Does the disc look like one of a game that needs the 32X? The 32X adapter is told by the ASCII text "MARS" at $A130EC, and the program of such a game
+   holds the header of its 32X code ("SEGA 32X") and mentions that text. So the first 16 MB of the disc's data track are searched for both ("MARS" and "SEGA 32X"),
+   and the search ends as soon as both have been found. A log of the first real 32X disc: "MARS" 4 times and "SEGA 32X" once. file is the .cue sheet (or the .iso/.bin) of an
+   image, or of a disc in a drive (disc:\...: its track is read through the same wrappers, which takes a few seconds for a plain disc, so the answer is remembered).
+   Returns 1 for yes, 0 for no, -1 when the disc could not be read. */
+static int check_32x_disc(const char *file)
+{
+  enum { CHUNK = 1 << 20, LIMIT = 16 << 20 };
+  char data[GUI_PATH_LEN], want[GUI_PATH_LEN];
+  const char *dot = strrchr(file, '.');
+  unsigned char *buf;
+  FILE *fp;
+  size_t n, i;
+  long mars = 0, addr = 0, sega32x = 0;
+  unsigned long total = 0, t0 = GetTickCount();
+  int on_drive = disc_is_path(file);
+
+  if (!dot) return -1;
+  lstrcpynA(data, file, sizeof(data));
+  if (!lstrcmpiA(dot, ".cue"))
+  {
+    int there = 0;
+    char *slash;
+
+    if (!cue_first_file(file, want, sizeof(want), &there) || (!there && !on_drive)) return -1;
+    slash = strrchr(data, '\\');
+    if (!slash || lstrlenA(data) + lstrlenA(want) + 2 >= (int)sizeof(data)) return -1;
+    lstrcpyA(slash + 1, want);
+  }
+  else if (lstrcmpiA(dot, ".iso") && lstrcmpiA(dot, ".bin")) return -1;
+
+  fp = fopen(data, "rb");
+  buf = fp ? (unsigned char *)malloc(CHUNK + 8) : NULL;
+  if (!buf) { if (fp) fclose(fp); return -1; }
+  for (;;)
+  {
+    n = fread(buf, 1, CHUNK, fp);
+    if (n == 0) break;
+    for (i = 0; i + 8 <= n; i++)
+    {
+      if (buf[i] == 'M' && buf[i + 1] == 'A' && buf[i + 2] == 'R' && buf[i + 3] == 'S') mars++;
+      else if (buf[i] == 0x00 && buf[i + 1] == 0xA1 && buf[i + 2] == 0x30 && buf[i + 3] == 0xEC) addr++;
+      else if (buf[i] == 'S' && buf[i + 1] == 'E' && buf[i + 2] == 'G' && buf[i + 3] == 'A' && buf[i + 4] == ' ' && buf[i + 5] == '3' && buf[i + 6] == '2' && buf[i + 7] == 'X') sega32x++;
+    }
+    total += (unsigned long)n;
+    if ((mars > 0 && sega32x > 0) || n < CHUNK || total >= (unsigned long)LIMIT) break;
+    fseek(fp, -8, SEEK_CUR);                         /* (a word that is split between two pieces is still found) */
+    total -= 8;
+  }
+  fclose(fp);
+  free(buf);
+  gui_log("Disc 32X check (first %lu KB of %s, %lu ms): \"MARS\" %ld times, the address $A130EC %ld times, \"SEGA 32X\" %ld times: %s", total >> 10, data, GetTickCount() - t0,
+          mars, addr, sega32x, (mars > 0 && sega32x > 0) ? "looks like a 32X disc" : "does not look like a 32X disc");
+  return (mars > 0 && sega32x > 0) ? 1 : 0;
+}
+
+/* A disc of a game that needs a Mega CD and a 32X together: Genesis Plus GX has just read it as a plain Mega CD disc (for the header, the name and
+   the checks), and PicoDrive, which has both machines, runs it. Returns 0, after telling the player why, when it could not be started. */
+static int start_32xcd(const char *file)
+{
+  char err[1000], msg[GUI_PATH_LEN + 1100];
+
+  gui_cd_rate = 44100;                       /* the sound of a CD game runs at the CD's rate */
+  if (pico_load(file, err, sizeof(err)))
+  {
+    gui_log("Mega CD + 32X: started in PicoDrive from %s", file);
+    return 1;
+  }
+  gui_cd_rate = 0;
+  wsprintfA(msg, "Could not start this Mega CD + 32X disc.\n\n%s\n\nIt needs the Mega CD BIOS for its region in the BIOS folder (bios_CD_U.bin, bios_CD_E.bin or bios_CD_J.bin), and a disc as a .cue sheet, an .iso or a .chd.",
+            err[0] ? err : "PicoDrive could not start it.");
+  MessageBoxA(g_hwnd, msg, APP_NAME, MB_OK | MB_ICONWARNING);
+  return 0;
+}
+
 int emu_load_rom(const char *path)
 {
   gui_combos_release();
@@ -3775,6 +4333,18 @@ int emu_load_rom(const char *path)
 
   /* Checked before the current game is closed: a missing file, a folder, or a
      file that is not a game type must not end the game that is running. */
+  if (disc_is_path(attempt))                 /* a disc in an optical drive (disc.c): there is no file, the disc is looked for in the drives */
+  {
+    if (!disc_open_for_path(attempt))
+    {
+      char msg[GUI_PATH_LEN + 160];
+
+      wsprintfA(msg, "This disc was not found in an optical drive:\n\n%s\n\nInsert it and try File > Open Disc from Drive...", attempt + 6);
+      MessageBoxA(g_hwnd, msg, APP_NAME, MB_OK | MB_ICONWARNING);
+      return 0;
+    }
+  }
+  else
   {
     DWORD attr = GetFileAttributesA(attempt);
 
@@ -3812,6 +4382,8 @@ int emu_load_rom(const char *path)
     if (!browser_console_for_path(attempt)) return 0;     /* not a game: nothing happens, and it is not remembered */
   }
 
+  if (!pick_archive_game(attempt)) return 0;       /* an archive of several games: which one (before the game that runs is closed) */
+
   was_fullscreen = gui.fullscreen;      /* opening another game from fullscreen stays in fullscreen */
   emu_close_rom();
 
@@ -3822,7 +4394,7 @@ int emu_load_rom(const char *path)
     int disc_unreadable = 0;
 
     lstrcpynA(load_path, attempt, sizeof(load_path));
-    from_7z = extract_mdplus(attempt, load_path, sizeof(load_path)) ? 3 : unpack_rom(attempt, load_path, sizeof(load_path));       /* 3: an MD+ game unpacked whole (the folder stays), 1: a temporary copy, 2: the file as it is, 0: unreadable */
+    from_7z = disc_is_path(attempt) ? 2 : extract_mdplus(attempt, load_path, sizeof(load_path)) ? 3 : unpack_rom(attempt, load_path, sizeof(load_path));       /* 3: an MD+ game unpacked whole (the folder stays), 1: a temporary copy, 2: the file as it is, 0: unreadable */
     if (!from_7z)
     {
       char msg[GUI_PATH_LEN + 96];
@@ -3845,7 +4417,52 @@ int emu_load_rom(const char *path)
     else
     {
       loaded = load_rom(load_path) ? 1 : 0;
-      if (loaded && !start_32x_if_needed(load_path)) loaded = -1;
+      {
+        /* A Mega CD disc that needs the 32X too (a disc image or a disc in a drive) goes to PicoDrive, which has both machines: the player said so (the file type Mega CD 32X /
+           Sega CD 32X of File > Open Game), or the program remembers it, or the check of the disc says so (see check_32x_disc). Shift held while opening: it is a plain Mega CD disc (and
+           stays one); Ctrl held while opening a disc from a drive: it is a 32X one. */
+        int plain_mcd = loaded && system_hw == SYSTEM_MCD && cdd.loaded && from_7z == 2;
+        int on_drive = disc_is_path(attempt);
+        int want32 = 0;
+
+        if (plain_mcd)
+        {
+          int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0, ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+
+          if (force_32xcd) want32 = 1;
+          else if (shift)
+          {
+            if (config_cd32x_has(attempt)) { config_cd32x_remove(attempt); gui_log("Mega CD + 32X: %s is no longer started as a 32X disc", attempt); gui_notify("This disc is no longer started with the 32X"); }
+            config_cd32x_no_add(attempt);
+          }
+          else if (config_cd32x_has(attempt)) want32 = 1;
+          else if (ctrl && on_drive) want32 = 1;
+          else if (!config_cd32x_no_has(attempt))
+          {
+            int verdict;
+
+            if (pico_rom_is_32x())             /* the header of the disc says SEGA 32X (the first real 32X disc did): nothing to search for */
+            {
+              verdict = 1;
+              gui_log("Mega CD + 32X: the header of the disc says SEGA 32X");
+            }
+            else
+            {
+              if (on_drive) gui_status("Checking the disc...");
+              verdict = check_32x_disc(load_path);
+              if (on_drive) disc_stats_reset();
+            }
+            if (verdict == 1) { want32 = 1; gui_log("Mega CD + 32X: this disc needs the 32X: it is started in PicoDrive"); }
+            else if (verdict == 0) config_cd32x_no_add(attempt);
+          }
+        }
+        if (loaded && (force_32xcd || want32))
+        {
+          if (!start_32xcd(load_path)) loaded = -1;
+          else config_cd32x_add(attempt);
+        }
+      else if (loaded && !plain_mcd && !start_32x_if_needed(load_path)) loaded = -1;      /* (a Mega CD disc was decided above: Shift keeps it plain even if its header says SEGA 32X) */
+      }
       if (loaded > 0 && !cdd.loaded && !pico_active())                    /* a .cue or .chd that the core could not read as a disc is no ROM: its text would be run as one (a black screen) */
       {
         const char *e2 = strrchr(load_path, '.');
@@ -3854,6 +4471,8 @@ int emu_load_rom(const char *path)
     }
     paprium_source_set(NULL);
     cue_warn[0] = '\0';
+    if (loaded > 0 && disc_is_path(attempt) && !disc_audio_ok())
+      gui_snprintf(cue_warn, (int)sizeof(cue_warn), "The audio tracks of this disc cannot be read from this drive: the game plays without its CD music");
     if (loaded > 0 && !cdd.loaded && !pico_active())      /* a ROM with a .cue beside it whose track file is missing: the audio (MD+, MSU-MD) will not play */
     {
       char sheet[GUI_PATH_LEN], want[GUI_PATH_LEN];
@@ -3922,7 +4541,7 @@ int emu_load_rom(const char *path)
       }
       else
         wsprintfA(msg, "Could not load:\n\n%s\n\n"
-                       "The file may be missing, unreadable, or not a supported ROM.",
+                       "The file may be missing, unreadable, or not a supported game file.",
                   attempt);
       MessageBoxA(g_hwnd, msg, APP_NAME, MB_OK | MB_ICONWARNING);
       gui_status("Loading failed");
@@ -3936,6 +4555,10 @@ int emu_load_rom(const char *path)
   ports_fit_system();
   np_no_save = 0;
   np_rom_sha_ready = 0;
+
+  /* Region > Preferred Order is applied by __wrap_get_region(), which the linker only puts in the calls from other files than the core's loadrom.c:
+     the call load_rom() makes itself goes to the core's own. Asked again here, with the ROM just loaded, the order counts from the start. */
+  if (config.region_detect == 0 && config.region_order != 1 && system_hw == SYSTEM_MD) get_region(0);
 
   audio_init(run_rate_now(), 0);
   system_init();
@@ -3967,7 +4590,7 @@ int emu_load_rom(const char *path)
   gui_log("Game loaded: %s (hardware %d, region %d, %s, FM chip %s, sample rate %d, renderer %d)", rom_base, (int)system_hw, (int)region_code,
           vdp_pal ? "PAL" : "NTSC", config.ym3438 ? "Nuked" : "YM2612", snd.sample_rate, gui.renderer);
   gui_diag_start();          /* with Enable Log: the frame rate and the sound queue of the first seconds are logged (crackling sound shows as an empty queue) */
-  if (!bios_only_run)
+  if (!bios_only_run && !disc_is_path(rom_path))          /* (a disc in a drive is started from File > Open Disc from Drive, not from the lists) */
   {
     config_add_recent(rom_path);
     history_game_started(rom_path);
@@ -3979,7 +4602,7 @@ int emu_load_rom(const char *path)
   gui_update_menu();
   if (!IsZoomed(g_hwnd)) gui_resize_to_player_size();      /* a maximized window stays maximized */
   gui_status_persistent("Running %s", rom_base);
-  if (system_hw == SYSTEM_PICO) picobook_show_closed();               /* the Storyware window with the closed book, when it has a picture */
+  if (system_hw == SYSTEM_PICO) storyware_show_closed();               /* the Storyware window with the closed book, when it has a picture */
   if (cue_warn[0]) { gui_notify("%s", cue_warn); cue_warn[0] = '\0'; }
 
   if ((gui.fullscreen_on_load || was_fullscreen) && !gui.fullscreen)
@@ -3987,6 +4610,7 @@ int emu_load_rom(const char *path)
     video_set_fullscreen(1);
     gui_update_menu();
   }
+  else if (gui.fullscreen) video_match_refresh();          /* (a game of the other region goes fullscreen at its own rate) */
 
   next_frame_time = 0.0;
 
@@ -4035,7 +4659,7 @@ int emu_load_rom(const char *path)
   return 1;
 }
 
-/* For ROM Information / Edit Cheats from the browser's context menu on
+/* For Game Information / Edit Cheats from the browser's context menu on
    a ROM that isn't the one currently running: populates rominfo and
    loads that ROM's cheat list for viewing/editing, without starting
    emulation -- no system_init/system_reset, no audio, emu_running
@@ -4083,6 +4707,56 @@ int emu_peek_rom(const char *path)
   return 1;
 }
 
+/* The game of a disc in a drive asks for another disc: a file dialog cannot pick a disc, so the player puts it in the same drive (with the drive's own eject
+   button) and the drive is read again. Returns 1 when the new disc is open (disc_path() names it), 0 when the player gave up. */
+static int next_disc_from_drive(void)
+{
+  char msg[400];
+  int c = gui_cursor_show();
+  int result = 0;
+  char drive = disc_letter();
+
+  wsprintfA(msg, "This game is asking for a different disc.\n\nPut the next disc into drive %c: (use the drive's own eject button) and press OK.", drive ? drive : '?');
+  if (MessageBoxA(g_hwnd, msg, APP_NAME, MB_OKCANCEL | MB_ICONQUESTION) == IDOK)
+  {
+    for (;;)
+    {
+      if (disc_swap()) { result = 1; break; }
+      wsprintfA(msg, "No Sega CD disc was found in drive %c:.\n\nPut the disc in and try again?", drive ? drive : '?');
+      if (MessageBoxA(g_hwnd, msg, APP_NAME, MB_RETRYCANCEL | MB_ICONWARNING) != IDRETRY) break;
+    }
+  }
+  gui_cursor_restore(c);
+  return result;
+}
+
+/* The folder the Change Disc dialogs start in: the folder of the game's file, or (for a disc in a drive, whose "file" is disc:\name.cue, or a folder that is
+   gone) the ROM folder chosen for the game list, else the ROMs folder beside the program. */
+static void change_disc_start_dir(char *dir, size_t size)
+{
+  const char *p, *slash;
+  DWORD a;
+
+  lstrcpynA(dir, rom_path, (int)size);
+  slash = dir;
+  for (p = dir; *p; p++)
+    if (*p == '\\' || *p == '/') slash = p;
+  if (slash > dir) ((char *)slash)[0] = '\0'; else dir[0] = '\0';
+
+  a = dir[0] ? GetFileAttributesA(dir) : INVALID_FILE_ATTRIBUTES;
+  if (!strncmp(rom_path, "disc:", 5) || a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY))
+  {
+    a = gui.rom_dir[0] ? GetFileAttributesA(gui.rom_dir) : INVALID_FILE_ATTRIBUTES;
+    if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) lstrcpynA(dir, gui.rom_dir, (int)size);
+    else
+    {
+      lstrcpynA(dir, osd_path("ROMs"), (int)size);
+      a = GetFileAttributesA(dir);
+      if (a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY)) dir[0] = '\0';
+    }
+  }
+}
+
 /* See osd.h's CD_TRAY_CALLBACK: core/cd_hw/cdd.c calls this on both CDD
    "Open Tray" (0x0D, requesting a disc) and "Close Tray" (0x0C) commands --
    only the open half asks the host to do anything, cdd.status == CD_OPEN
@@ -4095,9 +4769,23 @@ void win32_cd_tray_callback(void)
 {
   char dir[GUI_PATH_LEN];
   char path[GUI_PATH_LEN] = "";
-  const char *slash;
 
   if (!emu_running || system_hw != SYSTEM_MCD || cdd.status != CD_OPEN) return;
+
+  if (disc_is_path(rom_path))             /* a disc in a drive: the next one is put in the same drive */
+  {
+    char dp[GUI_PATH_LEN];
+
+    if (!next_disc_from_drive()) return;
+    lstrcpynA(dp, disc_path() ? disc_path() : "", sizeof(dp));
+    if (cdd_load(dp, (char *)cart.rom) != 1)
+    {
+      MessageBoxA(g_hwnd, "Could not read that disc.", APP_NAME, MB_OK | MB_ICONWARNING);
+      return;
+    }
+    gui_status("Disc changed");
+    return;
+  }
 
   if (MessageBoxA(g_hwnd,
         "This game is asking for a different disc.\n\n"
@@ -4105,17 +4793,11 @@ void win32_cd_tray_callback(void)
         APP_NAME, MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
     return;
 
-  lstrcpynA(dir, rom_path, sizeof(dir));
-  slash = dir;
-  {
-    const char *p;
-    for (p = dir; *p; p++)
-      if (*p == '\\' || *p == '/') slash = p;
-  }
-  if (slash > dir) ((char *)slash)[0] = '\0'; else dir[0] = '\0';
+  change_disc_start_dir(dir, sizeof(dir));
 
   if (!gui_pick_file(g_hwnd, GUI_PICK_ROM, "Change Disc",
         "Mega CD / Sega CD\0*.cue;*.iso;*.chd\0"
+        "Mega CD 32X / Sega CD 32X\0*.cue;*.iso;*.chd\0"
         "All Files\0*.*\0\0",
         dir[0] ? dir : NULL, path, sizeof(path)))
     return;
@@ -4129,23 +4811,119 @@ void win32_cd_tray_callback(void)
   gui_status("Disc changed");
 }
 
+/* A Mega CD game running in PicoDrive (a Mega CD + 32X game: Fahrenheit's second disc) opened the disc tray: it asks for another disc. The same box and the
+   same file dialog as win32_cd_tray_callback() gives the other core, and the disc goes to PicoDrive's own disc swapping. Cancel leaves the tray open: File >
+   Change Disc... can still do it. */
+static void pico_tray_prompt_inner(void);
+
+static void pico_tray_prompt(void)
+{
+  int c = gui_cursor_show();                 /* the pointer is shown (and not hidden again by its idle timer) until the question is answered */
+
+  pico_tray_prompt_inner();
+  gui_cursor_restore(c);
+}
+
+static void pico_tray_prompt_inner(void)
+{
+  char dir[GUI_PATH_LEN];
+  char path[GUI_PATH_LEN] = "";
+  char err[300];
+
+  if (disc_is_path(rom_path))             /* a disc in a drive: the next one is put in the same drive */
+  {
+    if (!next_disc_from_drive()) return;
+    if (!pico_change_disc(disc_path(), err, sizeof(err)))
+    {
+      MessageBoxA(g_hwnd, err[0] ? err : "Could not read that disc.", APP_NAME, MB_OK | MB_ICONWARNING);
+      return;
+    }
+    gui_notify("Disc changed");
+    return;
+  }
+
+  if (MessageBoxA(g_hwnd,
+        "This game is asking for a different disc.\n\n"
+        "Insert the next disc and continue?",
+        APP_NAME, MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+    return;
+
+  change_disc_start_dir(dir, sizeof(dir));
+
+  gui_pick_filter_start = 2;                 /* a game in PicoDrive: the 32X file type */
+  if (!gui_pick_file(g_hwnd, GUI_PICK_ROM, "Change Disc",
+        "Mega CD / Sega CD\0*.cue;*.iso;*.chd\0"
+        "Mega CD 32X / Sega CD 32X\0*.cue;*.iso;*.chd\0"
+        "All Files\0*.*\0\0",
+        dir[0] ? dir : NULL, path, sizeof(path)))
+    return;
+
+  if (!pico_change_disc(path, err, sizeof(err)))
+  {
+    MessageBoxA(g_hwnd, err[0] ? err : "Could not read that disc image.", APP_NAME, MB_OK | MB_ICONWARNING);
+    return;
+  }
+  gui_notify("Disc changed");
+}
+
 /* File > Change Disc: swaps the Mega CD disc by hand, for games that do not ask for one themselves.
    The tray is treated as closed again afterwards, as when a game asks for the next disc. */
 void emu_insert_disc(void)
 {
   char dir[GUI_PATH_LEN];
   char path[GUI_PATH_LEN] = "";
-  char *slash;
 
   if (!emu_running || system_hw != SYSTEM_MCD) return;
 
-  lstrcpynA(dir, rom_path, sizeof(dir));
-  slash = strrchr(dir, '\\');
-  if (slash) *slash = '\0'; else dir[0] = '\0';
+  if (disc_is_path(rom_path))             /* a game started from a disc in a drive: the next disc is put in the same drive */
+  {
+    char err[300];
 
-  if (!gui_pick_file(g_hwnd, GUI_PICK_ROM, "Change Disc",
-        "Mega CD / Sega CD\0*.cue;*.iso;*.chd\0All Files\0*.*\0\0", dir[0] ? dir : NULL, path, sizeof(path)))
+    if (!next_disc_from_drive()) return;
+    if (pico_active())
+    {
+      if (!pico_change_disc(disc_path(), err, sizeof(err)))
+      {
+        MessageBoxA(g_hwnd, err[0] ? err : "Could not read that disc.", APP_NAME, MB_OK | MB_ICONWARNING);
+        return;
+      }
+    }
+    else
+    {
+      char dp[GUI_PATH_LEN];
+
+      lstrcpynA(dp, disc_path() ? disc_path() : "", sizeof(dp));
+      if (cdd_load(dp, (char *)cart.rom) != 1)
+      {
+        MessageBoxA(g_hwnd, "Could not read that disc.", APP_NAME, MB_OK | MB_ICONWARNING);
+        return;
+      }
+      cdd.status = cdd.loaded ? CD_TOC : NO_DISC;
+      cdd.index = cdd.lba = 0;
+    }
+    gui_notify("Disc changed");
     return;
+  }
+
+  change_disc_start_dir(dir, sizeof(dir));
+
+  gui_pick_filter_start = pico_active() ? 2 : 1;      /* a game in PicoDrive: the 32X file type */
+  if (!gui_pick_file(g_hwnd, GUI_PICK_ROM, "Change Disc",
+        "Mega CD / Sega CD\0*.cue;*.iso;*.chd\0Mega CD 32X / Sega CD 32X\0*.cue;*.iso;*.chd\0All Files\0*.*\0\0", dir[0] ? dir : NULL, path, sizeof(path)))
+    return;
+
+  if (pico_active())                      /* a Mega CD + 32X game runs in PicoDrive: it swaps the disc itself (the Genesis Plus GX core is not running) */
+  {
+    char err[300];
+
+    if (!pico_change_disc(path, err, sizeof(err)))
+    {
+      MessageBoxA(g_hwnd, err[0] ? err : "Could not read that disc image.", APP_NAME, MB_OK | MB_ICONWARNING);
+      return;
+    }
+    gui_notify("Disc changed");
+    return;
+  }
 
   if (cdd_load(path, (char *)cart.rom) != 1)
   {
@@ -4225,22 +5003,25 @@ static void browse_for_rom(void)
   char file[GUI_PATH_LEN] = "";
   const char *start_dir = NULL;
 
-  /* Always start in the ROM directory chosen for the browser, no matter
+  /* Always start in the game folder chosen for the browser, no matter
      where the last ROM was picked from. */
   if (is_directory(gui.rom_dir)) start_dir = gui.rom_dir;
-  else if (is_directory(osd_path("ROMs"))) start_dir = osd_path("ROMs");      /* no ROM directory chosen: the ROMs folder beside the program, not Documents */
+  else if (is_directory(osd_path("ROMs"))) start_dir = osd_path("ROMs");      /* no game folder chosen: the ROMs folder beside the program, not Documents */
 
-  if (gui_pick_file(g_hwnd, GUI_PICK_ROM, "Open ROM",
+  if (gui_pick_file(g_hwnd, GUI_PICK_ROM, "Open Game",
         "All Supported Files\0*.zip;*.7z;*.gz;*.md;*.gen;*.bin;*.smd;*.mdx;*.sms;*.gg;*.sg;*.68k;*.32x;*.cue;*.iso;*.chd\0"
         "Mega Drive / Genesis / Sega Pico\0*.md;*.gen;*.bin;*.smd;*.mdx;*.68k\0"
         "32X\0*.32x\0"
         "Master System / Game Gear / SG-1000\0*.sms;*.gg;*.sg\0"
         "Mega CD / Sega CD\0*.cue;*.iso;*.chd\0"
+        "Mega CD 32X / Sega CD 32X\0*.cue;*.iso;*.chd\0"
         "Archives\0*.zip;*.7z;*.gz\0"
         "All Files\0*.*\0\0",
         start_dir, file, sizeof(file)))
   {
+    force_32xcd = (gui_pick_filter == 6);            /* the file type Mega CD 32X / Sega CD 32X (the sixth): the disc needs the 32X too, whatever the check of the disc says */
     emu_load_rom(file);
+    force_32xcd = 0;
   }
 }
 
@@ -4300,6 +5081,7 @@ static void np_collect(np_info *info)
   np_add(info, "Low-Pass Filter",     (unsigned)(config.filter == 1 ? config.lp_range : 0));
   np_add(info, "Console",             config.system);
   np_add(info, "Region",              config.region_detect);
+  np_add(info, "Region Order",        config.region_order);
   np_add(info, "Detected Region",     region_code);
   np_add(info, "TV Standard (PAL)",   vdp_pal);
   np_add(info, "System Hardware",     system_hw);
@@ -4543,13 +5325,156 @@ static const char *np_game_title(void)
   return rom_base;
 }
 
+/* The refresh rate of the monitor the window is on, as exactly as Windows tells it. 1: from the display configuration (the rate as a fraction,
+   such as 50000/1000 or 60000/1001, for that monitor alone); 2: from the composition timing of the desktop window manager; 3: from the
+   display mode (a whole number, which a rate such as 59.94 shows as 59 or 60: made right here). 0: none of them answered. *comp gets the
+   composition rate (0 if unknown), *mode the whole number of the display mode. */
+static int display_refresh_of_window(double *hz, double *comp, int *mode)
+{
+  MONITORINFOEXA mi;
+  DEVMODEA dm;
+  HMONITOR mon = MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST);
+  DWM_TIMING_INFO ti;
+  int src = 0;
+
+  *hz = 0.0; *comp = 0.0; *mode = 0;
+  ZeroMemory(&ti, sizeof(ti));
+  ti.cbSize = sizeof(ti);
+  if (SUCCEEDED(DwmGetCompositionTimingInfo(g_hwnd, &ti)) && ti.rateRefresh.uiDenominator > 0 && ti.rateRefresh.uiNumerator > 0)
+    *comp = (double)ti.rateRefresh.uiNumerator / (double)ti.rateRefresh.uiDenominator;
+
+  ZeroMemory(&mi, sizeof(mi)); mi.cbSize = sizeof(mi);
+  ZeroMemory(&dm, sizeof(dm)); dm.dmSize = sizeof(dm);
+  if (!mon || !GetMonitorInfoA(mon, (MONITORINFO *)&mi)) return 0;
+  if (EnumDisplaySettingsA(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) *mode = (int)dm.dmDisplayFrequency;
+
+  {
+    UINT32 np = 0, nm = 0;
+    DISPLAYCONFIG_PATH_INFO *paths;
+    DISPLAYCONFIG_MODE_INFO *modes;
+    WCHAR wdev[CCHDEVICENAME];
+
+    MultiByteToWideChar(CP_ACP, 0, mi.szDevice, -1, wdev, CCHDEVICENAME);
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &np, &nm) == ERROR_SUCCESS && np > 0)
+    {
+      paths = (DISPLAYCONFIG_PATH_INFO *)calloc(np, sizeof(*paths));
+      modes = (DISPLAYCONFIG_MODE_INFO *)calloc(nm ? nm : 1, sizeof(*modes));
+      if (paths && modes && QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &np, paths, &nm, modes, NULL) == ERROR_SUCCESS)
+      {
+        UINT32 i;
+        for (i = 0; i < np && !src; i++)
+        {
+          DISPLAYCONFIG_SOURCE_DEVICE_NAME sn;
+          ZeroMemory(&sn, sizeof(sn));
+          sn.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+          sn.header.size = sizeof(sn);
+          sn.header.adapterId = paths[i].sourceInfo.adapterId;
+          sn.header.id = paths[i].sourceInfo.id;
+          if (DisplayConfigGetDeviceInfo(&sn.header) == ERROR_SUCCESS && !lstrcmpiW(sn.viewGdiDeviceName, wdev) &&
+              paths[i].targetInfo.refreshRate.Denominator > 0 && paths[i].targetInfo.refreshRate.Numerator > 0)
+          {
+            *hz = (double)paths[i].targetInfo.refreshRate.Numerator / (double)paths[i].targetInfo.refreshRate.Denominator;
+            src = 1;
+          }
+        }
+      }
+      free(paths); free(modes);
+    }
+  }
+  if (!src && *comp > 0.0 && *mode > 1 && *comp > *mode - 1.5 && *comp < *mode + 1.5) { *hz = *comp; src = 2; }
+  if (!src && *mode > 1)
+  {
+    /* 23, 29, 47, 59, 71, 95, 119, 143, 239 Hz: Windows shows the rates of 24, 30, 48, 60 ... divided by 1.001 cut down to a whole number */
+    static const int frac[] = { 23, 29, 47, 59, 71, 95, 119, 143, 239 };
+    int k;
+    *hz = (double)*mode;
+    for (k = 0; k < 9; k++) if (*mode == frac[k]) *hz = (double)(*mode + 1) * 1000.0 / 1001.0;
+    src = 3;
+  }
+  return src;
+}
+
+/* Smooth Motion (speed matched to the screen). The console runs at 49.70 Hz (PAL) or 59.92 Hz (NTSC), a screen at 50 or 60 Hz: with VSync on, one picture in every
+   few seconds is shown twice, which shows as a small stutter in steady scrolling. When the screen's real refresh rate (Windows' composition
+   timing, such as 50.000 or 59.940 Hz) is within 2% of the game's own, the core is told to run at that rate (audio_set_rate: the sound per frame
+   follows), so a frame is one refresh. Looked at about once a second, and given back when a condition stops holding. The sound chips of a Mega CD
+   or cartridge sound hardware are not touched (their rates start over with audio_set_rate). */
+/* "50.000": a rate with three decimals (wsprintf has no floating point). */
+static void fmt_hz(char *out, double v)
+{
+  int m = (int)(v * 1000.0 + 0.5);
+  wsprintfA(out, "%d.%03d", m / 1000, m % 1000);
+}
+
+static void display_sync_update(void)
+{
+  static DWORD last;
+  static char last_reason[200], last_game[64];
+  DWORD now = GetTickCount();
+  double want = 0.0, hz = 0.0, own = 0.0, comp = 0.0;
+  int mon_hz = 0, src = 0;
+  char reason[200];
+
+  if (now - last < 1000 && last) return;
+  last = now;
+  if (!emu_running || pico_active()) return;
+
+  reason[0] = '\0';
+  if (lines_per_frame > 0 && system_clock > 0) own = (double)system_clock / ((double)MCYCLES_PER_LINE * (double)lines_per_frame);
+
+  if (system_hw == SYSTEM_MCD || snd.blips[1] || snd.blips[2] || snd.blips[3]) lstrcpyA(reason, "a Mega CD game or one with sound hardware of its own");
+  else if (!gui.sync_display)    lstrcpyA(reason, "it is switched off in Settings");
+  else if (!gui.vsync)           lstrcpyA(reason, "VSync is off");
+  else if (!gui.sound_enabled)   lstrcpyA(reason, "the sound is off");
+  else if (speed_pct != 100)     lstrcpyA(reason, "Game Speed is not 100%");
+  else if (netplay_active())     lstrcpyA(reason, "netplay is on");
+  else if (recorder_active())    lstrcpyA(reason, "a recording is on");
+  else if (RENDERER_IS_DX(gui.renderer) && video_dx_vrr_active()) lstrcpyA(reason, "Variable Refresh Rate is on");
+  else if (own <= 1.0)           lstrcpyA(reason, "the game's speed is not known yet");
+  else
+  {
+    src = display_refresh_of_window(&hz, &comp, &mon_hz);
+
+    if (hz <= 0.0) lstrcpyA(reason, "Windows gave no refresh rate");
+    else if (hz / own > 0.98 && hz / own < 1.02) want = hz;
+    else lstrcpyA(reason, "the screen's refresh rate is not within 2 percent of the game's");
+  }
+
+  /* One line in the log for each game and each change of the answer (never one every second). */
+  {
+    char line[400];
+
+    char w[32], h[32], o[32], c[32];
+    static const char *const srcname[] = { "", "display configuration", "composition timing", "display mode" };
+
+    fmt_hz(w, want); fmt_hz(h, hz); fmt_hz(o, own); fmt_hz(c, comp);
+    if (want > 0.0) wsprintfA(line, "the game runs at the screen's %s Hz (from the %s; its own is %s Hz)", w, srcname[src], o);
+    else if (hz > 0.0) wsprintfA(line, "not used: %s (the screen runs at %s Hz, from the %s; the composition at %s Hz; the display mode says %d Hz; the game's own is %s Hz)", reason, h, srcname[src], c, mon_hz, o);
+    else wsprintfA(line, "not used: %s", reason);
+    if (lstrcmpA(line, last_reason) || lstrcmpA(rom_base, last_game))
+    {
+      lstrcpynA(last_reason, line, sizeof(last_reason));
+      lstrcpynA(last_game, rom_base, sizeof(last_game));
+      gui_log("Smooth Motion: %s", line);
+    }
+  }
+
+  if (snd.enabled && (snd.frame_rate > want ? snd.frame_rate - want : want - snd.frame_rate) > 0.0005 &&
+      !(system_hw == SYSTEM_MCD || snd.blips[1] || snd.blips[2] || snd.blips[3]))
+  {
+    audio_set_rate(snd.sample_rate, want);
+    next_frame_time = 0.0;
+  }
+}
+
 /* Frames per second the emulated console really runs at: master clock over
    the length of a frame (59.92 Hz NTSC, 49.70 Hz PAL, or whatever Force VDP
-   Mode / Force Master Clock make of it). snd.frame_rate is not usable for this:
-   the GUI starts the audio with a frame rate of 0, which leaves it at 0. */
+   Mode / Force Master Clock make of it), or the screen's refresh rate when Smooth Motion has the game run at it (then
+   snd.frame_rate has it; the GUI starts the audio with a frame rate of 0, which leaves it at 0 otherwise). */
 double emu_frame_rate(void)
 {
   if (pico_active()) return pico_fps();
+  if (snd.frame_rate > 1.0) return snd.frame_rate;       /* (matched to the screen: display_sync_update) */
   if (lines_per_frame < 1 || system_clock < 1) return 60.0;
   return (double)system_clock / ((double)MCYCLES_PER_LINE * (double)lines_per_frame);
 }
@@ -4597,11 +5522,15 @@ static int np_command_locked(int id)
   if (id >= IDM_FILE_SLOT_BASE && id < IDM_FILE_SLOT_BASE + GUI_SLOT_MAX) return 1;
   if (id == IDM_EMU_CHEATS || id == IDM_EMU_CHEATSEARCH) return 1;
   if (id >= IDM_EMU_REGION_BASE && id < IDM_EMU_REGION_BASE + 5) return 1;
+  if (id >= IDM_EMU_REGORDER_BASE && id < IDM_EMU_REGORDER_BASE + 6) return 1;
   if (id >= IDM_EMU_VDPMODE_BASE && id < IDM_EMU_VDPMODE_BASE + 3) return 1;
   if (id >= IDM_EMU_SYSTEM_BASE && id < IDM_EMU_SYSTEM_BASE + 9) return 1;
   if (id >= IDM_EMU_LOCKON_BASE && id < IDM_EMU_LOCKON_BASE + 4) return 1;
-  if (id == IDM_EMU_BIOS || id == IDM_EMU_ADDRERROR || id == IDM_EMU_CDLATENCY) return 1;
+  if (id == IDM_EMU_BIOS || id == IDM_EMU_ADDRERROR || id == IDM_EMU_CDLATENCY || id == IDM_EMU_CDCACHE || id == IDM_EMU_NOSPRITELIMIT) return 1;
   if (id == IDM_AUDIO_HQPSG) return 1;       /* re-creates the PSG: would put the two games out of step */
+  /* The other things a session compares when it starts (np_collect): changed on one PC only, the two games would drift apart. */
+  if (id == IDM_EMU_LOCKUPS || id == IDM_AUDIO_LOWPASS || id == IDM_AUDIO_EQ || id == IDM_AUDIO_HQFM || id == IDM_VIDEO_DEINTERLACE) return 1;
+  if (id >= IDM_VIDEO_INTERLACE_BASE && id < IDM_VIDEO_INTERLACE_BASE + 2) return 1;
   if (id >= IDM_AUDIO_FMCORE_BASE && id < IDM_AUDIO_FMCORE_BASE + 5) return 1;
   if (id >= IDM_SET_MODEL_BASE && id <= IDM_SET_MODEL_BASE + 2) return 1;
   if ((id >= IDM_SET_FMUNIT_BASE && id < IDM_SET_FMUNIT_BASE + 3) || (id >= IDM_SET_OPLL_BASE && id < IDM_SET_OPLL_BASE + 2)) return 1;   /* changes the FM chip type */
@@ -4697,7 +5626,7 @@ static void set_vsync_allowed(void)
 {
   int ok;
 
-  if (gui.sound_enabled && !waveout_broken()) ok = (waveout_pending() >= 2);
+  if (gui.sound_enabled && !waveout_broken()) ok = (waveout_pending() >= (gui.alt_timing ? 1 : 2));
   else                   ok = (timer_lag_frames < 0.5);
   video_set_vsync_allowed(ok);
 }
@@ -4720,9 +5649,41 @@ static void taskbar_update(int rewinding, int rewind_pct, int fast)
 
 static double now_seconds(void);
 
+/* Run-Ahead (Settings > Emulation): the game is run 1 or 2 frames ahead with this frame's buttons, the picture of the last one is shown and the game goes
+   back (a saved state) to the frame it really is at, so a button shows its effect sooner. The frame that really counts is run first and its sound is
+   the sound that plays; everything is drawn (what a game reads back from the video chip, such as sprite collisions, must be right). Only in the
+   Genesis Plus GX core's games and in 32X (PicoDrive) games, with the Mega CD ones included,
+   and only for a normal-speed frame that is not part of a recording or a netplay session. */
+static int run_ahead_frames(int record)
+{
+  if (!gui.run_ahead || !record || speed_pct != 100 || skip_frames_left > 0) return 0;
+  if (netplay_active() || recorder_active() || vgm_active() || movie_busy()) return 0;      /* (an input recording must play back the same: the frames stay as they are) */
+  return gui.run_ahead;
+}
+
+/* The state Run-Ahead goes back to: big enough for the core's, and for a 32X game's (which the library sizes itself). */
+static uint8 *run_ahead_buffer(void)
+{
+  static uint8 *buf;
+  static size_t cap;
+  size_t need = host_state_cap();
+
+  if (buf && need > cap) { free(buf); buf = NULL; }
+  if (!buf) { buf = (uint8 *)malloc(need); cap = buf ? need : 0; }
+  return buf;
+}
+
+static void core_frame_now(int skip)
+{
+  if (system_hw == SYSTEM_MCD)                    system_frame_scd(skip);
+  else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD) system_frame_gen(skip);
+  else                                            system_frame_sms(skip);
+}
+
 static void run_one_frame(int present_video, int record)
 {
   int samples;
+  int ra = 0, ra_done = 0;       /* Run-Ahead: frames ahead, and whether the frame that counts has already been run (with its sound) */
 
   /* Mute FM / Mute PSG: the chip's level is taken to 0 for this frame only, so the saved levels stay as they were. */
   int keep_fm = config.fm_preamp, keep_psg = config.psg_preamp;
@@ -4749,8 +5710,52 @@ static void run_one_frame(int present_video, int record)
       video_viewport_changed();
     }
     cheats_ram_update();                    /* RAM cheats go back in each frame (the 68000's work RAM of the library) */
-    samples = pico_run_frame(soundframe, (int)(sizeof(soundframe) / sizeof(soundframe[0]) / 2));
-    if (pico_take_rate_change()) emu_apply_audio_settings();      /* Sample Rate was changed: the sound output takes the new rate */
+    {
+      static int16 ra_snd32[sizeof(soundframe) / sizeof(soundframe[0])];
+      int pra = run_ahead_frames(record);
+      /* With Run-Ahead the sound that plays is the last frame from ahead: the sound chain (the library's resampler and filters) goes through the real
+         frame (its sound is thrown away) and then the frame from ahead, so what plays is one unbroken stream. Playing the real frame's sound would
+         jump at every frame, as the chain goes on from the end of the frame from ahead, not from the end of the real one. */
+      int tray, rate;
+
+      samples = pico_run_frame(pra ? ra_snd32 : soundframe, (int)(sizeof(soundframe) / sizeof(soundframe[0]) / 2));
+      tray = pico_take_tray_open(); rate = pico_take_rate_change();
+
+      if (pra)                                                      /* Run-Ahead: see run_ahead_frames (the sound is the last frame from ahead's) */
+      {
+        uint8 *buf = run_ahead_buffer();
+        int n = 0;
+
+        pico_state_quiet(1);                                        /* (a state at every frame is not for the log) */
+        if (buf) n = host_state_save(buf);
+        if (n > 0)
+        {
+          int i, changed;
+
+          for (i = 0; i < pra; i++)
+          {
+            cheats_ram_update();
+            if (i == pra - 1) samples = pico_run_frame(soundframe, (int)(sizeof(soundframe) / sizeof(soundframe[0]) / 2));      /* the sound that plays */
+            else              pico_run_frame(ra_snd32, (int)(sizeof(ra_snd32) / sizeof(ra_snd32[0]) / 2));
+            pico_take_tray_open(); pico_take_rate_change();         /* (what the game does in these frames happens again in the real one) */
+          }
+          changed = bitmap.viewport.changed;
+          ra_keep_history = 1;
+          host_state_load(buf, (size_t)n);
+          ra_keep_history = 0;
+          bitmap.viewport.changed = (uint8)changed;
+        }
+        else
+        {
+          gui_log("Run-Ahead: the 32X state could not be saved, it is switched off");
+          gui.run_ahead = 0;
+          samples = pico_run_frame(soundframe, (int)(sizeof(soundframe) / sizeof(soundframe[0]) / 2));         /* (this frame has a sound of its own to play) */
+        }
+        pico_state_quiet(0);
+      }
+      if (tray) pico_tray_prompt();                                 /* the game opened the disc tray: it asks for another disc */
+      if (rate) emu_apply_audio_settings();                         /* Sample Rate was changed: the sound output takes the new rate */
+    }
     if (config.filter == 2 && samples > 0)  /* the 3-Band EQ (the library has none of its own): the same filter the Genesis Plus GX core uses */
     {
       static EQSTATE eq32[2];
@@ -4797,9 +5802,89 @@ static void run_one_frame(int present_video, int record)
       s68k.cycle_ratio = ratio;
     }
 #endif
-    if (system_hw == SYSTEM_MCD)              system_frame_scd(skip_render);
-    else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD) system_frame_gen(skip_render);
-    else                                      system_frame_sms(skip_render);
+    ra = run_ahead_frames(record);
+    if (ra)
+    {
+      uint8 *ra_state = run_ahead_buffer();
+      size_t pic_bytes = (size_t)FRAME_MAX_W * FRAME_MAX_H * FRAME_BPP;
+      static uint8 *pic_ahead;                                      /* (made once) */
+      int real_samples = 0;
+      static int16 ra_sound[2 * 4200];
+      /* What the real frame leaves behind and a loaded state does not give back: state_load() starts with system_reset(), which clears the picture and puts
+         the video chip's viewport (the picture's size, which the chip's own timing uses) and its interlace flags and drawing functions to their start values. */
+      unsigned char vp_real[sizeof(bitmap.viewport)];
+      uint8 real_interlaced = 0, real_odd = 0, real_im2 = 0;
+      void (*real_bg)(int) = NULL, (*real_obj)(int) = NULL, (*real_satb)(int) = NULL;
+      /* The 68000's timing that is not in a state either: its bus refresh point (put back to its start value by the load's reset, it made every frame's
+         first instructions run at another pace, which showed in the sound of a game that plays samples by hand, such as the SEGA chime) and the idle-loop
+         detection. The Mega CD's second 68000 likewise. */
+      int real_refresh = 0, real_refresh_s = 0;
+      cpu_idle_t real_poll, real_poll_s;
+      int n = 0;
+      int chain = ra_audio_usable();                                 /* the sound chain can be kept (raudio.c); else it starts again at each frame */
+
+      int keep_cdda = config.cdda_volume;                            /* (the disc music is muted for all the frames or for none: the sound chain must see the same level) */
+
+      if (gui.mute_cdda && system_hw == SYSTEM_MCD) config.cdda_volume = 0;
+      if (!pic_ahead) pic_ahead = (uint8 *)malloc(pic_bytes);
+      if (ra_state && pic_ahead && bitmap.data)
+      {
+        core_frame_now(0);                                           /* the frame that really counts (its sound is thrown away: see below) */
+        if (interlaced && !config.render && ((system_hw & SYSTEM_PBC) == SYSTEM_MD)) odd_frame = 1;       /* (Single Field, as after any frame, below) */
+        real_samples = audio_update(ra_sound);
+        ra_done = 1;
+        if (chain) ra_audio_snapshot();                              /* the sound chain as the saved state belongs to it */
+        memcpy(vp_real, &bitmap.viewport, sizeof(vp_real));
+        real_interlaced = interlaced; real_odd = odd_frame; real_im2 = im2_flag;
+        real_bg = render_bg; real_obj = render_obj; real_satb = parse_satb;
+        real_refresh = m68k.refresh_cycles; real_poll = m68k.poll;
+        real_refresh_s = s68k.refresh_cycles; real_poll_s = s68k.poll;
+        n = host_state_save(ra_state);
+      }
+      if (ra_done && n > 0)
+      {
+        int i;
+
+        for (i = 0; i < ra; i++)                                     /* ahead, with the same buttons */
+        {
+          cheats_ram_update();
+          core_frame_now(skip_render && i == ra - 1);
+          if (interlaced && !config.render && ((system_hw & SYSTEM_PBC) == SYSTEM_MD)) odd_frame = 1;
+          if (i == ra - 1)
+          {
+            /* The sound that plays is the last frame from ahead: with the real frame's sound thrown away and the sound chain put back (raudio.c) after
+               the load, the sound is the one a normal run plays, a frame earlier. */
+            samples = audio_update(soundframe);
+            if (system_hw == SYSTEM_PICO) picopcm_mix(soundframe, samples);
+            if (chain) ra_audio_ahead_done();
+          }
+          else audio_update(ra_sound);
+        }
+        memcpy(pic_ahead, bitmap.data, pic_bytes);
+        ra_keep_history = 1;
+        ra_audio_keep = chain;                                       /* (the load's system_reset() leaves the sound chain alone) */
+        host_state_load(ra_state, (size_t)n);                         /* back to where the game really is */
+        ra_audio_keep = 0;
+        ra_keep_history = 0;
+        if (chain) ra_audio_restore();
+        memcpy(&bitmap.viewport, vp_real, sizeof(vp_real));           /* the real frame's viewport and interlace set-up: what the next frame needs */
+        interlaced = real_interlaced; odd_frame = real_odd; im2_flag = real_im2;
+        render_bg = real_bg; render_obj = real_obj; parse_satb = real_satb;
+        m68k.refresh_cycles = real_refresh; m68k.poll = real_poll;
+        s68k.refresh_cycles = real_refresh_s; s68k.poll = real_poll_s;
+        memcpy(bitmap.data, pic_ahead, pic_bytes);                    /* the picture from ahead (the load cleared the buffer) */
+      }
+      else if (ra_done)                                              /* the state could not be saved: this frame is as it would be without Run-Ahead */
+      {
+        gui_log("Run-Ahead: the state could not be saved, it is switched off");
+        gui.run_ahead = 0;
+        samples = real_samples;                                       /* (the real frame's own sound plays) */
+        memcpy(soundframe, ra_sound, (size_t)(real_samples > 0 ? (real_samples > 2048 ? 2048 : real_samples) : 0) * 2 * sizeof(int16));
+      }
+      else core_frame_now(skip_render);
+      config.cdda_volume = (int16)keep_cdda;
+    }
+    else core_frame_now(skip_render);
 
     /* Single Field: the same field every frame. The core draws the other one in turn (and the lines of one are half a line off the
        other's), so a picture of the two shakes, its text flickering between two looks. It flips the flag at the start of a frame:
@@ -4817,8 +5902,15 @@ static void run_one_frame(int present_video, int record)
 
     /* audio_update must run every frame or the blip buffers overrun, even
        when the samples are then thrown away. */
-    samples = audio_update(soundframe);
-    if (system_hw == SYSTEM_PICO) picopcm_mix(soundframe, samples);        /* a Sega Pico game's voices (the core leaves them out) */
+    if (!ra_done)
+    {
+      int keep_cdda = config.cdda_volume;
+
+      if (gui.mute_cdda && system_hw == SYSTEM_MCD) config.cdda_volume = 0;       /* Audio > Mute > CD Audio: the disc's music is read here (cdd_update_audio, from audio_update), at volume 0 */
+      samples = audio_update(soundframe);
+      config.cdda_volume = (int16)keep_cdda;
+    }
+    if (system_hw == SYSTEM_PICO && !ra_done) picopcm_mix(soundframe, samples);        /* a Sega Pico game's voices (the core leaves them out) */
   }
 
   config.fm_preamp  = (int16)keep_fm;
@@ -4950,6 +6042,12 @@ static void tick_fps(void)
       gui_log("The first seconds, or after a controller change: %d fps, sound queue %d of %d, slowest frame %d ms (drawing %d ms), longest wait between frames %d ms, %s%s", fps,
               gui.sound_enabled ? waveout_pending() : -1, gui.latency, (int)(diag_work * 1000.0), (int)(diag_draw * 1000.0), (int)(diag_gap * 1000.0),
               emu_paused ? "paused" : "running", (gui.sound_enabled && waveout_broken()) ? ", sound device lost" : "");
+    {
+      char tt[400];
+
+      video_timing_text(0, tt, sizeof(tt));
+      if (gui.log_on && (int)(diag_until - now) > 0) gui_log("Frame timing: %s", tt);
+    }
     diag_work = diag_gap = diag_draw = 0.0;
     frames_this_second = 0;
     fps_tick = now;
@@ -5041,7 +6139,7 @@ static void tick_cursor_hide(void)
       HWND w = WindowFromPoint(p);
       char cls[32] = "";
       if (w && w != g_hwnd) GetClassNameA(w, cls, sizeof(cls));
-      over_game = (w == g_hwnd) || lstrcmpA(cls, "GPEXD3D11Surface") == 0;   /* the picture, not the status bar or toolbar */
+      over_game = (w == g_hwnd) || lstrcmpA(cls, "GPEXD3D11Surface") == 0 || lstrcmpA(cls, "GPEXD3D12Surface") == 0;   /* the picture, not the status bar or toolbar */
     }
   }
 
@@ -5087,6 +6185,11 @@ static void tick_fullscreen_menu_hover(void)
   RECT rc;
 
   if (!gui.fullscreen) return;
+  if (video_exclusive_active())                             /* True Exclusive Fullscreen: the menu and toolbar cannot be reached, so the top edge brings nothing (and the picture is not resized for them) */
+  {
+    if (GetMenu(g_hwnd)) { browser_fullscreen_toolbar(0); set_fullscreen_menu(0); }
+    return;
+  }
   if (in_modal_loop || menu_loop_active) return;             /* a menu or dialog is open: the person is using the mouse */
   if (gui_clean_window_on())                                 /* Hide All Bars: the bars stay away, the mouse at the top edge brings nothing */
   {
@@ -5336,6 +6439,7 @@ static void apply_menu_font(void)
   /* A new menu is made, as at the start: changing the items of the old one in place left the sizes Windows had worked out for them. */
   g_menu = LoadMenuA(g_inst, MAKEINTRESOURCEA(IDR_MAINMENU));
   if (!g_menu) { g_menu = old; return; }
+  disc_dirty = 1;                                       /* (the new menu has the plain entry again) */
   i18n_language_menu(g_menu, gui.language);
   i18n_menu(g_menu);
   theme_set_menu_bar(g_menu);
@@ -5355,10 +6459,10 @@ static const struct { int base, n; int *val; } setgroups[] =
 {
   { IDM_SET_STEREO_BASE,    4, &gui.stereo_idx },
   { IDM_SET_MOUSESENS_BASE, 5, &gui.mouse_sens },
-  { IDM_SET_GUNX_BASE,      7, &gui.gun_ox },
+  { IDM_SET_GUNX_BASE,      13, &gui.gun_ox },
   { IDM_SET_VSLIMIT_BASE,   8, &gui.vs_limit },
   { IDM_SET_CPUSPEED_BASE,  8, &gui.cpu_speed },
-  { IDM_SET_GUNY_BASE,      7, &gui.gun_oy },
+  { IDM_SET_GUNY_BASE,      13, &gui.gun_oy },
   { IDM_SET_GUNBORDER_BASE, 5, &gui.gun_border },
   { IDM_SET_STICKSHAPE_BASE, 4, &gui.stick_shape },
   { IDM_SET_CROSSFEED_BASE, 4, &gui.crossfeed },
@@ -5366,7 +6470,7 @@ static const struct { int base, n; int *val; } setgroups[] =
   { IDM_SET_XHCOLOR_BASE,   6, &gui.xh_color },
   { IDM_SET_XHSIZE_BASE,    4, &gui.xh_size },
   { IDM_SET_BARCOLOR_BASE,  7, &gui.bar_color },
-  { IDM_SET_FSMODE_BASE,    2, &gui.fs_exclusive },
+  { IDM_SET_FSMODE_BASE,    3, &gui.fs_mode },
   { IDM_SET_COVERSHAPE_BASE, 3, &gui.cover_shape },
   { IDM_SET_ACCENT_BASE,    GUI_ACCENT_HIDDEN + 1, &gui.accent },       /* the last is a hidden one (eggs.c) */
   { IDM_SET_TBSIZE_BASE,    3, &gui.toolbar_size },
@@ -5375,7 +6479,9 @@ static const struct { int base, n; int *val; } setgroups[] =
   { IDM_SET_BASS_BASE,      4, &gui.bass },
   { IDM_SET_AUTOSAVE_BASE,  5, &gui.autosave_min },
   { IDM_SET_SKIPLEN_BASE,   7, &gui.skip_len },
+  { IDM_SET_RUNAHEAD_BASE,  3, &gui.run_ahead },
   { IDM_SET_REWINDSPEED_BASE, 4, &gui.rewind_speed },
+  { IDM_SET_FFSPEED_BASE,   GUI_FF_COUNT, &gui.fast_forward_idx },
   { IDM_SET_OSDPOS_BASE,    4, &gui.osd_pos },
   { IDM_SET_OSDTIME_BASE,   7, &gui.osd_time },
   { IDM_SET_BACKEND_BASE,   4, &gui.audio_backend },
@@ -5493,6 +6599,28 @@ int gui_dyn_list(int base, char names[][96], int max, int *cur)
       n++;
     }
   }
+  else if (base == IDM_SET_ADAPTER_BASE)
+  {
+    char an[8][96];
+    int na = d3d11_adapter_list(an, 8);
+
+    lstrcpyA(names[n++], "Auto");
+    for (i = 0; i < na && n < max; i++)
+    {
+      lstrcpynA(names[n], an[i], 96);
+      if (gui.video_adapter[0] && !lstrcmpiA(gui.video_adapter, an[i])) *cur = n;
+      n++;
+    }
+  }
+  else if (base == IDM_SET_FSMON_BASE)
+  {
+    char mn[8][96];
+    int nm = video_monitor_list(mn, 8);
+
+    lstrcpyA(names[n++], "Current Monitor");
+    for (i = 0; i < nm && n < max; i++) lstrcpynA(names[n++], mn[i], 96);
+    *cur = video_monitor_chosen() + 1;
+  }
   else if (base == IDM_SET_FSRES_BASE)
   {
     int ws[60], hs[60], nm = video_fullscreen_modes(ws, hs, 59);
@@ -5592,7 +6720,8 @@ int gui_setgroup_set(int id)
       else if (setgroups[k].base == IDM_SET_BARCOLOR_BASE || setgroups[k].base == IDM_VIDEO_LCDCOLOR_BASE) video_adjust_changed();
       else if (setgroups[k].base == IDM_SET_GUNBORDER_BASE || setgroups[k].base == IDM_VIDEO_FILTER_MODE_BASE)
       {
-        video_viewport_changed();
+        if (setgroups[k].base == IDM_VIDEO_FILTER_MODE_BASE) video_picture_refresh();       /* (the picture is kept: no frame may come while a menu is open) */
+        else video_viewport_changed();
         if (setgroups[k].base == IDM_VIDEO_FILTER_MODE_BASE)                         /* (the log says what really draws it; a message only when it is not what was chosen) */
         {
           int note;
@@ -5605,13 +6734,25 @@ int gui_setgroup_set(int id)
       else if (setgroups[k].base == IDM_SET_VSLIMIT_BASE) config.enhanced_vscroll_limit = (uint8)(2 * (gui.vs_limit + 1));
       else if (setgroups[k].base == IDM_SET_OSDSIZE_BASE) { video_osd_font_changed(); video_invalidate(); }
       else if (setgroups[k].base == IDM_SET_OSDPOS_BASE || setgroups[k].base == IDM_SET_FPSPOS_BASE || setgroups[k].base == IDM_SET_OSDCOLOR_BASE || setgroups[k].base == IDM_SET_OSDLINES_BASE) video_invalidate();
+      else if (setgroups[k].base == IDM_SET_FSMODE_BASE)         /* the two flags the video code reads follow the choice; leaving True Exclusive Fullscreen lets go of the screen now */
+      {
+        gui.fs_exclusive = gui.fs_mode >= 1;
+        gui.fs_true = gui.fs_mode == 2;
+        if (!gui.fs_true) video_exclusive_leave();
+        if (gui.vrr && RENDERER_IS_DX(gui.renderer))                /* Variable Refresh Rate is off while True Exclusive Fullscreen is chosen and back after: the swap chain is made again */
+        {
+          video_vrr_changed();
+          if (!emu_running) video_dx_show_surface(0);
+          video_picture_refresh();
+        }
+      }
       else if (setgroups[k].base == IDM_SET_COVERSHAPE_BASE) browser_cover_style_changed();
       else if (setgroups[k].base == IDM_SET_TBSIZE_BASE) browser_bars_changed();        /* the toolbar is laid out again at its new size */
       else if (setgroups[k].base == IDM_SET_ACCENT_BASE) EnumThreadWindows(GetCurrentThreadId(), redraw_all_cb, 0);
       else if (setgroups[k].base == IDM_SET_STYLE_BASE)
       {
         theme_apply_to_window(g_hwnd);                  /* the window frame, controls and fonts at once (Settings follows itself) */
-        picobook_retheme();
+        storyware_retheme();
         if (menu_loop_active) menu_rebuild_pending = 1;                  /* (the open menu stays, like the other View choices: the new menu bar is made when it closes) */
         else apply_menu_font();
         RedrawWindow(g_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
@@ -5646,16 +6787,19 @@ static void pause_menu_choose(void)
   {
     case 1: on_command(IDM_ACCEL_QUICKSAVE); break;
     case 2: on_command(IDM_ACCEL_QUICKLOAD); break;
-    case 3: on_command(IDM_EMU_RESET); break;
-    case 4: on_command(IDM_EMU_STOP); break;
+    case 3: on_command(IDM_FILE_SCREENSHOT); break;
+    case 4: on_command(IDM_AUDIO_ENABLE); break;
+    case 5: on_command(IDM_VIDEO_FULLSCREEN); break;
+    case 6: on_command(IDM_EMU_RESET); break;
+    case 7: on_command(IDM_EMU_STOP); break;
     default: break;
   }
 }
 
 static void pause_menu_move(int d)
 {
-  pm_sel = (pm_sel + d + 5) % 5;
-  video_show_menu(pm_items, 5, pm_sel);
+  pm_sel = (pm_sel + d + PM_N) % PM_N;
+  video_show_menu(pm_items, PM_N, pm_sel);
 }
 
 /* A key press while the pause menu is up: 1 = used it. */
@@ -5775,7 +6919,7 @@ static void emulation_step(void)
     next_frame_time = 0.0;
   }
 
-  if (emu_running && !in_modal_loop && !netplay_active())
+  if (emu_running && !in_modal_loop && !menu_loop_active && !netplay_active())      /* (not while a menu is open: its loop runs this step, and a command here would change the window under it) */
   {
     int slot;
 
@@ -5797,7 +6941,7 @@ static void emulation_step(void)
   }
 
   /* Gamepad hotkeys: a press of the button set for a shortcut. */
-  if (emu_running && !in_modal_loop && !netplay_active())
+  if (emu_running && !in_modal_loop && !menu_loop_active && !netplay_active())
   {
     int c = gui_input_pad_hotkey();
     if (c) on_command(c);
@@ -5922,6 +7066,7 @@ static void emulation_step(void)
   }
 
   if (!emu_running || netplay_active()) skip_frames_left = 0;
+  display_sync_update();
   fast = netplay_active() ? 0 : (gui_input_fast_forward() || skip_frames_left > 0);
   taskbar_update(0, 0, fast);
 
@@ -5948,7 +7093,7 @@ static void emulation_step(void)
       return;
     }
 
-    if (gui.sound_enabled && !audio_pacing_lost() && (speed_pct == 100 || netplay_active()))
+    if (gui.sound_enabled && !audio_pacing_lost() && (speed_pct == 100 || netplay_active()) && !(gui.alt_timing && !netplay_active()))
     {
       /* Let the sound card set the pace. */
       if (waveout_pending() >= gui.latency)
@@ -5969,11 +7114,28 @@ static void emulation_step(void)
       }
       else if (now < next_frame_time)
       {
-        step_wait(0, NULL, 1);
-        return;
+        /* Use Alternate Timing: the last millisecond is waited for by looking at the clock, not by sleeping, which wakes up late
+           by a variable amount (a frame then starts at an uneven time). */
+        if (gui.alt_timing && next_frame_time - now < 0.0015)
+        {
+          while ((now = now_seconds()) < next_frame_time) YieldProcessor();
+        }
+        else
+        {
+          step_wait(0, NULL, 1);
+          return;
+        }
       }
       timer_lag_frames = (now - next_frame_time) / period;
       next_frame_time += period;
+      if (gui.alt_timing && gui.sound_enabled && !netplay_active() && speed_pct == 100)
+      {
+        /* The sound card and the clock run at slightly different speeds: the pace is nudged by half a percent a frame to keep the
+           queue of sound between two and three frames, so the sound neither runs out nor overflows. */
+        int q = waveout_pending();
+        if (q < 2) next_frame_time -= period * 0.005;
+        else if (q >= gui.latency) next_frame_time += period * 0.005;
+      }
     }
 
     if (netplay_active())
@@ -5999,8 +7161,8 @@ static void emulation_step(void)
   }
   else
   {
-    /* Draw one frame in every fast_forward_ratio to keep the window alive. */
-    count = gui.fast_forward_ratio;
+    /* Draw one frame in every Fast Forward Speed (2x to 16x) frames to keep the window alive. */
+    { static const int ff[GUI_FF_COUNT] = GUI_FF_RATIOS; count = ff[gui.fast_forward_idx < 0 || gui.fast_forward_idx >= GUI_FF_COUNT ? GUI_FF_DEFAULT : gui.fast_forward_idx]; }
     for (i = 0; i < count; i++)
     {
       run_one_frame(i == count - 1, 0);
@@ -6022,7 +7184,7 @@ static void emulation_step(void)
  * Commands
  ****************************************************************************/
 
-/* Shaders need librashader.dll and the Direct3D 11 renderer; says so (once
+/* Shaders need librashader.dll and the Direct3D 11 or 12 renderer; says so (once
    per attempt) when either is missing. Returns 1 when shaders can be used. */
 int gui_shader_available(void)
 {
@@ -6035,10 +7197,10 @@ int gui_shader_available(void)
     MessageBoxA(g_hwnd, text, APP_NAME, MB_OK | MB_ICONWARNING);
     return 0;
   }
-  if (gui.renderer != RENDERER_D3D11 || !d3d11_get_frame_resources(&device, NULL, NULL))
+  if (!RENDERER_IS_DX(gui.renderer) || !video_dx_shader_device(&device))
   {
-    MessageBoxA(g_hwnd, "Shaders need the Direct3D 11 renderer.\n\n"
-                        "Pick it under Video > Renderer first.",
+    MessageBoxA(g_hwnd, "Shaders need the Direct3D 11 or Direct3D 12 renderer.\n\n"
+                        "Pick one under Video > Renderer first.",
                 APP_NAME, MB_OK | MB_ICONWARNING);
     return 0;
   }
@@ -6049,14 +7211,12 @@ int gui_shader_available(void)
    is NULL or empty. Returns 1 on success. */
 int gui_shader_scales(void)
 {
-  return gui.shader_preset_path[0] && gui.renderer == RENDERER_D3D11;
+  return gui.shader_preset_path[0] && RENDERER_IS_DX(gui.renderer);
 }
 
 
 int gui_set_shader(const char *path)
 {
-  void *device;
-
   if (!path || !path[0])
   {
     shader_chain_unload();
@@ -6067,9 +7227,8 @@ int gui_set_shader(const char *path)
   }
 
   if (!gui_shader_available()) return 0;
-  if (!d3d11_get_frame_resources(&device, NULL, NULL)) return 0;
 
-  if (shader_chain_load(device, path))
+  if (video_dx_load_shader(path))
   {
     lstrcpynA(gui.shader_preset_path, path, sizeof(gui.shader_preset_path));
     gui_update_menu();
@@ -6083,6 +7242,37 @@ int gui_set_shader(const char *path)
     MessageBoxA(g_hwnd, msg, APP_NAME, MB_OK | MB_ICONWARNING);
   }
   return 0;
+}
+
+/* A preset tried while the Preset Browser is open: loaded on the running game, no message box and no saving (the browser says what went wrong in its own
+   window, and puts the old preset back when it is cancelled). Returns 1 when it is loaded (or none is wanted). */
+int gui_set_shader_quiet(const char *path, char *err, int errlen)
+{
+  void *device;
+
+  if (err && errlen > 0) err[0] = '\0';
+  if (!path || !path[0])
+  {
+    shader_chain_unload();
+    gui.shader_preset_path[0] = '\0';
+    return 1;
+  }
+  if (!shader_chain_available()) { if (err) lstrcpynA(err, "librashader.dll is not available", errlen); return 0; }
+  if (!RENDERER_IS_DX(gui.renderer) || !video_dx_shader_device(&device)) { if (err) lstrcpynA(err, "shaders need the Direct3D 11 or Direct3D 12 renderer", errlen); return 0; }
+  if (video_dx_load_shader(path))
+  {
+    lstrcpynA(gui.shader_preset_path, path, sizeof(gui.shader_preset_path));
+    return 1;
+  }
+  gui.shader_preset_path[0] = '\0';                     /* (the chain that was loaded is gone: nothing is loaded now) */
+  if (err) lstrcpynA(err, shader_chain_last_error(), errlen);
+  return 0;
+}
+
+void gui_shader_commit(void)
+{
+  gui_update_menu();
+  config_save();
 }
 
 /* Set from the command line (see parse_command_line()). */
@@ -6390,7 +7580,6 @@ static int hc_applied, hc_prev_theme, hc_prev_style, hc_prev_accent;
 int gui_theme_for_ini(void) { return hc_applied ? hc_prev_theme : gui.theme_mode; }
 int gui_style_for_ini(void) { return hc_applied ? hc_prev_style : gui.ui_style; }
 int gui_accent_for_ini(void) { return hc_applied ? hc_prev_accent : gui.accent; }
-int gui_hc_applied(void) { return hc_applied; }
 
 static void follow_high_contrast(void)
 {
@@ -6423,7 +7612,7 @@ static void follow_high_contrast(void)
   }
   EnumThreadWindows(GetCurrentThreadId(), redraw_all_cb, 0);
   theme_apply_to_window(g_hwnd);
-  picobook_retheme();
+  storyware_retheme();
   if (menu_loop_active) menu_rebuild_pending = 1;
   else apply_menu_font();
   theme_menu_icons(g_menu);
@@ -6442,7 +7631,7 @@ static void restart_program(void)
   GetModuleFileNameA(NULL, exe_path, sizeof(exe_path));
 
   /* Only hand the new instance a ROM if one is actually running. rom_path
-     is also set by ROM Information / Edit Cheats on a game that was only
+     is also set by Game Information / Edit Cheats on a game that was only
      inspected (emu_peek_rom), and that must not launch it. */
   /* The new copy waits for this one to be gone (--after-pid) before it reads the settings file, which this one writes while it closes, and keeps using
      the same settings file (--config), also when it was not the usual one. */
@@ -6472,6 +7661,7 @@ static void restart_program(void)
 
 static void on_command_inner(int id)
 {
+  if (id >= IDM_FILE_OPENDISC_BASE && id < IDM_FILE_OPENDISC_BASE + 8) { open_disc_item(id - IDM_FILE_OPENDISC_BASE); return; }
   {
     char lang[48];
 
@@ -6517,7 +7707,7 @@ static void on_command_inner(int id)
   {
     if (MessageBoxA(g_hwnd, "Put EVERYTHING back as a new copy of the program starts?\n\n"
                             "This deletes the settings file and restarts the program. All settings, the controls, the hotkeys, the picture adjustments, "
-                            "the audio levels, the folders and ROM directories, the favorites and the lists of recent and played games are forgotten.\n\n"
+                            "the audio levels, the folders and game folders, the favorites and the lists of recent and played games are forgotten.\n\n"
                             "Your games, saves, save states, covers, cheat files and saved controller profiles are not touched.\n\nContinue?",
                     "Factory Reset", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
       return;
@@ -6591,6 +7781,32 @@ static void on_command_inner(int id)
     return;
   }
 
+  if (id >= IDM_SET_ADAPTER_BASE && id < IDM_SET_ADAPTER_BASE + 9)
+  {
+    char an[8][96];
+    int na = d3d11_adapter_list(an, 8), k = id - IDM_SET_ADAPTER_BASE;
+
+    lstrcpynA(gui.video_adapter, (k >= 1 && k <= na) ? an[k - 1] : "", sizeof(gui.video_adapter));
+    video_exclusive_leave();
+    if (gui.renderer != RENDERER_GDI)
+    {
+      video_set_renderer(gui.renderer);                  /* the device is made again, on the card chosen */
+      if (RENDERER_IS_DX(gui.renderer) && !emu_running) video_dx_show_surface(0);
+      video_viewport_changed();
+      video_invalidate();
+    }
+    gui_log("Video: adapter '%s'", gui.video_adapter[0] ? gui.video_adapter : "Auto");
+    config_save();
+    return;
+  }
+
+  if (id >= IDM_SET_FSMON_BASE && id < IDM_SET_FSMON_BASE + 9)
+  {
+    video_monitor_choose(id - IDM_SET_FSMON_BASE - 1);
+    config_save();
+    return;
+  }
+
   if (id >= IDM_SET_FSRES_BASE && id < IDM_SET_FSRES_BASE + 60)
   {
     int ws[60], hs[60], n = video_fullscreen_modes(ws, hs, 59), k = id - IDM_SET_FSRES_BASE;
@@ -6648,6 +7864,15 @@ static void on_command_inner(int id)
     return;
   }
 
+  if (id >= IDM_EMU_REGORDER_BASE && id < IDM_EMU_REGORDER_BASE + 6)
+  {
+    config.region_order = (uint8)(id - IDM_EMU_REGORDER_BASE);
+    if (!pico_active()) emu_apply_region();
+    gui_update_menu();
+    config_save();
+    return;
+  }
+
   if (id >= IDM_EMU_REGION_BASE && id < IDM_EMU_REGION_BASE + 5)
   {
     config.region_detect = (uint8)(id - IDM_EMU_REGION_BASE);
@@ -6668,7 +7893,7 @@ static void on_command_inner(int id)
     config.system = systems[id - IDM_EMU_SYSTEM_BASE];
     gui_update_menu();
     config_save();
-    gui_status("Console setting applies the next time a ROM is loaded");
+    gui_status("Console setting applies the next time a game is opened");
     return;
   }
 
@@ -6677,14 +7902,14 @@ static void on_command_inner(int id)
     config.lock_on = (uint8)(id - IDM_EMU_LOCKON_BASE);
     gui_update_menu();
     config_save();
-    gui_status("Lock-on cartridge applies the next time a ROM is loaded");
+    gui_status("Lock-on cartridge applies the next time a game is opened");
     return;
   }
 
   if (id >= IDM_VIDEO_SCALE_BASE && id < IDM_VIDEO_SCALE_BASE + 10)
   {
     gui.scale = id - IDM_VIDEO_SCALE_BASE + 1;
-    user_win_w = user_win_h = 0;                            /* the chosen size wins over a dragged one */
+    user_win_w = user_win_h = gui.window_w = gui.window_h = 0;   /* the chosen size wins over a dragged one */
     if (gui.fullscreen) video_set_fullscreen(0);
     if (IsZoomed(g_hwnd)) ShowWindow(g_hwnd, SW_RESTORE);   /* picking a size leaves the maximized state properly */
     gui_resize_to_scale(gui.scale);
@@ -6812,7 +8037,7 @@ static void on_command_inner(int id)
     gui.accent = 0;                                 /* a new theme brings its own colors: the accent color goes back to the default too */
     EnumThreadWindows(GetCurrentThreadId(), redraw_all_cb, 0);
     theme_apply_to_window(g_hwnd);
-    picobook_retheme();
+    storyware_retheme();
     if (!gui.large_ui && was_colored != theme_colored())      /* the menus are drawn by the program in a colored theme (the system's cannot take the tint): made again only when that changes */
     {
       if (menu_loop_active) menu_rebuild_pending = 1;                    /* (the open menu stays: the new menu bar is made when it closes) */
@@ -6891,10 +8116,10 @@ static void on_command_inner(int id)
     return;
   }
 
-  if (id == IDM_VIEW_GROUPCONSOLE || id == IDM_VIEW_AZSTRIP || id == IDM_OPT_COVERROUND || id == IDM_OPT_COVERCAP || id == IDM_OPT_COVERCARD || id == IDM_OPT_CONSOLEBADGE || id == IDM_OPT_REGIONFLAGS)
+  if (id == IDM_VIEW_GROUPCONSOLE || id == IDM_VIEW_LETTERSTRIP || id == IDM_OPT_COVERROUND || id == IDM_OPT_COVERCAP || id == IDM_OPT_COVERCARD || id == IDM_OPT_CONSOLEBADGE || id == IDM_OPT_REGIONFLAGS)
   {
     if (id == IDM_VIEW_GROUPCONSOLE) { gui.group_console = !gui.group_console; browser_refilter(); }
-    else if (id == IDM_VIEW_AZSTRIP) { gui.az_strip = !gui.az_strip; browser_layout_changed(); }
+    else if (id == IDM_VIEW_LETTERSTRIP) { gui.letter_strip = !gui.letter_strip; browser_layout_changed(); }
     else if (id == IDM_OPT_COVERCAP) { gui.cover_caption = !gui.cover_caption; browser_cover_style_changed(); }
     else if (id == IDM_OPT_CONSOLEBADGE) { gui.console_badge = !gui.console_badge; browser_redraw_covers(); }
     else if (id == IDM_OPT_REGIONFLAGS) { gui.region_flags = !gui.region_flags; browser_redraw_covers(); }
@@ -7056,7 +8281,7 @@ static void on_command_inner(int id)
   if (id == IDM_VIEW_RESETWINDOW)
   {
     /* Back to the window size the Video > Window Size setting asks for. */
-    user_win_w = user_win_h = 0;                              /* (a size the player dragged to is forgotten) */
+    user_win_w = user_win_h = gui.window_w = gui.window_h = 0;   /* (a size the player dragged to is forgotten) */
     if (gui.fullscreen) video_set_fullscreen(0);
     if (IsZoomed(g_hwnd) || IsIconic(g_hwnd)) ShowWindow(g_hwnd, SW_RESTORE);
     gui_resize_to_scale(gui.scale);
@@ -7096,7 +8321,7 @@ static void on_command_inner(int id)
   if (id >= IDM_SET_MODEL_BASE && id <= IDM_SET_MODEL_BASE + 2)
   {
     int mdl = id - IDM_SET_MODEL_BASE;
-    static const char *const names[3] = { "Console Model: Default", "Console Model: Genesis Model 1", "Console Model: Genesis Model 2" };
+    static const char *const names[3] = { "Console Model: Default", "Console Model: Model 1", "Console Model: Model 2" };
 
     model_pick = mdl;
     on_command(IDM_AUDIO_FMCORE_BASE + (mdl == 2 ? 1 : 0));       /* YM2612 / YM3438 */
@@ -7229,6 +8454,10 @@ static void on_command_inner(int id)
       browser_panel_change_folder();
       break;
 
+    case IDM_FILE_OPENDISC:
+      open_disc_item(-1);
+      break;
+
     case IDM_FILE_ROMINFO:
       if (!emu_running && browser_has_selection()) browser_show_rom_info();
       else dlg_rom_info(g_hwnd);
@@ -7345,7 +8574,7 @@ static void on_command_inner(int id)
       emu_paused = 1;
       pm_open = 1;
       pm_sel = 0;
-      video_show_menu(pm_items, 5, 0);
+      video_show_menu(pm_items, PM_N, 0);
       gui_update_menu();
       break;
 
@@ -7441,7 +8670,7 @@ static void on_command_inner(int id)
       pico_current = (uint8)page;
       if (page) gui_notify("Pico page %d", page);
       else gui_notify("Storyware closed");
-      picobook_show(page);
+      storyware_show(page);
       break;
     }
 
@@ -7587,6 +8816,14 @@ static void on_command_inner(int id)
       config_save();
       break;
 
+    case IDM_AUDIO_MUTE_CDDA:
+      if (gui_pico_only(IDM_AUDIO_MUTE_CDDA)) break;
+      gui.mute_cdda = !gui.mute_cdda;
+      gui_notify(gui.mute_cdda ? "CD audio muted" : "CD audio unmuted");
+      gui_update_menu();
+      config_save();
+      break;
+
     case IDM_AUDIO_MUTE_DAC:
       gui.mute_dac = !gui.mute_dac;
       gui_notify(gui.mute_dac ? "DAC sound muted" : "DAC sound unmuted");
@@ -7725,7 +8962,7 @@ static void on_command_inner(int id)
       config.bios = (uint8)(config.bios ? 0 : 3);
       gui_update_menu();
       config_save();
-      gui_status("BIOS setting applies the next time a ROM is loaded");
+      gui_status("BIOS setting applies the next time a game is opened");
       break;
 
     case IDM_EMU_ADDRERROR:
@@ -7742,8 +8979,22 @@ static void on_command_inner(int id)
       config_save();
       break;
 
+    case IDM_EMU_NOSPRITELIMIT:
+      config.no_sprite_limit = (uint8)(!config.no_sprite_limit);
+      gui_notify(config.no_sprite_limit ? "Sprite limit removed" : "Sprite limit on");
+      gui_update_menu();
+      config_save();
+      break;
+
     case IDM_EMU_LOCKUPS:
       config.force_dtack = (uint8)(!config.force_dtack);
+      gui_update_menu();
+      config_save();
+      break;
+
+    case IDM_EMU_CDCACHE:
+      config.cd_cache = (uint8)(!config.cd_cache);
+      gui_notify(config.cd_cache ? "CD image cache on (the next disc loaded)" : "CD image cache off (the next disc loaded)");
       gui_update_menu();
       config_save();
       break;
@@ -7873,9 +9124,14 @@ static void on_command_inner(int id)
     case IDM_VIDEO_RENDERER_BASE + 0:
     case IDM_VIDEO_RENDERER_BASE + 1:
     case IDM_VIDEO_RENDERER_BASE + 2:
+    case IDM_VIDEO_RENDERER_BASE + 3:
       gui.renderer = id - IDM_VIDEO_RENDERER_BASE;
       video_set_renderer(gui.renderer);
+      if (!emu_running && RENDERER_IS_DX(gui.renderer)) video_dx_show_surface(0);      /* (a new picture window must not cover the game list) */
       video_viewport_changed();
+      if (!video_renderer_working())
+        gui_notify("%s is not available here: the classic renderer draws%s", gui.renderer == RENDERER_D3D9 ? "Direct3D 9" : (gui.renderer == RENDERER_D3D11 ? "Direct3D 11" : "Direct3D 12"),
+                   gui.renderer == RENDERER_D3D12 ? " (Direct3D 12 needs Windows 10)" : "");
       gui_update_menu();
       config_save();
       break;
@@ -7886,13 +9142,36 @@ static void on_command_inner(int id)
       config_save();
       break;
 
+    case IDM_EMU_RUNAHEAD:                    /* the hotkey: the next Run-Ahead setting (Settings > Emulation > Input Lag) */
+      gui.run_ahead = (gui.run_ahead + 1) % 3;
+      gui_notify("Run-Ahead: %s", gui.run_ahead == 0 ? "Off" : (gui.run_ahead == 1 ? "1 Frame" : "2 Frames"));
+      gui_log("Run-Ahead (hotkey): %s", gui.run_ahead == 0 ? "Off" : (gui.run_ahead == 1 ? "1 Frame" : "2 Frames"));
+      config_save();
+      break;
+
+
+    case IDM_VIDEO_ALTTIMING:
+      gui.alt_timing = !gui.alt_timing;
+      next_frame_time = 0.0;
+      gui_update_menu();
+      config_save();
+      break;
+
+    case IDM_VIDEO_SYNCDISPLAY:
+      gui.sync_display = !gui.sync_display;
+      if (gui.sync_display) video_match_refresh();         /* (in Exclusive Fullscreen, with a game running: the screen goes to 50 or 60 Hz at once) */
+      gui_update_menu();
+      config_save();
+      break;
+
     case IDM_VIDEO_VRR:
       gui.vrr = !gui.vrr;
-      if (gui.renderer == RENDERER_D3D11)
+      if (RENDERER_IS_DX(gui.renderer))
       {
-        video_set_renderer(gui.renderer);                  /* the swap chain is made again, the other kind */
-        video_viewport_changed();
-        if (gui.vrr && !d3d11_vrr_active()) gui_notify("Variable refresh is not available here (it needs Windows 10 and a driver that supports it)");
+        video_vrr_changed();                               /* the swap chain is made again, the other kind */
+        if (!emu_running) video_dx_show_surface(0);
+        video_picture_refresh();
+        if (gui.vrr && !video_dx_vrr_active()) gui_notify("Variable refresh is not available here (it needs Windows 10 and a driver that supports it)");
       }
       gui_update_menu();
       config_save();
@@ -7907,6 +9186,11 @@ static void on_command_inner(int id)
     case IDM_VIDEO_SHADER_NONE:
       gui_set_shader(NULL);
       gui_notify("Shader: None");
+      break;
+
+    case IDM_VIDEO_SHADERBROWSER:
+      if (!gui_shader_available()) break;
+      extras_shader_browser(g_hwnd);
       break;
 
     case IDM_VIDEO_SHADER_PRESET:
@@ -8073,7 +9357,7 @@ static int menu_stays_open(int id)
          (id >= IDM_VIEW_DENSITY_BASE && id < IDM_VIEW_DENSITY_BASE + 3) ||
          id == IDM_VIEW_COL_FAV || (id >= IDM_VIEW_COL_BASE && id < IDM_VIEW_COL_BASE + 2) || (id >= IDM_VIEW_COL_EXTRA && id < IDM_VIEW_COL_EXTRA + 4) ||
          id == IDM_VIEW_FAVONLY || id == IDM_VIEW_SORT_RECENT || id == IDM_VIEW_CLEANNAMES || id == IDM_VIEW_GRIDLINES ||
-         id == IDM_VIEW_GROUPCONSOLE || id == IDM_VIEW_AZSTRIP || (id >= IDM_SET_COVERSIZE_BASE && id < IDM_SET_COVERSIZE_BASE + 7) ||
+         id == IDM_VIEW_GROUPCONSOLE || id == IDM_VIEW_LETTERSTRIP || (id >= IDM_SET_COVERSIZE_BASE && id < IDM_SET_COVERSIZE_BASE + 7) ||
          (id >= IDM_SET_TBSIZE_BASE && id < IDM_SET_TBSIZE_BASE + 3) ||
          (id >= IDM_SET_STYLE_BASE && id < IDM_SET_STYLE_BASE + 2) || (id >= IDM_VIDEO_THEME_BASE && id < IDM_VIDEO_THEME_BASE + THEME_COUNT) ||
          /* the Video menu: Render Filter, Visual Effects, Scanlines, NTSC Filter, Aspect Ratio, Rotation and Borders */
@@ -8159,8 +9443,18 @@ static void handle_dropped_file(const char *path)
 
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
+  static UINT wm_taskbar_created;
+
+  if (!wm_taskbar_created) wm_taskbar_created = RegisterWindowMessageA("TaskbarButtonCreated");
+  if (msg == wm_taskbar_created && msg) { taskbar_button_created(); return 0; }
+
   switch (msg)
   {
+    case WM_DISPLAYCHANGE:      /* a monitor was added or taken away, or a screen changed its mode: a fullscreen window must not stay at the old rectangle */
+      video_fullscreen_refit();
+      video_invalidate();
+      break;
+
     case WM_COMMAND:
     {
       WORD id = LOWORD(wp);
@@ -8216,6 +9510,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_DEVICECHANGE:
       /* DBT_DEVNODES_CHANGED: something was plugged in or out. Wait a moment: a pad announces itself in several steps. */
+      if (wp == 0x0007 || wp == 0x8000 || wp == 0x8004) disc_dirty = 1;                   /* a drive or a disc came or went: the discs are looked at again when File opens */
       if (wp == 0x0007) SetTimer(hwnd, 9001, 1000, NULL);
       return TRUE;
 
@@ -8338,6 +9633,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_INITMENUPOPUP:
     {
       if (!HIWORD(lp)) menu_popups_open++;
+      if ((HMENU)wp == GetSubMenu(g_menu, 0)) disc_menu_update((HMENU)wp);                  /* File: the Open Disc from Drive entry */
       /* A menu opened right after another program's menu was dismissed (a second copy of this program, say)
          could stay unpainted (white) until the mouse moved over it: repaint the popup a moment after it shows. */
       SetTimer(hwnd, 9002, 30, NULL);
@@ -8411,7 +9707,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_SIZE:
       if (wp == SIZE_RESTORED || wp == SIZE_MAXIMIZED) log_window_size(hwnd, LOWORD(lp), HIWORD(lp), 0);       /* (for the log: a window that shrinks by itself) */
-      if (wp == SIZE_MINIMIZED || wp == SIZE_RESTORED || wp == SIZE_MAXIMIZED) picobook_main_minimized(wp == SIZE_MINIMIZED);
+      if (wp == SIZE_MINIMIZED || wp == SIZE_RESTORED || wp == SIZE_MAXIMIZED) storyware_main_minimized(wp == SIZE_MINIMIZED);
       if (wp == SIZE_MINIMIZED)
       {
         if (emu_running && !emu_paused && !netplay_active())
@@ -8498,6 +9794,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
       int active = (LOWORD(wp) != WA_INACTIVE);
 
+      if (!active && video_exclusive_owns((HWND)lp)) return 0;          /* the true exclusive fullscreen window takes over: still the game's focus */
       gui_input_set_focus(active);
       if (gui.log_on)                                                    /* for the log: who has the focus (a game that pauses or a gun that does not answer) */
       {
@@ -8509,7 +9806,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       }
 
       /* Clicking into the Cheat Search window is not leaving the program: the game keeps running. */
-      if (!active && (HWND)lp != NULL && ((HWND)lp == cheat_search_hwnd() || (HWND)lp == memview_hwnd() || debugwin_owns((HWND)lp) || picobook_owns((HWND)lp))) { next_frame_time = 0.0; return 0; }
+      if (!active && (HWND)lp != NULL && ((HWND)lp == cheat_search_hwnd() || (HWND)lp == memview_hwnd() || debugwin_owns((HWND)lp) || storyware_owns((HWND)lp))) { next_frame_time = 0.0; return 0; }
 
       if (!active && menu_keyboard_mode) { next_frame_time = 0.0; return 0; }          /* (the menu bar taking the focus) */
 
@@ -8536,6 +9833,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_APP_FSBAR:
       if (gui.fullscreen && GetMenu(hwnd)) theme_paint_menubar_selected(hwnd, fs_bar_sel);
+      return 0;
+
+    case WM_APP_EXCL_LEAVE:
+      video_exclusive_leave();
       return 0;
 
     case WM_APP_PICOSCAN:
@@ -8570,7 +9871,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       in_modal_loop = 1;
       /* The sound queue is emptied when the game stops for a drag or a dialog. A menu leaves the game running (the timer below), and emptying
          the queue at every click on the menu bar made the game run extra frames to fill it again: click after click it ran faster than normal. */
-      if (msg != WM_ENTERMENULOOP || gui.pause_on_focus_loss) waveout_flush();
+      if (msg != WM_ENTERMENULOOP) waveout_flush();       /* (a menu does not empty it, with Pause When Inactive on either: the game that waits for a drop-down lets it run down by itself) */
       if (msg == WM_ENTERMENULOOP) { menu_popups_open = 0; menu_loop_active = 1; menu_next_step = 0.0; SetTimer(hwnd, 9100, 8, NULL); }
       if (msg == WM_ENTERMENULOOP && !menu_hook)
       {
@@ -8588,6 +9889,20 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         menu_keyboard_mode = 0;
         menu_popups_open = 0;
         menu_loop_active = 0;
+        if (gui.pause_on_focus_loss)
+        {
+          next_frame_time = 0.0;
+          if (emu_running && gui.sound_enabled && !netplay_active() && speed_pct == 100 && waveout_pending() < 2)      /* (the queue ran dry: a game that kept running behind the menu has it full) */
+          {
+            /* The game waited for the menu and the sound queue ran dry. Running frames to fill it made the game gain a few frames at every click, so it is
+               filled with silence instead: the game goes on at its own speed. */
+            static short silence[4096];
+            int n = (int)(waveout_rate() / emu_frame_rate() + 0.5), k;
+
+            if (n > 2048) n = 2048;
+            for (k = 0; n > 0 && k < gui.latency && waveout_pending() < gui.latency; k++) waveout_submit(silence, n);
+          }
+        }
         KillTimer(hwnd, 9100);
         if (menu_rebuild_pending) SetTimer(hwnd, 9004, 1, NULL);        /* (not inside the menu's own shutdown) */
         if (auto_paused_by_focus && GetForegroundWindow() == hwnd)       /* a pause the focus change made while the menu was open ends with it */
@@ -8605,6 +9920,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         {
           user_win_w = er.right - er.left;
           user_win_h = er.bottom - er.top;
+          capture_window_geometry();
         }
       }
       in_modal_loop = 0;
@@ -8646,8 +9962,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       HDROP drop = (HDROP)wp;
       char path[GUI_PATH_LEN];
 
-      if (DragQueryFileA(drop, 0, path, sizeof(path)))
+      if (DragQueryFileA(drop, 0, NULL, 0) >= sizeof(path))
+        gui_notify("That path is too long for the program");
+      else if (DragQueryFileA(drop, 0, path, sizeof(path)))
       {
+        if (DragQueryFileA(drop, 0xFFFFFFFF, NULL, 0) > 1) gui_notify("Only the first of the dropped files is opened");
         handle_dropped_file(path);
         SetForegroundWindow(hwnd);
       }
@@ -8678,7 +9997,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
          without a WM_CLOSE: write out everything worth keeping now. */
       if (wp)
       {
-        save_backup_ram();
+        save_backup_ram_mode(2);
         cheats_save_current();
         config_save();
         config_save_wait();
@@ -8808,6 +10127,12 @@ static int create_main_window(void)
     /* Now that the status bar exists its real height is known, so the
        client area can be sized to give exactly the requested scale. */
     gui_resize_to_scale(gui.scale);
+    if (gui.window_w > 100 && gui.window_h > 100)               /* the size the window had when it was closed (a dragged one included) */
+    {
+      SetWindowPos(g_hwnd, NULL, 0, 0, gui.window_w, gui.window_h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+      user_win_w = gui.window_w;                                /* (kept when a game starts, as a size dragged to in this run is) */
+      user_win_h = gui.window_h;
+    }
 
     /* The first run (no Window Size saved yet) opens at the size that fits the screen: the default is 3x, which is taller than a
        small screen. A Window Size that was chosen is kept as it is, even when it is bigger than the screen. */
@@ -8968,7 +10293,7 @@ static LONG WINAPI crash_logger(EXCEPTION_POINTERS *ep)
 
   if (InterlockedExchange(&busy, 1)) return EXCEPTION_CONTINUE_SEARCH;       /* a crash while handling a crash */
   gui_restore_combo_animation();                                              /* the Windows setting a window had turned off */
-  if (!gui.crash_report)                                                      /* Settings > Options > Enable Crash Report */
+  if (!gui.crash_report)                                                      /* Settings > Emulation > Enable Crash Report */
   {
     gui_log("CRASH: exception %08lX", (unsigned long)ep->ExceptionRecord->ExceptionCode);
     return EXCEPTION_CONTINUE_SEARCH;
@@ -9229,6 +10554,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
                 APP_NAME, MB_OK | MB_ICONERROR);
     return 1;
   }
+  if (RENDERER_IS_DX(gui.renderer)) video_dx_show_surface(0);        /* (no game yet: the game list shows; video_frame() shows the picture window) */
 
   /* Restore whichever render filter was active last session. A name that no
      longer matches anything (a filter that was removed or renamed, or a
@@ -9354,7 +10680,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
   if (!emu_running)
   {
     RECT content;
-    gui_status_persistent("Open a ROM to start, or drop one on this window");
+    gui_status_persistent("Open a game to start, or drop one on this window");
     get_content_rect(&content);
     browser_panel_layout(&content);
     browser_panel_show(1);

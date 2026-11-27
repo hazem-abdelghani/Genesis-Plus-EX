@@ -21,18 +21,23 @@ still has to end up sitting next to the built exe to actually be found.
 without `pack` (plain `make`) doesn't, so copy it by hand from here next
 to the exe if you build that way.
 
-To use the feature once the DLL is in place: Video > Render Filter >
-Shaders > Preset... in the app, and pick a .slangp shader preset
+To use the feature once the DLL is in place: Video > Shaders >
+Preset... in the app, and pick a .slangp shader preset
 (RetroArch's "slang-shaders" repository on GitHub has hundreds, e.g.
 crt/crt-royale.slangp).
 
-64-bit only: librashader ships no 32-bit Windows build, so this feature is
-unavailable in gpex32.exe regardless -- the menu item is still there, but
-loading a preset reports librashader.dll as not found (a 64-bit DLL simply
-won't load into a 32-bit process).
+64-bit only: librashader ships no 32-bit Windows build, so the 32-bit program has no Shaders
+menu and no Shader box in Settings.
 
-Only D3D11 is used here (librashader also supports Vulkan, D3D12 and
-Metal, and OpenGL, but this app doesn't have renderers for any of those),
-and only reading a preset already built by someone else -- this port
-never creates or edits .slangp files, and has no UI for the pass-by-pass
-parameter tuning librashader also exposes.
+The Direct3D 11 and Direct3D 12 renderers use it (librashader also supports Vulkan, OpenGL and
+Metal, but this app has no renderers for those). It only reads a preset already built by someone
+else: this port never creates or edits .slangp files. The pass-by-pass parameters of a preset can
+be changed while it runs (Video > Shaders > Shader Parameters...), and the Preset Browser lists the
+presets of the Shaders folder.
+
+dxcompiler.dll and dxil.dll (x86_64, Microsoft DirectX Shader Compiler 1.8.2505.1,
+from github.com/microsoft/DirectXShaderCompiler, licenses in LICENSE-LLVM.txt and
+LICENSE-MS.txt here) are what librashader's Direct3D 12 runtime compiles with: it loads
+them itself when the first chain is made and ends the program if they are missing (the
+Direct3D 11 runtime does not use them). shader_chain.c loads them first, from the
+Plugins folder, and says so when they are not there.
