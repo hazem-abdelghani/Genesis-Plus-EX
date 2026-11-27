@@ -297,6 +297,29 @@ static LRESULT CALLBACK statusbar_subclass_proc(HWND hwnd, UINT msg, WPARAM wp, 
 
     if (old_font) SelectObject(hdc, old_font);
 
+    /* The size grip: the dots at the bottom right corner for dragging the window's size. Drawn here, as the rest of the bar is (the system's own grip is only
+       painted by the system's own bar, which the dark themes replace). None when the window is maximized: nothing to drag. */
+    if ((GetWindowLongA(hwnd, GWL_STYLE) & SBARS_SIZEGRIP) && !IsZoomed(GetParent(hwnd)))
+    {
+      HBRUSH dot = CreateSolidBrush(theme_dk(RGB(0x8C, 0x8C, 0x8C)));
+      int d = TBS(2), step = TBS(4), row, col;
+
+      if (d < 2) d = 2;
+      if (step < d + 1) step = d + 1;
+      for (row = 0; row < 3; row++)
+        for (col = 0; col + row < 3; col++)
+        {
+          RECT q;
+
+          q.right = r.right - 2 - col * step;
+          q.left = q.right - d;
+          q.bottom = r.bottom - 2 - row * step;
+          q.top = q.bottom - d;
+          FillRect(hdc, &q, dot);
+        }
+      DeleteObject(dot);
+    }
+
     EndPaint(hwnd, &ps);
     return 0;
   }
