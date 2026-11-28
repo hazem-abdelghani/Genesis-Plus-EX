@@ -1,4 +1,4 @@
-![Genesis Plus EX](win32/images/logos/Genesis-Plus-EX-Logo.png)
+![Genesis Plus EX](images/logos/Genesis-Plus-EX-Logo.png)
 
 # Genesis Plus EX
 
