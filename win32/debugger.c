@@ -17,6 +17,7 @@
 #include "theme.h"
 #include "netplay.h"
 #include "picocore.h"
+#include "toolbar.h"
 
 #define DB_CLASS "GPEXDebugger"
 #define ID_TABS  1
@@ -34,6 +35,7 @@ HWND gui_debug_host;
 HWND gui_debug_last;
 
 static HWND db_win, db_tab, db_view;
+static int db_view_width(void);
 static HWND db_pane[DBGPANE_COUNT];
 static int db_split;               /* the height of the top part, in pixels (0: not set yet) */
 static int db_drag;
@@ -94,7 +96,6 @@ static void db_layout(void)
   h = rc.bottom;
   if (w < 1 || h < 1) return;
 
-  if (db_view) MoveWindow(db_view, S(6), S(3), S(70), bar - S(6), TRUE);          /* the View button */
   cpu = (db_pane[DBGPANE_CPUDBG] && IsWindow(db_pane[DBGPANE_CPUDBG])) ? db_pane[DBGPANE_CPUDBG] : NULL;
   if (cpu)
   {
@@ -105,6 +106,7 @@ static void db_layout(void)
     MoveWindow(cpu, 0, bar, w, top, TRUE);
     ShowWindow(cpu, SW_SHOW);
   }
+  if (db_view) MoveWindow(db_view, S(8), (bar - S(26)) / 2, db_view_width(), S(26), TRUE);          /* the View button (its text and an arrow): the left edge and the height of the buttons below it (S(8) from the left, S(26) high) */          /* (after the CPU Debugger is laid out: its buttons' width is known then) */
   y0 = bar + (cpu ? top + gap : 0);
   th = settings_tab_height();                                                       /* the strip is the program's own (dark and Modern like the Settings window) */
   MoveWindow(db_tab, 0, y0, w, th, TRUE);
@@ -132,34 +134,34 @@ static void db_select(int p)
   if (db_pane[p] && IsWindow(db_pane[p])) SetFocus(db_pane[p]);
 }
 
-/* The View button is drawn here, not by the system or the theme's button painter: whatever those draw for a button that has the focus
-   (an outline in a light color) must never show on it. It is a plain rounded button in the colors of the theme. */
+/* The View button is drawn like Restore Defaults in the Settings window: its text and a down arrow, in the colors of the theme (the Modern style
+   and the colored themes too). The focus outline is left out: the button keeps no focus, and the one a click gives it for a moment must not show. */
 static void db_draw_view(const DRAWITEMSTRUCT *di)
 {
-  HDC dc = di->hDC;
-  RECT rc = di->rcItem;
-  int dark = theme_is_dark(), pushed = (di->itemState & ODS_SELECTED) != 0;
-  COLORREF fill = dark ? (pushed ? theme_dk(RGB(44, 46, 52)) : theme_dk(RGB(54, 57, 66))) : (pushed ? RGB(222, 228, 240) : RGB(251, 251, 252));
-  COLORREF edge = dark ? theme_dk(RGB(82, 86, 98)) : RGB(196, 200, 210);
-  COLORREF text = dark ? THEME_DARK_TEXT : RGB(27, 27, 27);
-  HBRUSH bg = dark ? theme_ctlcolor(dc) : GetSysColorBrush(COLOR_BTNFACE), fb = CreateSolidBrush(fill), ob;
-  HPEN pen = CreatePen(PS_SOLID, 1, edge), op;
-  HFONT of = (HFONT)SelectObject(dc, gui_get_ui_font());
-  char txt[32];
+  DRAWITEMSTRUCT d = *di;
 
-  FillRect(dc, &rc, bg);
-  ob = (HBRUSH)SelectObject(dc, fb);
-  op = (HPEN)SelectObject(dc, pen);
-  RoundRect(dc, rc.left, rc.top, rc.right, rc.bottom, S(8), S(8));
-  SelectObject(dc, ob);
-  SelectObject(dc, op);
-  GetWindowTextA(di->hwndItem, txt, sizeof(txt));
-  SetBkMode(dc, TRANSPARENT);
-  SetTextColor(dc, text);
-  DrawTextA(dc, txt, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  d.itemState &= ~(UINT)(ODS_FOCUS | ODS_NOFOCUSRECT);
+  theme_draw_dropdown_button(&d);
+}
+
+/* The width of the View button: the size of the buttons below it, or its text, the arrow and some room if that is more (the text can be longer in another language). */
+static int db_view_width(void)
+{
+  char t[64];
+  HDC dc = GetDC(db_view);
+  HFONT of = (HFONT)SelectObject(dc, gui_get_ui_font());
+  SIZE sz;
+  int w;
+
+  t[0] = '\0';
+  GetWindowTextA(db_view, t, sizeof(t));
+  GetTextExtentPoint32A(dc, t, lstrlenA(t), &sz);
   SelectObject(dc, of);
-  DeleteObject(fb);
-  DeleteObject(pen);
+  ReleaseDC(db_view, dc);
+  w = sz.cx + TBS(18) + TBS(16);
+  if (w < S(96)) w = S(96);
+  if (w < dbgcpu_button_width()) w = dbgcpu_button_width();   /* (at least as wide as the buttons below it: Continue, the first of them) */
+  return w;
 }
 
 /* The View button: a menu to show a part of the Debugger, or one view of the VDP, Sound or CPU Viewer. */
@@ -257,6 +259,13 @@ static LRESULT CALLBACK db_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
       mi->ptMinTrackSize.x = S(720);
       mi->ptMinTrackSize.y = S(520);
       return 0;
+    }
+
+    case WM_CTLCOLORBTN:                                /* what the View button paints round its corners (the Modern look asks for it): the window's own color, not the system's light gray */
+    {
+      HBRUSH b = theme_ctlcolor_ctl((HDC)wp, (HWND)lp);
+      if (b) return (LRESULT)b;
+      break;
     }
 
     case WM_ERASEBKGND:

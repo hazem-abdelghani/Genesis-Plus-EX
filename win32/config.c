@@ -259,7 +259,7 @@ void set_config_defaults(void)
   gui.show_fps            = 0;
   gui.favorites_only      = 0;
   gui.recent_mode         = 1;
-  gui.letter_strip            = 1;
+  gui.letter_strip        = 1;
   gui.fullscreen_toolbar  = 0;
   gui.integer_scale       = 0;
   { int k; for (k = 0; k < padhk_count(); k++) { gui.padhk[k] = padhk_default(k); gui.padhk_di[k] = 0; } }
@@ -716,7 +716,7 @@ void config_load(void)
     ini_get_str("video", "shader_params_for", gui.shader_params_for, sizeof(gui.shader_params_for));
     ini_get_str("input", "combos", gui.combo_text, sizeof(gui.combo_text));
     gui.group_console  = ini_get("general", "group_by_console", 0) ? 1 : 0;
-    gui.letter_strip       = ini_get("general", "az_strip", gui.letter_strip) ? 1 : 0;
+    gui.letter_strip   = ini_get("general", "az_strip", gui.letter_strip) ? 1 : 0;
     gui.padhk_hold_on  = ini_get("input", "padhk_hold_on", 0) ? 1 : 0;
     gui.padhk_hold[0]  = ini_get_pad("input", "padhk_hold_button", 0);
     gui.padhk_hold[1]  = ini_get_pad("input", "padhk_hold_button_di", 0);

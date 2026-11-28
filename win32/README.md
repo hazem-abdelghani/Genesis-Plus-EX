@@ -2,7 +2,7 @@
 
 # Genesis Plus EX
 
-**A fast, portable Windows emulator for the Genesis Plus GX emulator core and, for 32X games, PicoDrive.**
+**A fast, portable Windows front end for the Genesis Plus GX emulator core and, for 32X games, PicoDrive.**
 
 Genesis Plus EX plays Sega Mega Drive / Genesis, Master System, Game Gear,
 SG-1000, Mega CD / Sega CD, Pico and 32X games. It is a native Windows program that

@@ -213,7 +213,7 @@ typedef struct
   int padhk_hold_on;       /* gamepad hotkeys only work while the Hold Button is held */
   padmask_t padhk_hold[2];       /* that button: [0] XInput pad, [1] DirectInput joystick */
   int group_console;       /* 1 = the list is grouped into collapsible sections, one per console */
-  int letter_strip;            /* 1 = a Letter Strip beside the list jumps to games starting with that letter */
+  int letter_strip;        /* 1 = a Letter Strip beside the list jumps to games starting with that letter */
   int cover_shape;         /* grid covers: 0 square, 1 box (portrait), 2 wide */
   int toolbar_size;        /* toolbar icon size: 0 small, 1 normal (the default), 2 large */
   int toolbar_labels;      /* 1 = the name of each toolbar button is written under its icon */

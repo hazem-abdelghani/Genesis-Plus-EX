@@ -262,6 +262,7 @@ extern int  dbg_save_file(HWND owner, const char *title, const char *defname, co
 extern unsigned char *dbg_open_file(HWND owner, const char *title, const char *filter, size_t *len);                              /* the file's bytes (free() them), NULL if none */
 extern void dlg_cpu_debugger(HWND parent);                 /* Tools > Debug > CPU Debugger (dbgcpu.c) */
 extern int  dbgcpu_message(MSG *msg);
+extern int  dbgcpu_button_width(void);               /* the width of the Continue button (the Debugger's View button is as wide) */
 extern void dbgcpu_close(void);
 extern void dbgcpu_enable(int on);
 extern int  browser_is_game_name(const char *name);      /* a cartridge game's file name (not a CD image, archive, track ...) */

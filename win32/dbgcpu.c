@@ -865,6 +865,12 @@ static void dc_parts(const RECT *c, RECT *dis, RECT *regs, RECT *stack, RECT *bp
   bps->left = split + 1; bps->top = stack->bottom; bps->right = c->right; bps->bottom = c->bottom - S(34);
 }
 
+/* The width of the first button of the strip (Continue): the View button of the Debugger window is as wide. 0 before the strip is laid out. */
+int dbgcpu_button_width(void)
+{
+  return dc_bw[0];
+}
+
 static void dc_layout(void)
 {
   RECT c;
